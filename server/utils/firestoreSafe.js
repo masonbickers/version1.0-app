@@ -1,6 +1,6 @@
 //src/firestoreSafe.js
 
-import { serverTimestamp } from "firebase/firestore";
+import admin from "../admin.js";
 
 /**
  * Firestore can't store undefined anywhere (even nested).
@@ -39,6 +39,7 @@ export function stripUndefinedDeep(value) {
 /** Add timestamps AFTER cleaning */
 export function withTimestamps(payload, { create = false } = {}) {
   const cleaned = stripUndefinedDeep(payload);
-  if (create) return { ...cleaned, createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
-  return { ...cleaned, updatedAt: serverTimestamp() };
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  if (create) return { ...cleaned, createdAt: now, updatedAt: now };
+  return { ...cleaned, updatedAt: now };
 }
