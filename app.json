@@ -1,17 +1,21 @@
 {
   "expo": {
-    "name": "version1.0-app",
-    "slug": "version1.0-app",
+    "name": "Be",
+    "slug": "version10app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "version10app",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "com.bickers.beapp",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.bickers.beapp",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -38,11 +42,23 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "expo-apple-authentication",
+      "expo-asset",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": true
-    }
+      "reactCompiler": false
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "673c38e7-035e-442a-b89b-5763837c0d81"
+      }
+    },
+    "owner": "masonbickers"
   }
 }

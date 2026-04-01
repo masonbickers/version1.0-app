@@ -1,0 +1,32 @@
+{
+  "name": "version1.0-api",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Express API for AI plan generation and Garmin Integration",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test:plan-rules": "node scripts/plan-rules-invariants.js",
+    "test:plan-rules:matrix": "node scripts/plan-rules-invariants.js",
+    "test:plan-v2": "node scripts/plan-v2-smoke.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "firebase-admin": "^13.0.0",
+    "fit-encoder": "^0.1.5",
+    "oauth-1.0a": "^2.2.6",
+    "openai": "^4.68.4"
+  },
+  "devDependencies": {
+    "ngrok": "^5.0.0-beta.2",
+    "nodemon": "^3.1.7"
+  }
+}

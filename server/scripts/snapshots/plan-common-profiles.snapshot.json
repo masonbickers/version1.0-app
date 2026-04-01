@@ -1,0 +1,5592 @@
+{
+  "snapshotVersion": 1,
+  "generatedBy": "server/scripts/plan-common-profiles-snapshots.js",
+  "cases": [
+    {
+      "scenario": {
+        "id": "5k_3x",
+        "distance": "5K",
+        "sessionsPerWeek": 3,
+        "weeklyKm": 28,
+        "longestRunKm": 10,
+        "planLengthWeeks": 8
+      },
+      "summary": {
+        "weeksCount": 8,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 28,
+              "plannedWeeklyKm": 28,
+              "driftKm": 0,
+              "qualitySharePct": 26.4,
+              "longRunSharePct": 30
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.4,
+                "renderedDistanceKm": 5.9,
+                "computedTotalKm": 5.9
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 12.2,
+                "renderedDistanceKm": 12.2,
+                "computedTotalKm": 12.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 8.4,
+                "renderedDistanceKm": 8.4,
+                "computedTotalKm": 8.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 30.8,
+              "plannedWeeklyKm": 30.8,
+              "driftKm": 0,
+              "qualitySharePct": 26.9,
+              "longRunSharePct": 30.2
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8.3,
+                "renderedDistanceKm": 6.6,
+                "computedTotalKm": 6.6
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 13.2,
+                "renderedDistanceKm": 13.2,
+                "computedTotalKm": 13.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 9.3,
+                "renderedDistanceKm": 9.3,
+                "computedTotalKm": 9.3
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 33,
+              "plannedWeeklyKm": 33,
+              "driftKm": 0,
+              "qualitySharePct": 27,
+              "longRunSharePct": 30.6
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8.9,
+                "renderedDistanceKm": 7.1,
+                "computedTotalKm": 7.1
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 14,
+                "renderedDistanceKm": 14,
+                "computedTotalKm": 14
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.1,
+                "renderedDistanceKm": 10.1,
+                "computedTotalKm": 10.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 26.4,
+              "plannedWeeklyKm": 26.4,
+              "driftKm": 0,
+              "qualitySharePct": 22.3,
+              "longRunSharePct": 29.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.9,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 12.6,
+                "renderedDistanceKm": 12.6,
+                "computedTotalKm": 12.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 7.9,
+                "renderedDistanceKm": 7.9,
+                "computedTotalKm": 7.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 29,
+              "plannedWeeklyKm": 29,
+              "driftKm": 0,
+              "qualitySharePct": 27.6,
+              "longRunSharePct": 35.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 10.6,
+                "renderedDistanceKm": 10.6,
+                "computedTotalKm": 10.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.4,
+                "renderedDistanceKm": 10.4,
+                "computedTotalKm": 10.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 31.9,
+              "plannedWeeklyKm": 31.9,
+              "driftKm": 0,
+              "qualitySharePct": 28.2,
+              "longRunSharePct": 33.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 9,
+                "renderedDistanceKm": 7.2,
+                "computedTotalKm": 7.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 12.1,
+                "renderedDistanceKm": 12.1,
+                "computedTotalKm": 12.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.8,
+                "renderedDistanceKm": 10.8,
+                "computedTotalKm": 10.8
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 33,
+              "plannedWeeklyKm": 33,
+              "driftKm": 0,
+              "qualitySharePct": 27,
+              "longRunSharePct": 33.6
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8.9,
+                "renderedDistanceKm": 7.1,
+                "computedTotalKm": 7.1
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 13,
+                "renderedDistanceKm": 13,
+                "computedTotalKm": 13
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 11.1,
+                "renderedDistanceKm": 11.1,
+                "computedTotalKm": 11.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 21.5,
+              "plannedWeeklyKm": 21.5,
+              "driftKm": 0,
+              "qualitySharePct": 23.7,
+              "longRunSharePct": 33.5
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.1,
+                "computedTotalKm": 4.1
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 9.2,
+                "renderedDistanceKm": 9.2,
+                "computedTotalKm": 9.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 7.2,
+                "renderedDistanceKm": 7.2,
+                "computedTotalKm": 7.2
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "5k_4x",
+        "distance": "5K",
+        "sessionsPerWeek": 4,
+        "weeklyKm": 28,
+        "longestRunKm": 10,
+        "planLengthWeeks": 8
+      },
+      "summary": {
+        "weeksCount": 8,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 28,
+              "plannedWeeklyKm": 28,
+              "driftKm": 0,
+              "qualitySharePct": 26.4,
+              "longRunSharePct": 30
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 3.7,
+                "renderedDistanceKm": 3.6,
+                "computedTotalKm": 3.6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 3.7,
+                "renderedDistanceKm": 3,
+                "computedTotalKm": 3
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 12.2,
+                "renderedDistanceKm": 12.2,
+                "computedTotalKm": 12.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 8.4,
+                "renderedDistanceKm": 8.4,
+                "computedTotalKm": 8.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 30.8,
+              "plannedWeeklyKm": 30.8,
+              "driftKm": 0,
+              "qualitySharePct": 26.9,
+              "longRunSharePct": 30.2
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.1,
+                "renderedDistanceKm": 4,
+                "computedTotalKm": 4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.2,
+                "renderedDistanceKm": 3.5,
+                "computedTotalKm": 3.5
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 13.2,
+                "renderedDistanceKm": 13.2,
+                "computedTotalKm": 13.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 9.3,
+                "renderedDistanceKm": 10.9,
+                "computedTotalKm": 10.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 33.9,
+              "plannedWeeklyKm": 33.9,
+              "driftKm": 0,
+              "qualitySharePct": 30.1,
+              "longRunSharePct": 29.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.1,
+                "computedTotalKm": 4.1
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 13.6,
+                "renderedDistanceKm": 13.6,
+                "computedTotalKm": 13.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.1,
+                "renderedDistanceKm": 10.1,
+                "computedTotalKm": 10.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 27.1,
+              "plannedWeeklyKm": 27.1,
+              "driftKm": 0,
+              "qualitySharePct": 22.5,
+              "longRunSharePct": 29.2
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 3,
+                "renderedDistanceKm": 2.4,
+                "computedTotalKm": 2.4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 3.1,
+                "renderedDistanceKm": 2.5,
+                "computedTotalKm": 2.5
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 13.1,
+                "renderedDistanceKm": 13.1,
+                "computedTotalKm": 13.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 7.9,
+                "renderedDistanceKm": 7.9,
+                "computedTotalKm": 7.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 29.8,
+              "plannedWeeklyKm": 29.8,
+              "driftKm": 0,
+              "qualitySharePct": 27.5,
+              "longRunSharePct": 34.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.1,
+                "renderedDistanceKm": 4,
+                "computedTotalKm": 4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.1,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 11.2,
+                "renderedDistanceKm": 11.2,
+                "computedTotalKm": 11.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.4,
+                "renderedDistanceKm": 10.4,
+                "computedTotalKm": 10.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 32.8,
+              "plannedWeeklyKm": 32.8,
+              "driftKm": 0,
+              "qualitySharePct": 28,
+              "longRunSharePct": 32.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.6,
+                "renderedDistanceKm": 4,
+                "computedTotalKm": 4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.6,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 12.8,
+                "renderedDistanceKm": 12.8,
+                "computedTotalKm": 12.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.8,
+                "renderedDistanceKm": 13,
+                "computedTotalKm": 13
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 35,
+              "plannedWeeklyKm": 35,
+              "driftKm": 0,
+              "qualitySharePct": 29.1,
+              "longRunSharePct": 32.3
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 13.5,
+                "renderedDistanceKm": 13.5,
+                "computedTotalKm": 13.5
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 11.3,
+                "renderedDistanceKm": 11.3,
+                "computedTotalKm": 11.3
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 22.8,
+              "plannedWeeklyKm": 22.8,
+              "driftKm": 0,
+              "qualitySharePct": 22.4,
+              "longRunSharePct": 32
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 2.6,
+                "renderedDistanceKm": 2.1,
+                "computedTotalKm": 2.1
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 2.5,
+                "renderedDistanceKm": 2,
+                "computedTotalKm": 2
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 10.4,
+                "renderedDistanceKm": 10.4,
+                "computedTotalKm": 10.4
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 7.3,
+                "renderedDistanceKm": 7.3,
+                "computedTotalKm": 7.3
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "5k_5x",
+        "distance": "5K",
+        "sessionsPerWeek": 5,
+        "weeklyKm": 28,
+        "longestRunKm": 10,
+        "planLengthWeeks": 8
+      },
+      "summary": {
+        "weeksCount": 8,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 28,
+              "plannedWeeklyKm": 28,
+              "driftKm": 0,
+              "qualitySharePct": 26.4,
+              "longRunSharePct": 30
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 6.1,
+                "renderedDistanceKm": 6.1,
+                "computedTotalKm": 6.1
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 3.7,
+                "renderedDistanceKm": 3.6,
+                "computedTotalKm": 3.6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 3.7,
+                "renderedDistanceKm": 3,
+                "computedTotalKm": 3
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 6.1,
+                "renderedDistanceKm": 6.1,
+                "computedTotalKm": 6.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 8.4,
+                "renderedDistanceKm": 8.4,
+                "computedTotalKm": 8.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 30.8,
+              "plannedWeeklyKm": 30.8,
+              "driftKm": 0,
+              "qualitySharePct": 26.9,
+              "longRunSharePct": 30.2
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 6.6,
+                "renderedDistanceKm": 6.6,
+                "computedTotalKm": 6.6
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.1,
+                "renderedDistanceKm": 4,
+                "computedTotalKm": 4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.2,
+                "renderedDistanceKm": 3.5,
+                "computedTotalKm": 3.5
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 6.6,
+                "renderedDistanceKm": 6.6,
+                "computedTotalKm": 6.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 9.3,
+                "renderedDistanceKm": 10.9,
+                "computedTotalKm": 10.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 33.9,
+              "plannedWeeklyKm": 33.9,
+              "driftKm": 0,
+              "qualitySharePct": 30.1,
+              "longRunSharePct": 29.8
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 6.8,
+                "renderedDistanceKm": 6.8,
+                "computedTotalKm": 6.8
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.1,
+                "computedTotalKm": 4.1
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 6.8,
+                "renderedDistanceKm": 6.8,
+                "computedTotalKm": 6.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.1,
+                "renderedDistanceKm": 10.1,
+                "computedTotalKm": 10.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 27.1,
+              "plannedWeeklyKm": 27.1,
+              "driftKm": 0,
+              "qualitySharePct": 22.5,
+              "longRunSharePct": 29.2
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 6.6,
+                "renderedDistanceKm": 6.6,
+                "computedTotalKm": 6.6
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 3,
+                "renderedDistanceKm": 2.4,
+                "computedTotalKm": 2.4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 3.1,
+                "renderedDistanceKm": 2.5,
+                "computedTotalKm": 2.5
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 6.5,
+                "renderedDistanceKm": 6.5,
+                "computedTotalKm": 6.5
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 7.9,
+                "renderedDistanceKm": 7.9,
+                "computedTotalKm": 7.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 29.8,
+              "plannedWeeklyKm": 29.8,
+              "driftKm": 0,
+              "qualitySharePct": 27.5,
+              "longRunSharePct": 34.9
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 5.6,
+                "renderedDistanceKm": 5.6,
+                "computedTotalKm": 5.6
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.1,
+                "renderedDistanceKm": 4,
+                "computedTotalKm": 4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.1,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 5.6,
+                "renderedDistanceKm": 5.6,
+                "computedTotalKm": 5.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.4,
+                "renderedDistanceKm": 10.4,
+                "computedTotalKm": 10.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 32.8,
+              "plannedWeeklyKm": 32.8,
+              "driftKm": 0,
+              "qualitySharePct": 28,
+              "longRunSharePct": 32.9
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 6.4,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.6,
+                "renderedDistanceKm": 4,
+                "computedTotalKm": 4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.6,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 6.4,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.8,
+                "renderedDistanceKm": 13,
+                "computedTotalKm": 13
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 35,
+              "plannedWeeklyKm": 35,
+              "driftKm": 0,
+              "qualitySharePct": 29.1,
+              "longRunSharePct": 32.3
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 6.8,
+                "renderedDistanceKm": 6.8,
+                "computedTotalKm": 6.8
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 6.7,
+                "renderedDistanceKm": 6.7,
+                "computedTotalKm": 6.7
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 11.3,
+                "renderedDistanceKm": 11.3,
+                "computedTotalKm": 11.3
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "taper",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 22.8,
+              "plannedWeeklyKm": 22.8,
+              "driftKm": 0,
+              "qualitySharePct": 22.4,
+              "longRunSharePct": 32
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 5.2,
+                "renderedDistanceKm": 5.2,
+                "computedTotalKm": 5.2
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 2.6,
+                "renderedDistanceKm": 2.1,
+                "computedTotalKm": 2.1
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 2.5,
+                "renderedDistanceKm": 2,
+                "computedTotalKm": 2
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 5.2,
+                "renderedDistanceKm": 5.2,
+                "computedTotalKm": 5.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 7.3,
+                "renderedDistanceKm": 7.3,
+                "computedTotalKm": 7.3
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "10k_3x",
+        "distance": "10K",
+        "sessionsPerWeek": 3,
+        "weeklyKm": 36,
+        "longestRunKm": 14,
+        "planLengthWeeks": 8
+      },
+      "summary": {
+        "weeksCount": 8,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 36,
+              "plannedWeeklyKm": 36,
+              "driftKm": 0,
+              "qualitySharePct": 25.6,
+              "longRunSharePct": 33.1
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 9.2,
+                "renderedDistanceKm": 7.4,
+                "computedTotalKm": 7.4
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 14.9,
+                "renderedDistanceKm": 14.9,
+                "computedTotalKm": 14.9
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 11.9,
+                "renderedDistanceKm": 11.9,
+                "computedTotalKm": 11.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 39.6,
+              "plannedWeeklyKm": 39.6,
+              "driftKm": 0,
+              "qualitySharePct": 26,
+              "longRunSharePct": 33.1
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 10.3,
+                "renderedDistanceKm": 8.2,
+                "computedTotalKm": 8.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 16.2,
+                "renderedDistanceKm": 16.2,
+                "computedTotalKm": 16.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 13.1,
+                "renderedDistanceKm": 13.1,
+                "computedTotalKm": 13.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 42.5,
+              "plannedWeeklyKm": 42.5,
+              "driftKm": 0,
+              "qualitySharePct": 26.1,
+              "longRunSharePct": 33.2
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 11.1,
+                "renderedDistanceKm": 8.9,
+                "computedTotalKm": 8.9
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 17.3,
+                "renderedDistanceKm": 17.3,
+                "computedTotalKm": 17.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.1,
+                "renderedDistanceKm": 14.1,
+                "computedTotalKm": 14.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 34,
+              "plannedWeeklyKm": 34,
+              "driftKm": 0,
+              "qualitySharePct": 21.5,
+              "longRunSharePct": 32.4
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.3,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 15.7,
+                "renderedDistanceKm": 15.7,
+                "computedTotalKm": 15.7
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 11,
+                "renderedDistanceKm": 11,
+                "computedTotalKm": 11
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 37.4,
+              "plannedWeeklyKm": 37.4,
+              "driftKm": 0,
+              "qualitySharePct": 26.5,
+              "longRunSharePct": 38
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 9.9,
+                "renderedDistanceKm": 7.9,
+                "computedTotalKm": 7.9
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 13.3,
+                "renderedDistanceKm": 13.3,
+                "computedTotalKm": 13.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.2,
+                "renderedDistanceKm": 14.2,
+                "computedTotalKm": 14.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 41.1,
+              "plannedWeeklyKm": 41.1,
+              "driftKm": 0,
+              "qualitySharePct": 27,
+              "longRunSharePct": 36
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 11.1,
+                "renderedDistanceKm": 8.9,
+                "computedTotalKm": 8.9
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 15.2,
+                "renderedDistanceKm": 15.2,
+                "computedTotalKm": 15.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.8,
+                "renderedDistanceKm": 14.8,
+                "computedTotalKm": 14.8
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 42.5,
+              "plannedWeeklyKm": 42.5,
+              "driftKm": 0,
+              "qualitySharePct": 26.1,
+              "longRunSharePct": 36
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 11.1,
+                "renderedDistanceKm": 8.9,
+                "computedTotalKm": 8.9
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 16.1,
+                "renderedDistanceKm": 16.1,
+                "computedTotalKm": 16.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 15.3,
+                "renderedDistanceKm": 15.3,
+                "computedTotalKm": 15.3
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 27.6,
+              "plannedWeeklyKm": 27.6,
+              "driftKm": 0,
+              "qualitySharePct": 21.4,
+              "longRunSharePct": 35.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.9,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 11.8,
+                "renderedDistanceKm": 11.8,
+                "computedTotalKm": 11.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 9.9,
+                "renderedDistanceKm": 9.9,
+                "computedTotalKm": 9.9
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "10k_4x",
+        "distance": "10K",
+        "sessionsPerWeek": 4,
+        "weeklyKm": 36,
+        "longestRunKm": 14,
+        "planLengthWeeks": 8
+      },
+      "summary": {
+        "weeksCount": 8,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 36,
+              "plannedWeeklyKm": 36,
+              "driftKm": 0,
+              "qualitySharePct": 27.8,
+              "longRunSharePct": 33.1
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5,
+                "renderedDistanceKm": 4,
+                "computedTotalKm": 4
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 14.1,
+                "renderedDistanceKm": 14.1,
+                "computedTotalKm": 14.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 11.9,
+                "renderedDistanceKm": 11.9,
+                "computedTotalKm": 11.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 39.6,
+              "plannedWeeklyKm": 39.6,
+              "driftKm": 0,
+              "qualitySharePct": 26,
+              "longRunSharePct": 33.1
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.2,
+                "renderedDistanceKm": 4.2,
+                "computedTotalKm": 4.2
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 16.2,
+                "renderedDistanceKm": 16.2,
+                "computedTotalKm": 16.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 13.1,
+                "renderedDistanceKm": 14.7,
+                "computedTotalKm": 14.7
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 43.6,
+              "plannedWeeklyKm": 43.6,
+              "driftKm": 0,
+              "qualitySharePct": 26.1,
+              "longRunSharePct": 32.6
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.7,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.7,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 18,
+                "renderedDistanceKm": 18,
+                "computedTotalKm": 18
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.2,
+                "renderedDistanceKm": 14.2,
+                "computedTotalKm": 14.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 34.9,
+              "plannedWeeklyKm": 34.9,
+              "driftKm": 0,
+              "qualitySharePct": 21.5,
+              "longRunSharePct": 31.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 3.7,
+                "renderedDistanceKm": 3,
+                "computedTotalKm": 3
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 3.8,
+                "renderedDistanceKm": 3,
+                "computedTotalKm": 3
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 16.3,
+                "renderedDistanceKm": 16.3,
+                "computedTotalKm": 16.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 11.1,
+                "renderedDistanceKm": 11.1,
+                "computedTotalKm": 11.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 38.4,
+              "plannedWeeklyKm": 38.4,
+              "driftKm": 0,
+              "qualitySharePct": 26.6,
+              "longRunSharePct": 38
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 5,
+                "computedTotalKm": 5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 13.6,
+                "renderedDistanceKm": 13.6,
+                "computedTotalKm": 13.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.6,
+                "renderedDistanceKm": 14.6,
+                "computedTotalKm": 14.6
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 42.2,
+              "plannedWeeklyKm": 42.2,
+              "driftKm": 0,
+              "qualitySharePct": 27,
+              "longRunSharePct": 36
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.7,
+                "renderedDistanceKm": 5.7,
+                "computedTotalKm": 5.7
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.7,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 15.6,
+                "renderedDistanceKm": 15.6,
+                "computedTotalKm": 15.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 15.2,
+                "renderedDistanceKm": 17.4,
+                "computedTotalKm": 17.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 45,
+              "plannedWeeklyKm": 45,
+              "driftKm": 0,
+              "qualitySharePct": 26,
+              "longRunSharePct": 35.1
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.9,
+                "renderedDistanceKm": 5,
+                "computedTotalKm": 5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.8,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 17.5,
+                "renderedDistanceKm": 17.5,
+                "computedTotalKm": 17.5
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 15.8,
+                "renderedDistanceKm": 15.8,
+                "computedTotalKm": 15.8
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 29.3,
+              "plannedWeeklyKm": 29.3,
+              "driftKm": 0,
+              "qualitySharePct": 21.5,
+              "longRunSharePct": 35.2
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 3.2,
+                "renderedDistanceKm": 2.6,
+                "computedTotalKm": 2.6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 3.1,
+                "renderedDistanceKm": 2.5,
+                "computedTotalKm": 2.5
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 12.7,
+                "renderedDistanceKm": 12.7,
+                "computedTotalKm": 12.7
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.3,
+                "renderedDistanceKm": 10.3,
+                "computedTotalKm": 10.3
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "10k_5x",
+        "distance": "10K",
+        "sessionsPerWeek": 5,
+        "weeklyKm": 36,
+        "longestRunKm": 14,
+        "planLengthWeeks": 8
+      },
+      "summary": {
+        "weeksCount": 8,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 36,
+              "plannedWeeklyKm": 36,
+              "driftKm": 0,
+              "qualitySharePct": 27.8,
+              "longRunSharePct": 33.1
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 7.1,
+                "renderedDistanceKm": 7.1,
+                "computedTotalKm": 7.1
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5,
+                "renderedDistanceKm": 4,
+                "computedTotalKm": 4
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 7,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 11.9,
+                "renderedDistanceKm": 11.9,
+                "computedTotalKm": 11.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 39.6,
+              "plannedWeeklyKm": 39.6,
+              "driftKm": 0,
+              "qualitySharePct": 26,
+              "longRunSharePct": 33.1
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 8.1,
+                "renderedDistanceKm": 8.1,
+                "computedTotalKm": 8.1
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.2,
+                "renderedDistanceKm": 4.2,
+                "computedTotalKm": 4.2
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 8.1,
+                "renderedDistanceKm": 8.1,
+                "computedTotalKm": 8.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 13.1,
+                "renderedDistanceKm": 14.7,
+                "computedTotalKm": 14.7
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 43.6,
+              "plannedWeeklyKm": 43.6,
+              "driftKm": 0,
+              "qualitySharePct": 26.1,
+              "longRunSharePct": 32.6
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 9,
+                "renderedDistanceKm": 9,
+                "computedTotalKm": 9
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.7,
+                "renderedDistanceKm": 4.8,
+                "computedTotalKm": 4.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.7,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 9,
+                "renderedDistanceKm": 9,
+                "computedTotalKm": 9
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.2,
+                "renderedDistanceKm": 14.2,
+                "computedTotalKm": 14.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 34.9,
+              "plannedWeeklyKm": 34.9,
+              "driftKm": 0,
+              "qualitySharePct": 21.5,
+              "longRunSharePct": 31.8
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 8.2,
+                "renderedDistanceKm": 8.2,
+                "computedTotalKm": 8.2
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 3.7,
+                "renderedDistanceKm": 3,
+                "computedTotalKm": 3
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 3.8,
+                "renderedDistanceKm": 3,
+                "computedTotalKm": 3
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 8.1,
+                "renderedDistanceKm": 8.1,
+                "computedTotalKm": 8.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 11.1,
+                "renderedDistanceKm": 11.1,
+                "computedTotalKm": 11.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 38.4,
+              "plannedWeeklyKm": 38.4,
+              "driftKm": 0,
+              "qualitySharePct": 26.6,
+              "longRunSharePct": 38
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 6.8,
+                "renderedDistanceKm": 6.8,
+                "computedTotalKm": 6.8
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 5,
+                "computedTotalKm": 5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 6.8,
+                "renderedDistanceKm": 6.8,
+                "computedTotalKm": 6.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.6,
+                "renderedDistanceKm": 14.6,
+                "computedTotalKm": 14.6
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 42.2,
+              "plannedWeeklyKm": 42.2,
+              "driftKm": 0,
+              "qualitySharePct": 27,
+              "longRunSharePct": 36
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 7.8,
+                "renderedDistanceKm": 7.8,
+                "computedTotalKm": 7.8
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.7,
+                "renderedDistanceKm": 5.7,
+                "computedTotalKm": 5.7
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.7,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 7.8,
+                "renderedDistanceKm": 7.8,
+                "computedTotalKm": 7.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 15.2,
+                "renderedDistanceKm": 17.4,
+                "computedTotalKm": 17.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 45,
+              "plannedWeeklyKm": 45,
+              "driftKm": 0,
+              "qualitySharePct": 26,
+              "longRunSharePct": 35.1
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 8.8,
+                "renderedDistanceKm": 8.8,
+                "computedTotalKm": 8.8
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.9,
+                "renderedDistanceKm": 5,
+                "computedTotalKm": 5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.8,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 8.7,
+                "renderedDistanceKm": 8.7,
+                "computedTotalKm": 8.7
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 15.8,
+                "renderedDistanceKm": 15.8,
+                "computedTotalKm": 15.8
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "taper",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 29.3,
+              "plannedWeeklyKm": 29.3,
+              "driftKm": 0,
+              "qualitySharePct": 21.5,
+              "longRunSharePct": 35.2
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 6.4,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 3.2,
+                "renderedDistanceKm": 2.6,
+                "computedTotalKm": 2.6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 3.1,
+                "renderedDistanceKm": 2.5,
+                "computedTotalKm": 2.5
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 6.3,
+                "renderedDistanceKm": 6.3,
+                "computedTotalKm": 6.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 10.3,
+                "renderedDistanceKm": 10.3,
+                "computedTotalKm": 10.3
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "half_3x",
+        "distance": "Half marathon",
+        "sessionsPerWeek": 3,
+        "weeklyKm": 44,
+        "longestRunKm": 18,
+        "planLengthWeeks": 10
+      },
+      "summary": {
+        "weeksCount": 10,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 44,
+              "plannedWeeklyKm": 44,
+              "driftKm": 0,
+              "qualitySharePct": 24.1,
+              "longRunSharePct": 36.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 10.6,
+                "renderedDistanceKm": 8.5,
+                "computedTotalKm": 8.5
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 17.2,
+                "renderedDistanceKm": 17.2,
+                "computedTotalKm": 17.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 16.2,
+                "renderedDistanceKm": 16.2,
+                "computedTotalKm": 16.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 48.4,
+              "plannedWeeklyKm": 48.4,
+              "driftKm": 0,
+              "qualitySharePct": 24.6,
+              "longRunSharePct": 36
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 11.9,
+                "renderedDistanceKm": 9.5,
+                "computedTotalKm": 9.5
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 19.1,
+                "renderedDistanceKm": 19.1,
+                "computedTotalKm": 19.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 17.4,
+                "renderedDistanceKm": 17.4,
+                "computedTotalKm": 17.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 51.9,
+              "plannedWeeklyKm": 51.9,
+              "driftKm": 0,
+              "qualitySharePct": 22.9,
+              "longRunSharePct": 35.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 11.9,
+                "renderedDistanceKm": 9.5,
+                "computedTotalKm": 9.5
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 21.4,
+                "renderedDistanceKm": 21.4,
+                "computedTotalKm": 21.4
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.6,
+                "renderedDistanceKm": 18.6,
+                "computedTotalKm": 18.6
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 41.5,
+              "plannedWeeklyKm": 41.5,
+              "driftKm": 0,
+              "qualitySharePct": 20,
+              "longRunSharePct": 35.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8.3,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 18.3,
+                "renderedDistanceKm": 18.3,
+                "computedTotalKm": 18.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.9,
+                "renderedDistanceKm": 14.9,
+                "computedTotalKm": 14.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 45.7,
+              "plannedWeeklyKm": 45.7,
+              "driftKm": 0,
+              "qualitySharePct": 24.9,
+              "longRunSharePct": 40.7
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 11.4,
+                "renderedDistanceKm": 9.1,
+                "computedTotalKm": 9.1
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 15.7,
+                "renderedDistanceKm": 15.7,
+                "computedTotalKm": 15.7
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.6,
+                "renderedDistanceKm": 18.6,
+                "computedTotalKm": 18.6
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 50.3,
+              "plannedWeeklyKm": 50.3,
+              "driftKm": 0,
+              "qualitySharePct": 23.7,
+              "longRunSharePct": 38.4
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 11.9,
+                "renderedDistanceKm": 10,
+                "computedTotalKm": 10
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 19.1,
+                "renderedDistanceKm": 19.1,
+                "computedTotalKm": 19.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 19.3,
+                "renderedDistanceKm": 19.3,
+                "computedTotalKm": 19.3
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 51.9,
+              "plannedWeeklyKm": 51.9,
+              "driftKm": 0,
+              "qualitySharePct": 22.9,
+              "longRunSharePct": 38.3
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 11.9,
+                "renderedDistanceKm": 9.5,
+                "computedTotalKm": 9.5
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 20.1,
+                "renderedDistanceKm": 20.1,
+                "computedTotalKm": 20.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 19.9,
+                "renderedDistanceKm": 19.9,
+                "computedTotalKm": 19.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 41.5,
+              "plannedWeeklyKm": 41.5,
+              "driftKm": 0,
+              "qualitySharePct": 20,
+              "longRunSharePct": 38.3
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8.3,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 17.3,
+                "renderedDistanceKm": 17.3,
+                "computedTotalKm": 17.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 15.9,
+                "renderedDistanceKm": 15.9,
+                "computedTotalKm": 15.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 9,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 45.4,
+              "plannedWeeklyKm": 45.4,
+              "driftKm": 0,
+              "qualitySharePct": 20,
+              "longRunSharePct": 31.5
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 9.1,
+                "renderedDistanceKm": 7.3,
+                "computedTotalKm": 7.3
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 22,
+                "renderedDistanceKm": 22,
+                "computedTotalKm": 22
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.3,
+                "renderedDistanceKm": 14.3,
+                "computedTotalKm": 14.3
+              }
+            ]
+          },
+          {
+            "weekIndex": 10,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 38.9,
+              "plannedWeeklyKm": 38.9,
+              "driftKm": 0,
+              "qualitySharePct": 20.1,
+              "longRunSharePct": 36.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.8,
+                "renderedDistanceKm": 6.2,
+                "computedTotalKm": 6.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 16.8,
+                "renderedDistanceKm": 16.8,
+                "computedTotalKm": 16.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.3,
+                "renderedDistanceKm": 14.3,
+                "computedTotalKm": 14.3
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "half_4x",
+        "distance": "Half marathon",
+        "sessionsPerWeek": 4,
+        "weeklyKm": 44,
+        "longestRunKm": 18,
+        "planLengthWeeks": 10
+      },
+      "summary": {
+        "weeksCount": 10,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 44,
+              "plannedWeeklyKm": 44,
+              "driftKm": 0,
+              "qualitySharePct": 24.1,
+              "longRunSharePct": 36.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.3,
+                "renderedDistanceKm": 5,
+                "computedTotalKm": 5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.3,
+                "renderedDistanceKm": 4.9,
+                "computedTotalKm": 4.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 17.2,
+                "renderedDistanceKm": 17.2,
+                "computedTotalKm": 17.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 16.2,
+                "renderedDistanceKm": 16.2,
+                "computedTotalKm": 16.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 48.4,
+              "plannedWeeklyKm": 48.4,
+              "driftKm": 0,
+              "qualitySharePct": 24.6,
+              "longRunSharePct": 36
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.9,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 19.1,
+                "renderedDistanceKm": 19.1,
+                "computedTotalKm": 19.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 17.4,
+                "renderedDistanceKm": 21.1,
+                "computedTotalKm": 21.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 53.2,
+              "plannedWeeklyKm": 53.2,
+              "driftKm": 0,
+              "qualitySharePct": 24.6,
+              "longRunSharePct": 35.2
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6.5,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 6.6,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 21.4,
+                "renderedDistanceKm": 21.4,
+                "computedTotalKm": 21.4
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.7,
+                "renderedDistanceKm": 18.7,
+                "computedTotalKm": 18.7
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 42.6,
+              "plannedWeeklyKm": 42.6,
+              "driftKm": 0,
+              "qualitySharePct": 23,
+              "longRunSharePct": 35.2
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 17.8,
+                "renderedDistanceKm": 17.8,
+                "computedTotalKm": 17.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 15,
+                "renderedDistanceKm": 15,
+                "computedTotalKm": 15
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 46.9,
+              "plannedWeeklyKm": 46.9,
+              "driftKm": 0,
+              "qualitySharePct": 24.9,
+              "longRunSharePct": 40.1
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.9,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.8,
+                "renderedDistanceKm": 6.6,
+                "computedTotalKm": 6.6
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 16.4,
+                "renderedDistanceKm": 16.4,
+                "computedTotalKm": 16.4
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.8,
+                "renderedDistanceKm": 18.8,
+                "computedTotalKm": 18.8
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 51.6,
+              "plannedWeeklyKm": 51.6,
+              "driftKm": 0,
+              "qualitySharePct": 25.6,
+              "longRunSharePct": 38
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6.6,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 6.6,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 18.8,
+                "renderedDistanceKm": 18.8,
+                "computedTotalKm": 18.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 19.6,
+                "renderedDistanceKm": 19.6,
+                "computedTotalKm": 19.6
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 55,
+              "plannedWeeklyKm": 55,
+              "driftKm": 0,
+              "qualitySharePct": 24.5,
+              "longRunSharePct": 37.1
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6.8,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 6.7,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 21.1,
+                "renderedDistanceKm": 21.1,
+                "computedTotalKm": 21.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 20.4,
+                "renderedDistanceKm": 20.4,
+                "computedTotalKm": 20.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 44,
+              "plannedWeeklyKm": 44,
+              "driftKm": 0,
+              "qualitySharePct": 22.3,
+              "longRunSharePct": 37
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 17.9,
+                "renderedDistanceKm": 17.9,
+                "computedTotalKm": 17.9
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 16.3,
+                "renderedDistanceKm": 16.3,
+                "computedTotalKm": 16.3
+              }
+            ]
+          },
+          {
+            "weekIndex": 9,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 48.1,
+              "plannedWeeklyKm": 48.1,
+              "driftKm": 0,
+              "qualitySharePct": 20.4,
+              "longRunSharePct": 30.6
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 23.6,
+                "renderedDistanceKm": 23.6,
+                "computedTotalKm": 23.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.7,
+                "renderedDistanceKm": 14.7,
+                "computedTotalKm": 14.7
+              }
+            ]
+          },
+          {
+            "weekIndex": 10,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 41.3,
+              "plannedWeeklyKm": 41.3,
+              "driftKm": 0,
+              "qualitySharePct": 23.7,
+              "longRunSharePct": 35.6
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 16.8,
+                "renderedDistanceKm": 16.8,
+                "computedTotalKm": 16.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.7,
+                "renderedDistanceKm": 14.7,
+                "computedTotalKm": 14.7
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "half_5x",
+        "distance": "Half marathon",
+        "sessionsPerWeek": 5,
+        "weeklyKm": 44,
+        "longestRunKm": 18,
+        "planLengthWeeks": 10
+      },
+      "summary": {
+        "weeksCount": 10,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 44,
+              "plannedWeeklyKm": 44,
+              "driftKm": 0,
+              "qualitySharePct": 24.1,
+              "longRunSharePct": 36.8
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 8.6,
+                "renderedDistanceKm": 8.6,
+                "computedTotalKm": 8.6
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.3,
+                "renderedDistanceKm": 5,
+                "computedTotalKm": 5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.3,
+                "renderedDistanceKm": 4.9,
+                "computedTotalKm": 4.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 8.6,
+                "renderedDistanceKm": 8.6,
+                "computedTotalKm": 8.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 16.2,
+                "renderedDistanceKm": 16.2,
+                "computedTotalKm": 16.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 48.4,
+              "plannedWeeklyKm": 48.4,
+              "driftKm": 0,
+              "qualitySharePct": 24.6,
+              "longRunSharePct": 36
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 9.6,
+                "renderedDistanceKm": 9.6,
+                "computedTotalKm": 9.6
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.9,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 9.5,
+                "renderedDistanceKm": 9.5,
+                "computedTotalKm": 9.5
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 17.4,
+                "renderedDistanceKm": 21.1,
+                "computedTotalKm": 21.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 53.2,
+              "plannedWeeklyKm": 53.2,
+              "driftKm": 0,
+              "qualitySharePct": 24.6,
+              "longRunSharePct": 35.2
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 10.7,
+                "renderedDistanceKm": 10.7,
+                "computedTotalKm": 10.7
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6.5,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 6.6,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 10.7,
+                "renderedDistanceKm": 10.7,
+                "computedTotalKm": 10.7
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.7,
+                "renderedDistanceKm": 18.7,
+                "computedTotalKm": 18.7
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 42.6,
+              "plannedWeeklyKm": 42.6,
+              "driftKm": 0,
+              "qualitySharePct": 23,
+              "longRunSharePct": 35.2
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 8.9,
+                "renderedDistanceKm": 8.9,
+                "computedTotalKm": 8.9
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 8.9,
+                "renderedDistanceKm": 8.9,
+                "computedTotalKm": 8.9
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 15,
+                "renderedDistanceKm": 15,
+                "computedTotalKm": 15
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 46.9,
+              "plannedWeeklyKm": 46.9,
+              "driftKm": 0,
+              "qualitySharePct": 24.9,
+              "longRunSharePct": 40.1
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 8.2,
+                "renderedDistanceKm": 8.2,
+                "computedTotalKm": 8.2
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.9,
+                "renderedDistanceKm": 4.7,
+                "computedTotalKm": 4.7
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.8,
+                "renderedDistanceKm": 6.6,
+                "computedTotalKm": 6.6
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 8.2,
+                "renderedDistanceKm": 8.2,
+                "computedTotalKm": 8.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.8,
+                "renderedDistanceKm": 18.8,
+                "computedTotalKm": 18.8
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 51.6,
+              "plannedWeeklyKm": 51.6,
+              "driftKm": 0,
+              "qualitySharePct": 25.6,
+              "longRunSharePct": 38
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 9.4,
+                "renderedDistanceKm": 9.4,
+                "computedTotalKm": 9.4
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6.6,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 6.6,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 9.4,
+                "renderedDistanceKm": 9.4,
+                "computedTotalKm": 9.4
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 19.6,
+                "renderedDistanceKm": 19.6,
+                "computedTotalKm": 19.6
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 55,
+              "plannedWeeklyKm": 55,
+              "driftKm": 0,
+              "qualitySharePct": 24.5,
+              "longRunSharePct": 37.1
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 10.6,
+                "renderedDistanceKm": 10.6,
+                "computedTotalKm": 10.6
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6.8,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 6.7,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 10.5,
+                "renderedDistanceKm": 10.5,
+                "computedTotalKm": 10.5
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 20.4,
+                "renderedDistanceKm": 20.4,
+                "computedTotalKm": 20.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "deload",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 44,
+              "plannedWeeklyKm": 44,
+              "driftKm": 0,
+              "qualitySharePct": 22.3,
+              "longRunSharePct": 37
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 9,
+                "renderedDistanceKm": 9,
+                "computedTotalKm": 9
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 8.9,
+                "renderedDistanceKm": 8.9,
+                "computedTotalKm": 8.9
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 16.3,
+                "renderedDistanceKm": 16.3,
+                "computedTotalKm": 16.3
+              }
+            ]
+          },
+          {
+            "weekIndex": 9,
+            "phase": "taper",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 48.1,
+              "plannedWeeklyKm": 48.1,
+              "driftKm": 0,
+              "qualitySharePct": 20.4,
+              "longRunSharePct": 30.6
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 11.8,
+                "renderedDistanceKm": 11.8,
+                "computedTotalKm": 11.8
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 11.8,
+                "renderedDistanceKm": 11.8,
+                "computedTotalKm": 11.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.7,
+                "renderedDistanceKm": 14.7,
+                "computedTotalKm": 14.7
+              }
+            ]
+          },
+          {
+            "weekIndex": 10,
+            "phase": "taper",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 41.3,
+              "plannedWeeklyKm": 41.3,
+              "driftKm": 0,
+              "qualitySharePct": 23.7,
+              "longRunSharePct": 35.6
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 8.4,
+                "renderedDistanceKm": 8.4,
+                "computedTotalKm": 8.4
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.9,
+                "renderedDistanceKm": 3.9,
+                "computedTotalKm": 3.9
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 8.4,
+                "renderedDistanceKm": 8.4,
+                "computedTotalKm": 8.4
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 14.7,
+                "renderedDistanceKm": 14.7,
+                "computedTotalKm": 14.7
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "marathon_3x",
+        "distance": "Marathon",
+        "sessionsPerWeek": 3,
+        "weeklyKm": 54,
+        "longestRunKm": 24,
+        "planLengthWeeks": 12
+      },
+      "summary": {
+        "weeksCount": 12,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 54,
+              "plannedWeeklyKm": 54,
+              "driftKm": 0,
+              "qualitySharePct": 23.5,
+              "longRunSharePct": 40.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 12.7,
+                "renderedDistanceKm": 10.2,
+                "computedTotalKm": 10.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 19.2,
+                "renderedDistanceKm": 19.2,
+                "computedTotalKm": 19.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 22.1,
+                "renderedDistanceKm": 22.1,
+                "computedTotalKm": 22.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 59.4,
+              "plannedWeeklyKm": 59.4,
+              "driftKm": 0,
+              "qualitySharePct": 21.4,
+              "longRunSharePct": 38.6
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 12.7,
+                "renderedDistanceKm": 10.2,
+                "computedTotalKm": 10.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 23.8,
+                "renderedDistanceKm": 23.8,
+                "computedTotalKm": 23.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 22.9,
+                "renderedDistanceKm": 22.9,
+                "computedTotalKm": 22.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 63.7,
+              "plannedWeeklyKm": 63.7,
+              "driftKm": 0,
+              "qualitySharePct": 19.9,
+              "longRunSharePct": 37.5
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 12.7,
+                "renderedDistanceKm": 10.2,
+                "computedTotalKm": 10.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 27.1,
+                "renderedDistanceKm": 27.1,
+                "computedTotalKm": 27.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 23.9,
+                "renderedDistanceKm": 23.9,
+                "computedTotalKm": 23.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 51,
+              "plannedWeeklyKm": 51,
+              "driftKm": 0,
+              "qualitySharePct": 19.4,
+              "longRunSharePct": 37.5
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 9.9,
+                "renderedDistanceKm": 7.9,
+                "computedTotalKm": 7.9
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 22,
+                "renderedDistanceKm": 22,
+                "computedTotalKm": 22
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 19.1,
+                "renderedDistanceKm": 19.1,
+                "computedTotalKm": 19.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 56.1,
+              "plannedWeeklyKm": 56.1,
+              "driftKm": 0,
+              "qualitySharePct": 22.6,
+              "longRunSharePct": 42.6
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 12.7,
+                "renderedDistanceKm": 10.2,
+                "computedTotalKm": 10.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 19.5,
+                "renderedDistanceKm": 19.5,
+                "computedTotalKm": 19.5
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 23.9,
+                "renderedDistanceKm": 23.9,
+                "computedTotalKm": 23.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 61.7,
+              "plannedWeeklyKm": 61.7,
+              "driftKm": 0,
+              "qualitySharePct": 20.6,
+              "longRunSharePct": 39.5
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 12.7,
+                "renderedDistanceKm": 12,
+                "computedTotalKm": 12
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 24.6,
+                "renderedDistanceKm": 24.6,
+                "computedTotalKm": 24.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24.4,
+                "renderedDistanceKm": 24.4,
+                "computedTotalKm": 24.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 63.7,
+              "plannedWeeklyKm": 63.7,
+              "driftKm": 0,
+              "qualitySharePct": 19.9,
+              "longRunSharePct": 39.1
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 12.7,
+                "renderedDistanceKm": 12,
+                "computedTotalKm": 12
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 26.1,
+                "renderedDistanceKm": 26.1,
+                "computedTotalKm": 26.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24.9,
+                "renderedDistanceKm": 24.9,
+                "computedTotalKm": 24.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 51,
+              "plannedWeeklyKm": 51,
+              "driftKm": 0,
+              "qualitySharePct": 19.4,
+              "longRunSharePct": 39
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 9.9,
+                "renderedDistanceKm": 7.9,
+                "computedTotalKm": 7.9
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 21.2,
+                "renderedDistanceKm": 21.2,
+                "computedTotalKm": 21.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 19.9,
+                "renderedDistanceKm": 19.9,
+                "computedTotalKm": 19.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 9,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 56.1,
+              "plannedWeeklyKm": 56.1,
+              "driftKm": 0,
+              "qualitySharePct": 22.6,
+              "longRunSharePct": 44.4
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 12.7,
+                "renderedDistanceKm": 10.2,
+                "computedTotalKm": 10.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 18.5,
+                "renderedDistanceKm": 18.5,
+                "computedTotalKm": 18.5
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24.9,
+                "renderedDistanceKm": 24.9,
+                "computedTotalKm": 24.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 10,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 61.7,
+              "plannedWeeklyKm": 61.7,
+              "driftKm": 0,
+              "qualitySharePct": 20.6,
+              "longRunSharePct": 40.4
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 12.7,
+                "renderedDistanceKm": 10.2,
+                "computedTotalKm": 10.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 24.1,
+                "renderedDistanceKm": 24.1,
+                "computedTotalKm": 24.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24.9,
+                "renderedDistanceKm": 24.9,
+                "computedTotalKm": 24.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 11,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 54,
+              "plannedWeeklyKm": 54,
+              "driftKm": 0,
+              "qualitySharePct": 19.4,
+              "longRunSharePct": 32.2
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 10.5,
+                "renderedDistanceKm": 8.4,
+                "computedTotalKm": 8.4
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 26.1,
+                "renderedDistanceKm": 26.1,
+                "computedTotalKm": 26.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 17.4,
+                "renderedDistanceKm": 17.4,
+                "computedTotalKm": 17.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 12,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 46.3,
+              "plannedWeeklyKm": 46.3,
+              "driftKm": 0,
+              "qualitySharePct": 19.4,
+              "longRunSharePct": 37.6
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 9,
+                "renderedDistanceKm": 7.2,
+                "computedTotalKm": 7.2
+              },
+              {
+                "day": "Thu",
+                "type": "EASY",
+                "plannedDistanceKm": 19.9,
+                "renderedDistanceKm": 19.9,
+                "computedTotalKm": 19.9
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 17.4,
+                "renderedDistanceKm": 17.4,
+                "computedTotalKm": 17.4
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "marathon_4x",
+        "distance": "Marathon",
+        "sessionsPerWeek": 4,
+        "weeklyKm": 54,
+        "longestRunKm": 24,
+        "planLengthWeeks": 12
+      },
+      "summary": {
+        "weeksCount": 12,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 54,
+              "plannedWeeklyKm": 54,
+              "driftKm": 0,
+              "qualitySharePct": 23.5,
+              "longRunSharePct": 40.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6.3,
+                "renderedDistanceKm": 5,
+                "computedTotalKm": 5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 6.4,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 19.2,
+                "renderedDistanceKm": 19.2,
+                "computedTotalKm": 19.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 22.1,
+                "renderedDistanceKm": 22.1,
+                "computedTotalKm": 22.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 59.4,
+              "plannedWeeklyKm": 59.4,
+              "driftKm": 0,
+              "qualitySharePct": 24.1,
+              "longRunSharePct": 38.6
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.2,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7.1,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 22.2,
+                "renderedDistanceKm": 22.2,
+                "computedTotalKm": 22.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 22.9,
+                "renderedDistanceKm": 27.2,
+                "computedTotalKm": 27.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "base",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 65.3,
+              "plannedWeeklyKm": 65.3,
+              "driftKm": 0,
+              "qualitySharePct": 23.1,
+              "longRunSharePct": 36.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.5,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7.6,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 26.2,
+                "renderedDistanceKm": 26.2,
+                "computedTotalKm": 26.2
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24,
+                "renderedDistanceKm": 24,
+                "computedTotalKm": 24
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 52.2,
+              "plannedWeeklyKm": 52.2,
+              "driftKm": 0,
+              "qualitySharePct": 19.5,
+              "longRunSharePct": 36.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.1,
+                "computedTotalKm": 4.1
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.1,
+                "computedTotalKm": 4.1
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 22.8,
+                "renderedDistanceKm": 22.8,
+                "computedTotalKm": 22.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 19.2,
+                "renderedDistanceKm": 19.2,
+                "computedTotalKm": 19.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 57.4,
+              "plannedWeeklyKm": 57.4,
+              "driftKm": 0,
+              "qualitySharePct": 24.6,
+              "longRunSharePct": 41.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.1,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7,
+                "renderedDistanceKm": 6.8,
+                "computedTotalKm": 6.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 19.3,
+                "renderedDistanceKm": 19.3,
+                "computedTotalKm": 19.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24,
+                "renderedDistanceKm": 24,
+                "computedTotalKm": 24
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 63.1,
+              "plannedWeeklyKm": 63.1,
+              "driftKm": 0,
+              "qualitySharePct": 25,
+              "longRunSharePct": 39
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.9,
+                "renderedDistanceKm": 6.3,
+                "computedTotalKm": 6.3
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7.9,
+                "renderedDistanceKm": 8.8,
+                "computedTotalKm": 8.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 22.7,
+                "renderedDistanceKm": 22.7,
+                "computedTotalKm": 22.7
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24.6,
+                "renderedDistanceKm": 24.6,
+                "computedTotalKm": 24.6
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 67.5,
+              "plannedWeeklyKm": 67.5,
+              "driftKm": 0,
+              "qualitySharePct": 24.1,
+              "longRunSharePct": 37.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8.2,
+                "renderedDistanceKm": 8.1,
+                "computedTotalKm": 8.1
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 8.1,
+                "renderedDistanceKm": 8.8,
+                "computedTotalKm": 8.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 25.7,
+                "renderedDistanceKm": 25.7,
+                "computedTotalKm": 25.7
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 25.5,
+                "renderedDistanceKm": 25.5,
+                "computedTotalKm": 25.5
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "deload",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 54,
+              "plannedWeeklyKm": 54,
+              "driftKm": 0,
+              "qualitySharePct": 19.4,
+              "longRunSharePct": 37.8
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.2,
+                "renderedDistanceKm": 4.2,
+                "computedTotalKm": 4.2
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.3,
+                "renderedDistanceKm": 4.2,
+                "computedTotalKm": 4.2
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 23.1,
+                "renderedDistanceKm": 23.1,
+                "computedTotalKm": 23.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 20.4,
+                "renderedDistanceKm": 20.4,
+                "computedTotalKm": 20.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 9,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 59.4,
+              "plannedWeeklyKm": 59.4,
+              "driftKm": 0,
+              "qualitySharePct": 24.6,
+              "longRunSharePct": 42.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.3,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7.3,
+                "renderedDistanceKm": 8.8,
+                "computedTotalKm": 8.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 19.3,
+                "renderedDistanceKm": 19.3,
+                "computedTotalKm": 19.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 25.5,
+                "renderedDistanceKm": 25.5,
+                "computedTotalKm": 25.5
+              }
+            ]
+          },
+          {
+            "weekIndex": 10,
+            "phase": "build",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 65.3,
+              "plannedWeeklyKm": 65.3,
+              "driftKm": 0,
+              "qualitySharePct": 25.1,
+              "longRunSharePct": 39.7
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8.2,
+                "renderedDistanceKm": 8,
+                "computedTotalKm": 8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 8.2,
+                "renderedDistanceKm": 8.8,
+                "computedTotalKm": 8.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 23,
+                "renderedDistanceKm": 23,
+                "computedTotalKm": 23
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 25.9,
+                "renderedDistanceKm": 25.9,
+                "computedTotalKm": 25.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 11,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 57.1,
+              "plannedWeeklyKm": 57.1,
+              "driftKm": 0,
+              "qualitySharePct": 19.4,
+              "longRunSharePct": 31.7
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.6,
+                "renderedDistanceKm": 4.5,
+                "computedTotalKm": 4.5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.5,
+                "renderedDistanceKm": 4.4,
+                "computedTotalKm": 4.4
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 27.9,
+                "renderedDistanceKm": 27.9,
+                "computedTotalKm": 27.9
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.1,
+                "renderedDistanceKm": 18.1,
+                "computedTotalKm": 18.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 12,
+            "phase": "taper",
+            "runDays": [
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 49,
+              "plannedWeeklyKm": 49,
+              "driftKm": 0,
+              "qualitySharePct": 19.6,
+              "longRunSharePct": 36.9
+            },
+            "sessions": [
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.8,
+                "renderedDistanceKm": 3.8,
+                "computedTotalKm": 3.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.8,
+                "renderedDistanceKm": 3.8,
+                "computedTotalKm": 3.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 21.3,
+                "renderedDistanceKm": 21.3,
+                "computedTotalKm": 21.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.1,
+                "renderedDistanceKm": 18.1,
+                "computedTotalKm": 18.1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": {
+        "id": "marathon_5x",
+        "distance": "Marathon",
+        "sessionsPerWeek": 5,
+        "weeklyKm": 54,
+        "longestRunKm": 24,
+        "planLengthWeeks": 12
+      },
+      "summary": {
+        "weeksCount": 12,
+        "anchorTrace": {
+          "pacePath": "threshold_pace",
+          "hrPath": "resting_override_to_hrr"
+        },
+        "weeks": [
+          {
+            "weekIndex": 1,
+            "phase": "base",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 54,
+              "plannedWeeklyKm": 54,
+              "driftKm": 0,
+              "qualitySharePct": 23.5,
+              "longRunSharePct": 40.9
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 9.6,
+                "renderedDistanceKm": 9.6,
+                "computedTotalKm": 9.6
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 6.3,
+                "renderedDistanceKm": 5,
+                "computedTotalKm": 5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 6.4,
+                "renderedDistanceKm": 5.8,
+                "computedTotalKm": 5.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 9.6,
+                "renderedDistanceKm": 9.6,
+                "computedTotalKm": 9.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 22.1,
+                "renderedDistanceKm": 22.1,
+                "computedTotalKm": 22.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 2,
+            "phase": "base",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 59.4,
+              "plannedWeeklyKm": 59.4,
+              "driftKm": 0,
+              "qualitySharePct": 24.1,
+              "longRunSharePct": 38.6
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 11.1,
+                "renderedDistanceKm": 11.1,
+                "computedTotalKm": 11.1
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.2,
+                "renderedDistanceKm": 6.4,
+                "computedTotalKm": 6.4
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7.1,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 11.1,
+                "renderedDistanceKm": 11.1,
+                "computedTotalKm": 11.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 22.9,
+                "renderedDistanceKm": 27.2,
+                "computedTotalKm": 27.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 3,
+            "phase": "base",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 65.3,
+              "plannedWeeklyKm": 65.3,
+              "driftKm": 0,
+              "qualitySharePct": 23.1,
+              "longRunSharePct": 36.8
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 13.1,
+                "renderedDistanceKm": 13.1,
+                "computedTotalKm": 13.1
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.5,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7.6,
+                "renderedDistanceKm": 7,
+                "computedTotalKm": 7
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 13.1,
+                "renderedDistanceKm": 13.1,
+                "computedTotalKm": 13.1
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24,
+                "renderedDistanceKm": 24,
+                "computedTotalKm": 24
+              }
+            ]
+          },
+          {
+            "weekIndex": 4,
+            "phase": "deload",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 52.2,
+              "plannedWeeklyKm": 52.2,
+              "driftKm": 0,
+              "qualitySharePct": 19.5,
+              "longRunSharePct": 36.8
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 11.4,
+                "renderedDistanceKm": 11.4,
+                "computedTotalKm": 11.4
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.1,
+                "computedTotalKm": 4.1
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.1,
+                "renderedDistanceKm": 4.1,
+                "computedTotalKm": 4.1
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 11.4,
+                "renderedDistanceKm": 11.4,
+                "computedTotalKm": 11.4
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 19.2,
+                "renderedDistanceKm": 19.2,
+                "computedTotalKm": 19.2
+              }
+            ]
+          },
+          {
+            "weekIndex": 5,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 57.4,
+              "plannedWeeklyKm": 57.4,
+              "driftKm": 0,
+              "qualitySharePct": 24.6,
+              "longRunSharePct": 41.8
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 9.7,
+                "renderedDistanceKm": 9.7,
+                "computedTotalKm": 9.7
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.1,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7,
+                "renderedDistanceKm": 6.8,
+                "computedTotalKm": 6.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 9.6,
+                "renderedDistanceKm": 9.6,
+                "computedTotalKm": 9.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24,
+                "renderedDistanceKm": 24,
+                "computedTotalKm": 24
+              }
+            ]
+          },
+          {
+            "weekIndex": 6,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 63.1,
+              "plannedWeeklyKm": 63.1,
+              "driftKm": 0,
+              "qualitySharePct": 25,
+              "longRunSharePct": 39
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 11.4,
+                "renderedDistanceKm": 11.4,
+                "computedTotalKm": 11.4
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.9,
+                "renderedDistanceKm": 6.3,
+                "computedTotalKm": 6.3
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7.9,
+                "renderedDistanceKm": 8.8,
+                "computedTotalKm": 8.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 11.3,
+                "renderedDistanceKm": 11.3,
+                "computedTotalKm": 11.3
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 24.6,
+                "renderedDistanceKm": 24.6,
+                "computedTotalKm": 24.6
+              }
+            ]
+          },
+          {
+            "weekIndex": 7,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 67.5,
+              "plannedWeeklyKm": 67.5,
+              "driftKm": 0,
+              "qualitySharePct": 24.1,
+              "longRunSharePct": 37.8
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 12.9,
+                "renderedDistanceKm": 12.9,
+                "computedTotalKm": 12.9
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8.2,
+                "renderedDistanceKm": 8.1,
+                "computedTotalKm": 8.1
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 8.1,
+                "renderedDistanceKm": 8.8,
+                "computedTotalKm": 8.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 12.8,
+                "renderedDistanceKm": 12.8,
+                "computedTotalKm": 12.8
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 25.5,
+                "renderedDistanceKm": 25.5,
+                "computedTotalKm": 25.5
+              }
+            ]
+          },
+          {
+            "weekIndex": 8,
+            "phase": "deload",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 54,
+              "plannedWeeklyKm": 54,
+              "driftKm": 0,
+              "qualitySharePct": 19.4,
+              "longRunSharePct": 37.8
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 11.6,
+                "renderedDistanceKm": 11.6,
+                "computedTotalKm": 11.6
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.2,
+                "renderedDistanceKm": 4.2,
+                "computedTotalKm": 4.2
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.3,
+                "renderedDistanceKm": 4.2,
+                "computedTotalKm": 4.2
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 11.5,
+                "renderedDistanceKm": 11.5,
+                "computedTotalKm": 11.5
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 20.4,
+                "renderedDistanceKm": 20.4,
+                "computedTotalKm": 20.4
+              }
+            ]
+          },
+          {
+            "weekIndex": 9,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 59.4,
+              "plannedWeeklyKm": 59.4,
+              "driftKm": 0,
+              "qualitySharePct": 24.6,
+              "longRunSharePct": 42.9
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 9.7,
+                "renderedDistanceKm": 9.7,
+                "computedTotalKm": 9.7
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 7.3,
+                "renderedDistanceKm": 6,
+                "computedTotalKm": 6
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 7.3,
+                "renderedDistanceKm": 8.8,
+                "computedTotalKm": 8.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 9.6,
+                "renderedDistanceKm": 9.6,
+                "computedTotalKm": 9.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 25.5,
+                "renderedDistanceKm": 25.5,
+                "computedTotalKm": 25.5
+              }
+            ]
+          },
+          {
+            "weekIndex": 10,
+            "phase": "build",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 65.3,
+              "plannedWeeklyKm": 65.3,
+              "driftKm": 0,
+              "qualitySharePct": 25.1,
+              "longRunSharePct": 39.7
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 11.5,
+                "renderedDistanceKm": 11.5,
+                "computedTotalKm": 11.5
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 8.2,
+                "renderedDistanceKm": 8,
+                "computedTotalKm": 8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 8.2,
+                "renderedDistanceKm": 8.8,
+                "computedTotalKm": 8.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 11.5,
+                "renderedDistanceKm": 11.5,
+                "computedTotalKm": 11.5
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 25.9,
+                "renderedDistanceKm": 25.9,
+                "computedTotalKm": 25.9
+              }
+            ]
+          },
+          {
+            "weekIndex": 11,
+            "phase": "taper",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 57.1,
+              "plannedWeeklyKm": 57.1,
+              "driftKm": 0,
+              "qualitySharePct": 19.4,
+              "longRunSharePct": 31.7
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 14,
+                "renderedDistanceKm": 14,
+                "computedTotalKm": 14
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 5.6,
+                "renderedDistanceKm": 4.5,
+                "computedTotalKm": 4.5
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 5.5,
+                "renderedDistanceKm": 4.4,
+                "computedTotalKm": 4.4
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 13.9,
+                "renderedDistanceKm": 13.9,
+                "computedTotalKm": 13.9
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.1,
+                "renderedDistanceKm": 18.1,
+                "computedTotalKm": 18.1
+              }
+            ]
+          },
+          {
+            "weekIndex": 12,
+            "phase": "taper",
+            "runDays": [
+              "Mon",
+              "Tue",
+              "Thu",
+              "Sat",
+              "Sun"
+            ],
+            "metrics": {
+              "targetWeeklyKm": 49,
+              "plannedWeeklyKm": 49,
+              "driftKm": 0,
+              "qualitySharePct": 19.6,
+              "longRunSharePct": 36.9
+            },
+            "sessions": [
+              {
+                "day": "Mon",
+                "type": "EASY",
+                "plannedDistanceKm": 10.7,
+                "renderedDistanceKm": 10.7,
+                "computedTotalKm": 10.7
+              },
+              {
+                "day": "Tue",
+                "type": "INTERVALS",
+                "plannedDistanceKm": 4.8,
+                "renderedDistanceKm": 3.8,
+                "computedTotalKm": 3.8
+              },
+              {
+                "day": "Thu",
+                "type": "THRESHOLD",
+                "plannedDistanceKm": 4.8,
+                "renderedDistanceKm": 3.8,
+                "computedTotalKm": 3.8
+              },
+              {
+                "day": "Sat",
+                "type": "EASY",
+                "plannedDistanceKm": 10.6,
+                "renderedDistanceKm": 10.6,
+                "computedTotalKm": 10.6
+              },
+              {
+                "day": "Sun",
+                "type": "LONG",
+                "plannedDistanceKm": 18.1,
+                "renderedDistanceKm": 18.1,
+                "computedTotalKm": 18.1
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

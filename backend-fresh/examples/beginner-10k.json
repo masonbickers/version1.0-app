@@ -1,0 +1,10 @@
+{
+  "athleteProfile": {
+    "goal": { "distance": "10K", "planLengthWeeks": 10, "targetDate": "2026-10-01" },
+    "current": { "experience": "Beginner", "weeklyKm": 18, "longestRunKm": 8, "age": 31 },
+    "availability": { "sessionsPerWeek": 4, "runDays": ["Tue","Thu","Sat","Sun"], "longRunDay": "Sun" },
+    "preferences": { "difficulty": "easy", "trainingFocus": "balanced", "metric": "distance", "treadmill": false },
+    "pacing": { "recentRace": { "distance": "5K", "time": "27:30" } },
+    "hr": { "resting": 58, "max": 188 }
+  }
+}

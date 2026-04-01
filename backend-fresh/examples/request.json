@@ -1,0 +1,53 @@
+{
+  "athleteProfile": {
+    "goal": {
+      "distance": "10K",
+      "planLengthWeeks": 10,
+      "targetDate": "2026-10-01"
+    },
+    "current": {
+      "experience": "Some experience",
+      "weeklyKm": 36,
+      "longestRunKm": 14,
+      "age": 30
+    },
+    "availability": {
+      "sessionsPerWeek": 4,
+      "runDays": ["Tue", "Thu", "Sat", "Sun"],
+      "longRunDay": "Sun"
+    },
+    "preferences": {
+      "difficulty": "balanced",
+      "metric": "distance",
+      "treadmill": false
+    },
+    "pacing": {
+      "recentRace": {
+        "distance": "10K",
+        "time": "42:00"
+      }
+    },
+    "hr": {
+      "resting": 52,
+      "max": 190
+    }
+  },
+  "generatorConfig": {
+    "planName": "10K Custom Build",
+    "phaseModel": {
+      "baseWeeks": 2,
+      "deloadEvery": 4,
+      "taperWeeks": 1
+    },
+    "progression": {
+      "weeklyIncreasePct": 0.08,
+      "deloadDropPct": 0.22,
+      "taperDropPct": 0.35
+    },
+    "distribution": {
+      "qualityDaysPerWeek": 2,
+      "minQualitySessionKm": 3,
+      "minEasySessionKm": 4
+    }
+  }
+}

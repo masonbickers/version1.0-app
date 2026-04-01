@@ -1,0 +1,10 @@
+{
+  "athleteProfile": {
+    "goal": { "distance": "HALF", "planLengthWeeks": 12, "targetDate": "2026-11-15" },
+    "current": { "experience": "Some experience", "weeklyKm": 38, "longestRunKm": 16, "age": 34 },
+    "availability": { "sessionsPerWeek": 5, "runDays": ["Tue","Wed","Fri","Sat","Sun"], "longRunDay": "Sun" },
+    "preferences": { "difficulty": "balanced", "trainingFocus": "endurance", "metric": "distance", "treadmill": false },
+    "pacing": { "recentRace": { "distance": "10K", "time": "44:30" } },
+    "hr": { "resting": 52, "max": 186 }
+  }
+}

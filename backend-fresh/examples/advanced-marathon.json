@@ -1,0 +1,10 @@
+{
+  "athleteProfile": {
+    "goal": { "distance": "MARATHON", "planLengthWeeks": 16, "targetDate": "2026-12-06" },
+    "current": { "experience": "Advanced", "weeklyKm": 70, "longestRunKm": 28, "age": 36 },
+    "availability": { "sessionsPerWeek": 6, "runDays": ["Mon","Tue","Thu","Fri","Sat","Sun"], "longRunDay": "Sun" },
+    "preferences": { "difficulty": "hard", "trainingFocus": "endurance", "metric": "distance", "treadmill": false },
+    "pacing": { "recentRace": { "distance": "HALF", "time": "1:29:00" } },
+    "hr": { "resting": 48, "max": 189 }
+  }
+}

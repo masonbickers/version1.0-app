@@ -1,0 +1,697 @@
+{
+  "id": "10k_8w_4",
+  "kind": "run",
+  "distance": "10K",
+  "runsPerWeek": 4,
+  "name": "10K · 8 weeks · 4 runs/week (stock)",
+  "version": 2,
+  "notes": "STRUCTURE template only. Server maps sessions to athleteProfile.availability.runDays + longRunDay, injects paceSecPerKm from target.paceKey, adds WU+CD to hard sessions, and adds strides to EASY sessions.",
+  "weeks": [
+    {
+      "weekNumber": 1,
+      "focus": "Introduce quality + rhythm",
+      "sessions": [
+        {
+          "slot": "QUALITY_1",
+          "sessionType": "INTERVAL",
+          "name": "6×400m @ VO2 (5K-ish effort)",
+          "notes": "Sharp but controlled. Full recoveries. Keep form tidy.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 6,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "400m hard",
+                  "duration": { "type": "DISTANCE", "meters": 400 },
+                  "target": { "paceKey": "VO2" },
+                  "notes": "Fast, controlled"
+                },
+                {
+                  "type": "RUN",
+                  "name": "Jog recovery",
+                  "duration": { "type": "TIME", "seconds": 90 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "QUALITY_2",
+          "sessionType": "THRESHOLD",
+          "name": "3×6min @ threshold",
+          "notes": "Comfortably hard. Smooth breathing. Not a time trial.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 3,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "6 min threshold",
+                  "duration": { "type": "TIME", "seconds": 360 },
+                  "target": { "paceKey": "THRESH" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "Easy recovery",
+                  "duration": { "type": "TIME", "seconds": 120 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "EASY",
+          "sessionType": "EASY",
+          "name": "Easy run",
+          "notes": "Keep it light. Strides are added automatically at the end.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 2100 },
+              "target": { "paceKey": "EASY" },
+              "notes": "35 min easy"
+            }
+          ]
+        },
+        {
+          "slot": "LONG",
+          "sessionType": "LONG",
+          "name": "Long run: easy",
+          "notes": "Easy. If you feel great, last 10 mins slightly quicker (still controlled).",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Long easy",
+              "duration": { "type": "TIME", "seconds": 3900 },
+              "target": { "paceKey": "EASY" },
+              "notes": "65 min easy"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "weekNumber": 2,
+      "focus": "Build volume + aerobic strength",
+      "sessions": [
+        {
+          "slot": "QUALITY_1",
+          "sessionType": "INTERVAL",
+          "name": "5×800m @ 10K pace",
+          "notes": "Controlled reps. Aim even pacing.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 5,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "800m @ 10K",
+                  "duration": { "type": "DISTANCE", "meters": 800 },
+                  "target": { "paceKey": "TEN_K" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "Jog recovery",
+                  "duration": { "type": "TIME", "seconds": 120 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "QUALITY_2",
+          "sessionType": "THRESHOLD",
+          "name": "20 min continuous @ threshold",
+          "notes": "Steady, smooth, sustainable. Finish feeling like you could do 5–10 more minutes.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Threshold",
+              "duration": { "type": "TIME", "seconds": 1200 },
+              "target": { "paceKey": "THRESH" }
+            }
+          ]
+        },
+        {
+          "slot": "EASY",
+          "sessionType": "EASY",
+          "name": "Easy run",
+          "notes": "Strides added automatically.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 2400 },
+              "target": { "paceKey": "EASY" },
+              "notes": "40 min easy"
+            }
+          ]
+        },
+        {
+          "slot": "LONG",
+          "sessionType": "LONG",
+          "name": "Long run: easy",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Long easy",
+              "duration": { "type": "TIME", "seconds": 4200 },
+              "target": { "paceKey": "EASY" },
+              "notes": "70 min easy"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "weekNumber": 3,
+      "focus": "Speed endurance",
+      "sessions": [
+        {
+          "slot": "QUALITY_1",
+          "sessionType": "INTERVAL",
+          "name": "12×1min on / 1min off (VO2)",
+          "notes": "Fast but controlled. Keep cadence high.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 12,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "1 min hard",
+                  "duration": { "type": "TIME", "seconds": 60 },
+                  "target": { "paceKey": "VO2" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "1 min easy",
+                  "duration": { "type": "TIME", "seconds": 60 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "QUALITY_2",
+          "sessionType": "THRESHOLD",
+          "name": "2×12min @ threshold",
+          "notes": "Strong, consistent effort. Keep it under control.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 2,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "12 min threshold",
+                  "duration": { "type": "TIME", "seconds": 720 },
+                  "target": { "paceKey": "THRESH" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "3 min easy",
+                  "duration": { "type": "TIME", "seconds": 180 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "EASY",
+          "sessionType": "EASY",
+          "name": "Easy run",
+          "notes": "Strides added automatically.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 2400 },
+              "target": { "paceKey": "EASY" },
+              "notes": "40 min easy"
+            }
+          ]
+        },
+        {
+          "slot": "LONG",
+          "sessionType": "LONG",
+          "name": "Long run: easy + steady finish",
+          "notes": "Last 15 min at STEADY if feeling good.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 3600 },
+              "target": { "paceKey": "EASY" },
+              "notes": "60 min easy"
+            },
+            {
+              "type": "RUN",
+              "name": "Steady finish",
+              "duration": { "type": "TIME", "seconds": 900 },
+              "target": { "paceKey": "STEADY" },
+              "notes": "15 min steady"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "weekNumber": 4,
+      "focus": "Deload (absorb fitness)",
+      "sessions": [
+        {
+          "slot": "QUALITY_1",
+          "sessionType": "INTERVAL",
+          "name": "8×400m @ 10K (snappy)",
+          "notes": "Shorter week. Keep it snappy, not savage.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 8,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "400m @ 10K",
+                  "duration": { "type": "DISTANCE", "meters": 400 },
+                  "target": { "paceKey": "TEN_K" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "Jog recovery",
+                  "duration": { "type": "TIME", "seconds": 90 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "QUALITY_2",
+          "sessionType": "THRESHOLD",
+          "name": "15 min @ threshold",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Threshold",
+              "duration": { "type": "TIME", "seconds": 900 },
+              "target": { "paceKey": "THRESH" }
+            }
+          ]
+        },
+        {
+          "slot": "EASY",
+          "sessionType": "EASY",
+          "name": "Easy run",
+          "notes": "Strides added automatically.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 1800 },
+              "target": { "paceKey": "EASY" },
+              "notes": "30 min easy"
+            }
+          ]
+        },
+        {
+          "slot": "LONG",
+          "sessionType": "LONG",
+          "name": "Long run: easy (reduced)",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Long easy",
+              "duration": { "type": "TIME", "seconds": 3600 },
+              "target": { "paceKey": "EASY" },
+              "notes": "60 min easy"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "weekNumber": 5,
+      "focus": "Race-specific strength",
+      "sessions": [
+        {
+          "slot": "QUALITY_1",
+          "sessionType": "INTERVAL",
+          "name": "4×1km @ 10K pace",
+          "notes": "Key session. Even reps. Controlled recoveries.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 4,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "1km @ 10K",
+                  "duration": { "type": "DISTANCE", "meters": 1000 },
+                  "target": { "paceKey": "TEN_K" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "2:30 easy",
+                  "duration": { "type": "TIME", "seconds": 150 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "QUALITY_2",
+          "sessionType": "THRESHOLD",
+          "name": "3×8min @ threshold",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 3,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "8 min threshold",
+                  "duration": { "type": "TIME", "seconds": 480 },
+                  "target": { "paceKey": "THRESH" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "2 min easy",
+                  "duration": { "type": "TIME", "seconds": 120 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "EASY",
+          "sessionType": "EASY",
+          "name": "Easy run",
+          "notes": "Strides added automatically.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 2700 },
+              "target": { "paceKey": "EASY" },
+              "notes": "45 min easy"
+            }
+          ]
+        },
+        {
+          "slot": "LONG",
+          "sessionType": "LONG",
+          "name": "Long run: easy + steady",
+          "notes": "Last 20 min STEADY if feeling good.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 3300 },
+              "target": { "paceKey": "EASY" },
+              "notes": "55 min easy"
+            },
+            {
+              "type": "RUN",
+              "name": "Steady finish",
+              "duration": { "type": "TIME", "seconds": 1200 },
+              "target": { "paceKey": "STEADY" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "weekNumber": 6,
+      "focus": "Peak 10K specificity",
+      "sessions": [
+        {
+          "slot": "QUALITY_1",
+          "sessionType": "INTERVAL",
+          "name": "3×1 mile @ 10K pace",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 3,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "1 mile @ 10K",
+                  "duration": { "type": "DISTANCE", "meters": 1609 },
+                  "target": { "paceKey": "TEN_K" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "3 min easy",
+                  "duration": { "type": "TIME", "seconds": 180 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "QUALITY_2",
+          "sessionType": "THRESHOLD",
+          "name": "25 min @ threshold",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Threshold",
+              "duration": { "type": "TIME", "seconds": 1500 },
+              "target": { "paceKey": "THRESH" }
+            }
+          ]
+        },
+        {
+          "slot": "EASY",
+          "sessionType": "EASY",
+          "name": "Easy run",
+          "notes": "Strides added automatically.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 2400 },
+              "target": { "paceKey": "EASY" },
+              "notes": "40 min easy"
+            }
+          ]
+        },
+        {
+          "slot": "LONG",
+          "sessionType": "LONG",
+          "name": "Long run: easy",
+          "notes": "Keep it easy. This week is heavy on quality already.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Long easy",
+              "duration": { "type": "TIME", "seconds": 4500 },
+              "target": { "paceKey": "EASY" },
+              "notes": "75 min easy"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "weekNumber": 7,
+      "focus": "Sharpen + reduce fatigue",
+      "sessions": [
+        {
+          "slot": "QUALITY_1",
+          "sessionType": "INTERVAL",
+          "name": "10×400m @ VO2 (fast but relaxed)",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 10,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "400m hard",
+                  "duration": { "type": "DISTANCE", "meters": 400 },
+                  "target": { "paceKey": "VO2" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "Jog recovery",
+                  "duration": { "type": "TIME", "seconds": 90 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "QUALITY_2",
+          "sessionType": "THRESHOLD",
+          "name": "2×10min @ threshold",
+          "notes": "Keep it comfortable. Leave some in the tank.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 2,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "10 min threshold",
+                  "duration": { "type": "TIME", "seconds": 600 },
+                  "target": { "paceKey": "THRESH" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "3 min easy",
+                  "duration": { "type": "TIME", "seconds": 180 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "EASY",
+          "sessionType": "EASY",
+          "name": "Easy run",
+          "notes": "Strides added automatically.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 2100 },
+              "target": { "paceKey": "EASY" },
+              "notes": "35 min easy"
+            }
+          ]
+        },
+        {
+          "slot": "LONG",
+          "sessionType": "LONG",
+          "name": "Long run: easy (shorter)",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Long easy",
+              "duration": { "type": "TIME", "seconds": 3600 },
+              "target": { "paceKey": "EASY" },
+              "notes": "60 min easy"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "weekNumber": 8,
+      "focus": "Taper + race week",
+      "sessions": [
+        {
+          "slot": "QUALITY_1",
+          "sessionType": "INTERVAL",
+          "name": "6×200m strides (keep it light)",
+          "notes": "Feel snappy. Stop if anything niggles.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 6,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "200m quick",
+                  "duration": { "type": "DISTANCE", "meters": 200 },
+                  "target": { "paceKey": "STRIDES" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "Easy recovery",
+                  "duration": { "type": "TIME", "seconds": 80 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "QUALITY_2",
+          "sessionType": "THRESHOLD",
+          "name": "2×6min @ 10K pace (race rhythm)",
+          "notes": "Touch race pace without fatigue.",
+          "steps": [
+            {
+              "type": "REPEAT",
+              "name": "Main set",
+              "repeat": 2,
+              "steps": [
+                {
+                  "type": "RUN",
+                  "name": "6 min @ 10K",
+                  "duration": { "type": "TIME", "seconds": 360 },
+                  "target": { "paceKey": "TEN_K" }
+                },
+                {
+                  "type": "RUN",
+                  "name": "3 min easy",
+                  "duration": { "type": "TIME", "seconds": 180 },
+                  "target": { "paceKey": "EASY" }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "EASY",
+          "sessionType": "EASY",
+          "name": "Easy run (short)",
+          "notes": "Very easy. Strides added automatically.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Easy",
+              "duration": { "type": "TIME", "seconds": 1500 },
+              "target": { "paceKey": "EASY" },
+              "notes": "25 min easy"
+            }
+          ]
+        },
+        {
+          "slot": "LONG",
+          "sessionType": "RACE",
+          "name": "10K Race (or 45–60 min easy)",
+          "notes": "If no race, replace with 45–60 min EASY.",
+          "steps": [
+            {
+              "type": "RUN",
+              "name": "Race 10K",
+              "duration": { "type": "DISTANCE", "meters": 10000 },
+              "target": { "paceKey": "TEN_K" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

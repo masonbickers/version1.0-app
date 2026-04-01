@@ -1,0 +1,19 @@
+{
+  "athleteProfile": {
+    "goal": { "distance": "10K", "planLengthWeeks": 6, "targetDate": "2026-06-30" },
+    "current": {
+      "weeklyKm": 30,
+      "longestRunKm": 20,
+      "experience": "Advanced/competitive",
+      "recentTimes": { "tenK": "38:43" }
+    },
+    "availability": {
+      "sessionsPerWeek": 4,
+      "runDays": ["Tue","Thu","Sat","Sun"],
+      "longRunDay": "Sun"
+    },
+    "difficulty": "Balanced",
+    "pacing": { "thresholdPaceSecPerKm": 245 },
+    "hr": { "max": 190, "resting": 52 }
+  }
+}

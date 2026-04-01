@@ -1,0 +1,365 @@
+{
+  "id": "mara_24w_3",
+  "kind": "run",
+  "distance": "5K",
+  "weeks": 6,
+  "runsPerWeek": 3,
+  "name": "5K · 6 weeks · 3 runs/week (stock)",
+  "version": 1,
+  "notes": "Balanced 5K plan. One quality session, one easy (with strides), and one longer aerobic run weekly. Server assigns real weekdays and resolves paceKeys.",
+  "slots": ["quality1", "easy", "long"],
+  "weekDefaults": {
+    "easyHasStrides": true,
+    "qualityHasWarmupCooldown": true
+  },
+  "weeksPlan": [
+    {
+      "weekNumber": 1,
+      "focus": "Establish rhythm",
+      "sessions": [
+        {
+          "slot": "quality1",
+          "sessionType": "INTERVALS",
+          "type": "INTERVALS",
+          "name": "6×400m @ 5K pace",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "warmup", "durationType": "time", "durationSec": 900, "target": { "type": "paceKey", "key": "EASY" } },
+              {
+                "stepType": "intervalBlock",
+                "repeats": 6,
+                "steps": [
+                  { "stepType": "interval", "durationType": "distance", "distanceMeters": 400, "target": { "type": "paceKey", "key": "FIVE_K" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 90, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              },
+              { "stepType": "cooldown", "durationType": "time", "durationSec": 600, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        },
+        {
+          "slot": "easy",
+          "sessionType": "EASY",
+          "type": "EASY",
+          "name": "Easy + strides",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 2100, "target": { "type": "paceKey", "key": "EASY" }, "notes": "35 min easy" },
+              {
+                "stepType": "strideBlock",
+                "repeats": 6,
+                "steps": [
+                  { "stepType": "stride", "durationType": "time", "durationSec": 20, "target": { "type": "paceKey", "key": "STRIDE" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 60, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "slot": "long",
+          "sessionType": "LONG",
+          "type": "LONG",
+          "name": "Long run: easy",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 3000, "target": { "type": "paceKey", "key": "EASY" }, "notes": "50 min easy" }
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "weekNumber": 2,
+      "focus": "Aerobic strength",
+      "sessions": [
+        {
+          "slot": "quality1",
+          "sessionType": "TEMPO",
+          "type": "TEMPO",
+          "name": "Tempo: 2×8 min @ threshold",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "warmup", "durationType": "time", "durationSec": 900, "target": { "type": "paceKey", "key": "EASY" } },
+              {
+                "stepType": "intervalBlock",
+                "repeats": 2,
+                "steps": [
+                  { "stepType": "interval", "durationType": "time", "durationSec": 480, "target": { "type": "paceKey", "key": "THRESH" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 180, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              },
+              { "stepType": "cooldown", "durationType": "time", "durationSec": 600, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        },
+        {
+          "slot": "easy",
+          "sessionType": "EASY",
+          "type": "EASY",
+          "name": "Easy + strides",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 2400, "target": { "type": "paceKey", "key": "EASY" }, "notes": "40 min easy" },
+              {
+                "stepType": "strideBlock",
+                "repeats": 6,
+                "steps": [
+                  { "stepType": "stride", "durationType": "time", "durationSec": 20, "target": { "type": "paceKey", "key": "STRIDE" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 60, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "slot": "long",
+          "sessionType": "LONG",
+          "type": "LONG",
+          "name": "Long run: easy",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 3300, "target": { "type": "paceKey", "key": "EASY" }, "notes": "55 min easy" }
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "weekNumber": 3,
+      "focus": "Speed endurance",
+      "sessions": [
+        {
+          "slot": "quality1",
+          "sessionType": "INTERVALS",
+          "type": "INTERVALS",
+          "name": "5×800m @ 5K pace",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "warmup", "durationType": "time", "durationSec": 900, "target": { "type": "paceKey", "key": "EASY" } },
+              {
+                "stepType": "intervalBlock",
+                "repeats": 5,
+                "steps": [
+                  { "stepType": "interval", "durationType": "distance", "distanceMeters": 800, "target": { "type": "paceKey", "key": "FIVE_K" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 120, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              },
+              { "stepType": "cooldown", "durationType": "time", "durationSec": 600, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        },
+        {
+          "slot": "easy",
+          "sessionType": "EASY",
+          "type": "EASY",
+          "name": "Easy + strides",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 2400, "target": { "type": "paceKey", "key": "EASY" } },
+              {
+                "stepType": "strideBlock",
+                "repeats": 8,
+                "steps": [
+                  { "stepType": "stride", "durationType": "time", "durationSec": 20, "target": { "type": "paceKey", "key": "STRIDE" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 60, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "slot": "long",
+          "sessionType": "LONG",
+          "type": "LONG",
+          "name": "Long run: easy + steady finish",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 2700, "target": { "type": "paceKey", "key": "EASY" } },
+              { "stepType": "run", "durationType": "time", "durationSec": 900, "target": { "type": "paceKey", "key": "STEADY" } }
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "weekNumber": 4,
+      "focus": "Deload",
+      "sessions": [
+        {
+          "slot": "quality1",
+          "sessionType": "TEMPO",
+          "type": "TEMPO",
+          "name": "Tempo: 10 min @ threshold",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "warmup", "durationType": "time", "durationSec": 900, "target": { "type": "paceKey", "key": "EASY" } },
+              { "stepType": "interval", "durationType": "time", "durationSec": 600, "target": { "type": "paceKey", "key": "THRESH" } },
+              { "stepType": "cooldown", "durationType": "time", "durationSec": 600, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        },
+        {
+          "slot": "easy",
+          "sessionType": "EASY",
+          "type": "EASY",
+          "name": "Easy + strides",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 2100, "target": { "type": "paceKey", "key": "EASY" } },
+              {
+                "stepType": "strideBlock",
+                "repeats": 6,
+                "steps": [
+                  { "stepType": "stride", "durationType": "time", "durationSec": 20, "target": { "type": "paceKey", "key": "STRIDE" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 60, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "slot": "long",
+          "sessionType": "LONG",
+          "type": "LONG",
+          "name": "Long run: easy (shorter)",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 2400, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "weekNumber": 5,
+      "focus": "Peak specificity",
+      "sessions": [
+        {
+          "slot": "quality1",
+          "sessionType": "INTERVALS",
+          "type": "INTERVALS",
+          "name": "4×1km @ 5K pace",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "warmup", "durationType": "time", "durationSec": 900, "target": { "type": "paceKey", "key": "EASY" } },
+              {
+                "stepType": "intervalBlock",
+                "repeats": 4,
+                "steps": [
+                  { "stepType": "interval", "durationType": "distance", "distanceMeters": 1000, "target": { "type": "paceKey", "key": "FIVE_K" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 150, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              },
+              { "stepType": "cooldown", "durationType": "time", "durationSec": 600, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        },
+        {
+          "slot": "easy",
+          "sessionType": "EASY",
+          "type": "EASY",
+          "name": "Easy + strides",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 2400, "target": { "type": "paceKey", "key": "EASY" } },
+              {
+                "stepType": "strideBlock",
+                "repeats": 8,
+                "steps": [
+                  { "stepType": "stride", "durationType": "time", "durationSec": 20, "target": { "type": "paceKey", "key": "STRIDE" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 60, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "slot": "long",
+          "sessionType": "LONG",
+          "type": "LONG",
+          "name": "Long run: easy",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 3600, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        }
+      ]
+    },
+
+    {
+      "weekNumber": 6,
+      "focus": "Taper + race",
+      "sessions": [
+        {
+          "slot": "quality1",
+          "sessionType": "INTERVALS",
+          "type": "INTERVALS",
+          "name": "6×200m sharpener",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "warmup", "durationType": "time", "durationSec": 900, "target": { "type": "paceKey", "key": "EASY" } },
+              {
+                "stepType": "intervalBlock",
+                "repeats": 6,
+                "steps": [
+                  { "stepType": "interval", "durationType": "distance", "distanceMeters": 200, "target": { "type": "paceKey", "key": "STRIDE" } },
+                  { "stepType": "recovery", "durationType": "time", "durationSec": 75, "target": { "type": "paceKey", "key": "EASY" } }
+                ]
+              },
+              { "stepType": "cooldown", "durationType": "time", "durationSec": 600, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        },
+        {
+          "slot": "easy",
+          "sessionType": "EASY",
+          "type": "EASY",
+          "name": "Easy run (short)",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "run", "durationType": "time", "durationSec": 1500, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        },
+        {
+          "slot": "long",
+          "sessionType": "RACE",
+          "type": "RACE",
+          "name": "5K Race",
+          "workout": {
+            "sport": "running",
+            "steps": [
+              { "stepType": "warmup", "durationType": "time", "durationSec": 900, "target": { "type": "paceKey", "key": "EASY" } },
+              { "stepType": "race", "durationType": "distance", "distanceMeters": 5000, "target": { "type": "paceKey", "key": "FIVE_K" } },
+              { "stepType": "cooldown", "durationType": "time", "durationSec": 600, "target": { "type": "paceKey", "key": "EASY" } }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "paceKeysUsed": ["EASY", "STEADY", "THRESH", "FIVE_K", "STRIDE"]
+}

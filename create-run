@@ -1,0 +1,2426 @@
+// app/(protected)/train/create.jsx
+import { Feather } from "@expo/vector-icons";
+import Constants from "expo-constants";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+
+import { auth, db } from "../../../firebaseConfig";
+import { useTheme } from "../../../providers/ThemeProvider";
+import { useAiPlan } from "../../hooks/useAiPlan";
+;
+/* ----------------- config ----------------- */
+// Run-only plans (for now)
+const ACTIVITY_TYPES = ["Run"];
+
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const STEP_TYPES = [
+  "Warmup",
+  "Run",
+  "Tempo",
+  "Intervals",
+  "CoolDown",
+  "Recovery",
+  "Drills",
+  "Rest",
+];
+const DURATION_TYPES = ["Time (min)", "Distance (km)", "Reps"];
+const INTENSITY_TYPES = ["Pace (/km)", "HR Zone", "RPE", "None"];
+
+const emptyWeek = (title) => ({
+  title,
+  days: DAYS.map((d) => ({ day: d, sessions: [] })),
+});
+
+// Prefer EXPO_PUBLIC_API_URL (eg. http://192.168.x.x:3001)
+const API_BASE_FROM_ENV = process.env.EXPO_PUBLIC_API_URL;
+function resolveDevHost() {
+  const a = Constants.expoGoConfig?.debuggerHost?.split(":")?.[0];
+  const b = Constants.expoConfig?.hostUri?.split(":")?.[0];
+  return a || b || "localhost";
+}
+
+
+const uidOrThrow = () => {
+  const u = auth.currentUser;
+  if (!u) throw new Error("Not signed in.");
+  return u.uid;
+};
+
+/* Map ThemeProvider to the screen theme */
+function useScreenTheme() {
+  const { colors, isDark } = useTheme();
+  return {
+    bg: colors.bg,
+    card: colors.card,
+    text: colors.text,
+    subtext: colors.subtext,
+    border: colors.border,
+    muted: colors.muted,
+    primaryBg: colors.primary,
+    primaryText: isDark ? "#111827" : "#FFFFFF",
+    placeholder: colors.subtextSoft || "#9CA3AF",
+  };
+}
+
+/* ----------------- helpers ----------------- */
+const normaliseStr = (s) => String(s || "").trim();
+
+/**
+ * Base step object used by the editor.
+ * This is your internal "segment" representation.
+ */
+const mkStep = (over = {}) => ({
+  type: over.type || "Run", // Warmup | Run | Tempo | Intervals | CoolDown | ...
+  notes: over.notes || "",
+  durationType: over.durationType || "Time (min)", // Time (min) | Distance (km) | Reps
+  durationValue: Number(
+    over.durationValue ?? (over.durationType === "Distance (km)" ? 1 : 10)
+  ),
+  intensityType: over.intensityType || "None", // Pace (/km) | HR Zone | RPE | None
+  intensityTarget: over.intensityTarget || "",
+  // Repeat set support
+  isRepeat: over.isRepeat || false,
+  repeatReps: Number(over.repeatReps || 2),
+  steps: Array.isArray(over.steps) ? over.steps : [],
+});
+
+/**
+ * Ensure any session has warmup + cooldown segments if missing.
+ */
+const withWarmCool = (session) => {
+  const steps = Array.isArray(session.segments) ? session.segments : [];
+  const hasWU = steps.some((s) => /^warm/i.test(s.type));
+  const hasCD = steps.some((s) => /^cool/i.test(s.type));
+  const patched = [...steps];
+
+  if (!hasWU) {
+    patched.unshift(
+      mkStep({
+        type: "Warmup",
+        durationType: "Time (min)",
+        durationValue: 10,
+        intensityType: "HR Zone",
+        intensityTarget: "Z1–Z2",
+        notes: "Build gradually; drills",
+      })
+    );
+  }
+  if (!hasCD) {
+    patched.push(
+      mkStep({
+        type: "CoolDown",
+        durationType: "Time (min)",
+        durationValue: 10,
+        intensityType: "HR Zone",
+        intensityTarget: "Z1",
+        notes: "Ease down; light mobility",
+      })
+    );
+  }
+
+  return { ...session, segments: patched };
+};
+
+/* -------------------------------------------------------------------------- */
+/* UNIVERSAL TRAININGPEAKS/GARMIN-STYLE WORKOUT STRUCTURE HELPERS             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Convert one internal "segment" into a TP/Garmin-style workout step.
+ * This is format-agnostic and works for all run types.
+ */
+function segmentToWorkoutStep(seg) {
+  if (!seg) return null;
+
+  // Repeat block
+  if (seg.isRepeat) {
+    return {
+      type: "repeat",
+      reps: Number(seg.repeatReps || 1),
+      steps: (seg.steps || [])
+        .map((inner) => segmentToWorkoutStep(inner))
+        .filter(Boolean),
+    };
+  }
+
+  // Normal step
+  let durationType = "time";
+  if (seg.durationType === "Distance (km)") durationType = "distance";
+  else if (seg.durationType === "Reps") durationType = "reps";
+
+  const base = {
+    type: String(seg.type || "Run").toLowerCase(), // warmup, run, tempo, recovery, cooldown, etc.
+    durationType,
+    durationValue: Number(seg.durationValue || 0),
+  };
+
+  if (seg.intensityType && seg.intensityType !== "None") {
+    let intensityType = "custom";
+    if (seg.intensityType === "Pace (/km)") intensityType = "pace";
+    if (seg.intensityType === "HR Zone") intensityType = "hr";
+    if (seg.intensityType === "RPE") intensityType = "rpe";
+
+    base.intensity = {
+      type: intensityType,
+      target: seg.intensityTarget || "",
+    };
+  }
+
+  if (seg.notes) {
+    base.notes = seg.notes;
+  }
+
+  return base;
+}
+
+/**
+ * Convert an array of internal segments into TP/Garmin-style steps.
+ */
+function segmentsToWorkoutSteps(segments) {
+  return (segments || [])
+    .map((s) => segmentToWorkoutStep(s))
+    .filter(Boolean);
+}
+
+/**
+ * Walk the workout steps tree and estimate total distance/time.
+ */
+function estimateTotalsFromWorkoutSteps(steps) {
+  let totalDistanceKm = 0;
+  let totalDurationSec = 0;
+
+  const walk = (step, repsMultiplier = 1) => {
+    if (!step) return;
+
+    if (step.type === "repeat" && Array.isArray(step.steps)) {
+      const reps = Number(step.reps || 1);
+      step.steps.forEach((inner) => walk(inner, repsMultiplier * reps));
+      return;
+    }
+
+    const durType = step.durationType;
+    const val = Number(step.durationValue || 0);
+    if (!Number.isFinite(val) || val <= 0) return;
+
+    if (durType === "distance") {
+      totalDistanceKm += val * repsMultiplier;
+    } else if (durType === "time") {
+      totalDurationSec += val * 60 * repsMultiplier;
+    }
+    // "reps" does not contribute directly to distance/time
+  };
+
+  (steps || []).forEach((s) => walk(s, 1));
+
+  return {
+    totalDistanceKm: Number(totalDistanceKm.toFixed(2)),
+    totalDurationSec: Math.round(totalDurationSec),
+  };
+}
+
+/**
+ * Normalise one session object into a unified shape:
+ * - segments always present + WU/CD
+ * - workout.sport = "run"
+ * - workout.steps in a TP/Garmin style
+ * - workout.totalDistanceKm / workout.totalDurationSec estimated
+ * - targetDurationMin / targetDistanceKm set appropriately
+ */
+const normaliseSessionForPlan = (sess) => {
+  const baseWithSegments = withWarmCool(sess || {});
+  let segments = Array.isArray(baseWithSegments.segments)
+    ? baseWithSegments.segments
+    : [];
+
+  // 1) Derive session-level distance / duration from existing fields
+  const durationMinRaw =
+    baseWithSegments.targetDurationMin != null
+      ? baseWithSegments.targetDurationMin
+      : baseWithSegments.durationMin;
+  const distanceKmRaw =
+    baseWithSegments.targetDistanceKm != null
+      ? baseWithSegments.targetDistanceKm
+      : baseWithSegments.distanceKm;
+
+  const durationMin = Number(durationMinRaw || 0) || undefined;
+  const distanceKm = Number(distanceKmRaw || 0) || undefined;
+
+  // 2) Check if there's a MAIN step (not warm/cool, not repeat container).
+  const hasMain = segments.some(
+    (s) =>
+      s &&
+      !/^(warm|cool)/i.test(String(s.type || "")) &&
+      !s.isRepeat
+  );
+
+  // 3) If no explicit main step, inject a simple "Run" block
+  if (!hasMain) {
+    let durationType = "Time (min)";
+    let durationValue = 0;
+
+    if (distanceKm && !durationMin) {
+      durationType = "Distance (km)";
+      durationValue = distanceKm;
+    } else if (durationMin) {
+      durationType = "Time (min)";
+      durationValue = durationMin;
+    } else {
+      durationType = "Time (min)";
+      durationValue = 10;
+    }
+
+    const warm = segments.find((s) =>
+      /^warm/i.test(String(s.type || ""))
+    );
+    const cool = segments.find((s) =>
+      /^cool/i.test(String(s.type || ""))
+    );
+
+    const newSegs = [];
+    if (warm) newSegs.push(warm);
+    newSegs.push(
+      mkStep({
+        type: "Run",
+        durationType,
+        durationValue,
+        intensityType: "None",
+        notes: baseWithSegments.notes || "",
+      })
+    );
+    if (cool) newSegs.push(cool);
+
+    if (newSegs.length) {
+      segments = newSegs;
+    }
+  }
+
+  // 4) Build universal TP/Garmin-style workout steps from segments
+  const workoutSteps = segmentsToWorkoutSteps(segments);
+  const totalsFromSteps = estimateTotalsFromWorkoutSteps(workoutSteps);
+
+  const finalDistanceKm =
+    totalsFromSteps.totalDistanceKm || distanceKm || 0;
+  const finalDurationSec =
+    totalsFromSteps.totalDurationSec ||
+    (durationMin ? durationMin * 60 : 0);
+  const finalDurationMin = finalDurationSec
+    ? finalDurationSec / 60
+    : durationMin || 0;
+
+  return {
+    ...baseWithSegments,
+    type: "Run",
+    segments, // keep for UI + backward compatibility
+    targetDurationMin:
+      baseWithSegments.targetDurationMin != null
+        ? baseWithSegments.targetDurationMin
+        : finalDurationMin || undefined,
+    targetDistanceKm:
+      baseWithSegments.targetDistanceKm != null
+        ? baseWithSegments.targetDistanceKm
+        : finalDistanceKm || undefined,
+    totalDistanceKm: finalDistanceKm || undefined,
+    totalDurationSec: finalDurationSec || undefined,
+    workout: {
+      sport: "run",
+      totalDistanceKm: finalDistanceKm || 0,
+      totalDurationSec: finalDurationSec || 0,
+      steps: workoutSteps,
+    },
+  };
+};
+
+/**
+ * Ensure all weeks/days/sessions are normalised before saving to Firestore.
+ */
+const normaliseWeeksForSave = (weeks) =>
+  (weeks || []).map((w, wi) => ({
+    title: w.title || `Week ${wi + 1}`,
+    days: (w.days || []).map((d) => ({
+      day: d.day,
+      sessions: (d.sessions || []).map(normaliseSessionForPlan),
+    })),
+  }));
+
+/* ---------- Convert AI JSON training plan into this screen's weeks shape --- */
+/**
+ * Plan shape assumed (from /generate-run + useAiPlan):
+ * {
+ *   weeks: [
+ *     {
+ *       title,
+ *       days: [
+ *         {
+ *           day: "Mon" | ...,
+ *           sessions: [
+ *             {
+ *               label,
+ *               notes,
+ *               steps: [
+ *                 { type, description, durationMinutes, distanceKm, intensity }
+ *               ]
+ *             }
+ *           ]
+ *         }
+ *       ]
+ *     }
+ *   ]
+ * }
+ */
+function trainingPlanToWeeks(plan) {
+  if (!plan || !Array.isArray(plan.weeks) || plan.weeks.length === 0) {
+    return [emptyWeek("Week 1")];
+  }
+
+  return plan.weeks.map((w, wi) => {
+    const daysArray = Array.isArray(w.days) ? w.days : [];
+    return {
+      title: w.title || `Week ${wi + 1}`,
+      days: DAYS.map((dayName) => {
+        const daySrc =
+          daysArray.find((d) => d && d.day === dayName) || {};
+        const sessionsSrc = Array.isArray(daySrc.sessions)
+          ? daySrc.sessions
+          : [];
+
+        const sessions = sessionsSrc.map((s) => {
+          const steps = Array.isArray(s.steps) ? s.steps : [];
+
+          const segments = steps.map((step) => {
+            const durMin = Number(step?.durationMinutes || 0);
+            const distKm = Number(step?.distanceKm || 0);
+
+            let durationType = "Time (min)";
+            let durationValue = 0;
+
+            if (distKm > 0 && (!durMin || durMin === 0)) {
+              durationType = "Distance (km)";
+              durationValue = distKm;
+            } else if (durMin > 0) {
+              durationType = "Time (min)";
+              durationValue = durMin;
+            } else {
+              durationType = "Time (min)";
+              durationValue = 10;
+            }
+
+            return mkStep({
+              type: step?.type || "Run",
+              notes: step?.description || "",
+              durationType,
+              durationValue,
+              intensityType: "None",
+              intensityTarget: step?.intensity || "",
+            });
+          });
+
+          const totalMin = steps.reduce(
+            (sum, st) => sum + (Number(st?.durationMinutes) || 0),
+            0
+          );
+          const totalKm = steps.reduce(
+            (sum, st) => sum + (Number(st?.distanceKm) || 0),
+            0
+          );
+
+          return normaliseSessionForPlan({
+            type: "Run",
+            title: s?.label || "Session",
+            durationMin: totalMin || undefined,
+            distanceKm: totalKm || undefined,
+            notes: s?.notes || "",
+            segments,
+          });
+        });
+
+        return { day: dayName, sessions };
+      }),
+    };
+  });
+}
+
+/* ----------------- preview table renderer ----------------- */
+function stepToMini(seg) {
+  if (seg.isRepeat) {
+    const inner = seg.steps
+      ?.map((s) => stepToMini(s))
+      .filter(Boolean)
+      .join(" / ");
+    return `Repeat x${seg.repeatReps} [ ${inner || "—"} ]`;
+  }
+  const dur =
+    seg.durationType === "Time (min)"
+      ? `${Math.round(seg.durationValue)} min`
+      : seg.durationType === "Distance (km)"
+      ? `${Number(seg.durationValue)} km`
+      : `${Math.round(seg.durationValue)} reps`;
+  const inten =
+    seg.intensityType === "None"
+      ? ""
+      : ` @ ${seg.intensityTarget || seg.intensityType}`;
+  return `${seg.type}: ${dur}${inten}${seg.notes ? ` · ${seg.notes}` : ""}`;
+}
+
+const row = (day, session) => {
+  if (session.detailsFromMarkdown || session.targetFromMarkdown) {
+    return {
+      day,
+      session: session.title || `${session.type || "Session"}`,
+      details: session.detailsFromMarkdown || session.notes || "",
+      target: session.targetFromMarkdown || "",
+    };
+  }
+
+  const segs = Array.isArray(session.segments) ? session.segments : [];
+  const warm = segs.find((s) => /^warm/i.test(s.type));
+  const cool = segs.find((s) => /^cool/i.test(s.type));
+  const mains = segs.filter(
+    (s) => !/^(warm|cool)/i.test(s.type)
+  );
+
+  const warmText = warm
+    ? stepToMini(warm)
+    : "Warm-up: 10–15 min easy + drills";
+  const mainText = mains.length
+    ? mains.map(stepToMini).join("  /  ")
+    : "Main: Coach’s choice";
+  const coolText = cool
+    ? stepToMini(cool)
+    : "Cool-down: 10 min easy + strides";
+
+  const target =
+    mains.find((m) => m.intensityTarget)?.intensityTarget ||
+    mains.find((m) => m.intensityType && m.intensityType !== "None")
+      ?.intensityType ||
+    "Per notes";
+
+  return {
+    day,
+    session: session.title || `${session.type || "Run"} session`,
+    details: `${warmText}\n${mainText}\n${coolText}`,
+    target,
+  };
+};
+
+function planToPreview(planWeeks) {
+  return (planWeeks || []).map((w) => {
+    const rows = [];
+    (w.days || []).forEach((d) =>
+      (d.sessions || []).forEach((s) => rows.push(row(d.day, s)))
+    );
+    return { title: w.title || "Week", rows };
+  });
+}
+
+/* ----------------- small UI bits ----------------- */
+function ActivityPicker({ theme, value, onChange }) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ gap: 8 }}
+      style={{ marginVertical: 8 }}
+    >
+      {ACTIVITY_TYPES.map((t) => {
+        const active = value === t;
+        return (
+          <TouchableOpacity
+            key={t}
+            onPress={() => onChange(t)}
+            style={[
+              st.pill,
+              {
+                backgroundColor: active ? theme.primaryBg : theme.card,
+                borderColor: theme.border,
+              },
+            ]}
+          >
+            <Text
+              style={{
+                color: active ? theme.primaryText : theme.text,
+                fontWeight: "700",
+              }}
+            >
+              {t}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+/* ----------------- STEP EDITOR MODAL ----------------- */
+function StepFieldRow({ label, children, theme }) {
+  return (
+    <View style={{ gap: 6, marginBottom: 10 }}>
+      <Text
+        style={{
+          color: theme.subtext,
+          fontSize: 12,
+          fontWeight: "700",
+        }}
+      >
+        {label}
+      </Text>
+      {children}
+    </View>
+  );
+}
+
+function SelectRow({ value, onChange, options, theme }) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ gap: 8 }}
+    >
+      {options.map((opt) => {
+        const active = value === opt;
+        return (
+          <TouchableOpacity
+            key={opt}
+            onPress={() => onChange(opt)}
+            style={[
+              st.pill,
+              {
+                backgroundColor: active ? theme.primaryBg : theme.card,
+                borderColor: theme.border,
+              },
+            ]}
+          >
+            <Text
+              style={{
+                color: active ? theme.primaryText : theme.text,
+                fontWeight: "700",
+              }}
+            >
+              {opt}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+function StepEditorModal({ visible, onClose, theme, session, onChange }) {
+  const [view, setView] = useState("overview"); // overview | edit
+  const [idx, setIdx] = useState(-1);
+  const [draft, setDraft] = useState(mkStep({}));
+
+  useEffect(() => {
+    if (!visible) {
+      setView("overview");
+      setIdx(-1);
+    }
+  }, [visible]);
+
+  const segs = Array.isArray(session.segments) ? session.segments : [];
+
+  const openEdit = (i) => {
+    const s = segs[i] || mkStep({});
+    setDraft(JSON.parse(JSON.stringify(s)));
+    setIdx(i);
+    setView("edit");
+  };
+
+  const saveEdit = () => {
+    const next = Array.from(segs);
+    if (idx >= 0) next[idx] = draft;
+    else next.push(draft);
+    onChange({ ...session, segments: next });
+    setView("overview");
+    setIdx(-1);
+  };
+
+  const removeAt = (i) => {
+    const next = Array.from(segs);
+    next.splice(i, 1);
+    onChange({ ...session, segments: next });
+  };
+
+  const addSimple = () => {
+    onChange({
+      ...session,
+      segments: [
+        ...segs,
+        mkStep({
+          type: "Run",
+          durationType: "Time (min)",
+          durationValue: 20,
+        }),
+      ],
+    });
+  };
+
+  const addRepeat = () => {
+    const repeat = mkStep({
+      isRepeat: true,
+      repeatReps: 2,
+      steps: [
+        mkStep({
+          type: "Intervals",
+          durationType: "Time (min)",
+          durationValue: 3,
+          intensityType: "Pace (/km)",
+          intensityTarget: "I pace",
+          notes: "Strong, smooth",
+        }),
+        mkStep({
+          type: "Recovery",
+          durationType: "Time (min)",
+          durationValue: 2,
+          intensityType: "HR Zone",
+          intensityTarget: "Z1–Z2",
+        }),
+      ],
+    });
+    onChange({ ...session, segments: [...segs, repeat] });
+  };
+
+  const renderStepChip = (s, i) => {
+    const isRepeat = s.isRepeat;
+    return (
+      <View
+        key={`seg-${i}`}
+        style={[
+          st.stepChip,
+          { borderColor: theme.border, backgroundColor: theme.card },
+        ]}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: theme.text, fontWeight: "700" }}>
+            {isRepeat ? `Repeat x${s.repeatReps}` : s.type}
+          </Text>
+          <Text style={{ color: theme.subtext, fontSize: 12 }}>
+            {isRepeat
+              ? `${s.steps?.length || 0} steps`
+              : `${s.durationType
+                  .replace("(min)", "")
+                  .replace("(km)", "")
+                  .trim()}: ${s.durationValue}${
+                  s.intensityType !== "None"
+                    ? ` · ${s.intensityTarget || s.intensityType}`
+                    : ""
+                }`}
+          </Text>
+          {!!normaliseStr(s.notes) && (
+            <Text
+              style={{
+                color: theme.subtext,
+                fontSize: 12,
+                marginTop: 2,
+              }}
+            >
+              {s.notes}
+            </Text>
+          )}
+        </View>
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          {!isRepeat && (
+            <TouchableOpacity
+              onPress={() => openEdit(i)}
+              style={[st.pillBtn, { borderColor: theme.border }]}
+            >
+              <Feather name="edit" size={14} color={theme.text} />
+              <Text style={{ color: theme.text, fontWeight: "700" }}>
+                Edit
+              </Text>
+            </TouchableOpacity>
+          )}
+          {isRepeat && (
+            <TouchableOpacity
+              onPress={() => {
+                setDraft(JSON.parse(JSON.stringify(s)));
+                setIdx(i);
+                setView("edit");
+              }}
+              style={[st.pillBtn, { borderColor: theme.border }]}
+            >
+              <Feather name="layers" size={14} color={theme.text} />
+              <Text style={{ color: theme.text, fontWeight: "700" }}>
+                Edit set
+              </Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            onPress={() => removeAt(i)}
+            style={[st.pillBtn, { borderColor: theme.border }]}
+          >
+            <Feather name="trash-2" size={14} color="#B91C1C" />
+            <Text style={{ color: "#B91C1C", fontWeight: "700" }}>
+              Remove
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={[st.modalSafe, { backgroundColor: theme.bg }]}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1 }}
+        >
+          {view === "overview" ? (
+            <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+              <View style={st.rowBetween}>
+                <Text style={[st.modalTitle, { color: theme.text }]}>
+                  Session steps
+                </Text>
+                <TouchableOpacity
+                  onPress={onClose}
+                  style={[st.pillBtn, { borderColor: theme.border }]}
+                >
+                  <Feather name="x" size={16} color={theme.text} />
+                  <Text style={{ color: theme.text, fontWeight: "700" }}>
+                    Close
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ gap: 8 }}>
+                {segs.length === 0 && (
+                  <Text style={{ color: theme.subtext }}>
+                    No steps yet. Add warm-up / main intervals / cool-down.
+                  </Text>
+                )}
+                {segs.map((s, i) => (
+                  <View key={`s-${i}`}>
+                    {renderStepChip(s, i)}
+                    {s.isRepeat &&
+                      Array.isArray(s.steps) &&
+                      s.steps.length > 0 && (
+                        <View
+                          style={{
+                            marginLeft: 12,
+                            marginTop: 6,
+                            gap: 6,
+                          }}
+                        >
+                          {s.steps.map((inner, j) => (
+                            <View
+                              key={`inner-${i}-${j}`}
+                              style={[
+                                st.stepChip,
+                                {
+                                  borderColor: theme.border,
+                                  backgroundColor: theme.card,
+                                },
+                              ]}
+                            >
+                              <View style={{ flex: 1 }}>
+                                <Text
+                                  style={{
+                                    color: theme.text,
+                                    fontWeight: "700",
+                                  }}
+                                >
+                                  {inner.type}
+                                </Text>
+                                <Text
+                                  style={{
+                                    color: theme.subtext,
+                                    fontSize: 12,
+                                  }}
+                                >
+                                  {inner.durationType
+                                    .replace("(min)", "")
+                                    .replace("(km)", "")
+                                    .trim()}
+                                  : {inner.durationValue}
+                                  {inner.intensityType !== "None"
+                                    ? ` · ${
+                                        inner.intensityTarget ||
+                                        inner.intensityType
+                                      }`
+                                    : ""}
+                                </Text>
+                                {!!normaliseStr(inner.notes) && (
+                                  <Text
+                                    style={{
+                                      color: theme.subtext,
+                                      fontSize: 12,
+                                      marginTop: 2,
+                                    }}
+                                  >
+                                    {inner.notes}
+                                  </Text>
+                                )}
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                  </View>
+                ))}
+              </View>
+
+              <View
+                style={{ flexDirection: "row", gap: 10, marginTop: 10 }}
+              >
+                <TouchableOpacity
+                  onPress={addSimple}
+                  style={[
+                    st.primaryBtn,
+                    { backgroundColor: theme.primaryBg },
+                  ]}
+                >
+                  <Feather name="plus" size={16} color={theme.primaryText} />
+                  <Text
+                    style={{
+                      color: theme.primaryText,
+                      fontWeight: "800",
+                    }}
+                  >
+                    Add step
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={addRepeat}
+                  style={[
+                    st.outlineBtn,
+                    { borderColor: theme.border },
+                  ]}
+                >
+                  <Feather name="repeat" size={16} color={theme.text} />
+                  <Text
+                    style={{ color: theme.text, fontWeight: "800" }}
+                  >
+                    Add repeat set
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          ) : (
+            <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+              <View style={st.rowBetween}>
+                <Text style={[st.modalTitle, { color: theme.text }]}>
+                  {draft.isRepeat ? "Edit repeat set" : "Edit step"}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setView("overview")}
+                  style={[st.pillBtn, { borderColor: theme.border }]}
+                >
+                  <Feather
+                    name="chevrons-left"
+                    size={16}
+                    color={theme.text}
+                  />
+                  <Text style={{ color: theme.text, fontWeight: "700" }}>
+                    Back
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {!draft.isRepeat && (
+                <>
+                  <StepFieldRow label="Step type" theme={theme}>
+                    <SelectRow
+                      value={draft.type}
+                      onChange={(v) =>
+                        setDraft({ ...draft, type: v })
+                      }
+                      options={STEP_TYPES}
+                      theme={theme}
+                    />
+                  </StepFieldRow>
+
+                  <StepFieldRow label="Notes" theme={theme}>
+                    <TextInput
+                      style={[
+                        st.input,
+                        {
+                          color: theme.text,
+                          borderColor: theme.border,
+                          backgroundColor: theme.card,
+                        },
+                      ]}
+                      placeholder="e.g. relaxed, tall hips, quick feet"
+                      placeholderTextColor={theme.placeholder}
+                      value={draft.notes}
+                      onChangeText={(t) =>
+                        setDraft({ ...draft, notes: t })
+                      }
+                      multiline
+                    />
+                  </StepFieldRow>
+
+                  <StepFieldRow label="Duration type" theme={theme}>
+                    <SelectRow
+                      value={draft.durationType}
+                      onChange={(v) =>
+                        setDraft({ ...draft, durationType: v })
+                      }
+                      options={DURATION_TYPES}
+                      theme={theme}
+                    />
+                  </StepFieldRow>
+
+                  <StepFieldRow label="Duration value" theme={theme}>
+                    <TextInput
+                      style={[
+                        st.input,
+                        {
+                          color: theme.text,
+                          borderColor: theme.border,
+                          backgroundColor: theme.card,
+                        },
+                      ]}
+                      keyboardType="numeric"
+                      placeholder={
+                        draft.durationType === "Distance (km)"
+                          ? "e.g. 1.0"
+                          : "e.g. 10"
+                      }
+                      placeholderTextColor={theme.placeholder}
+                      value={String(draft.durationValue ?? "")}
+                      onChangeText={(t) =>
+                        setDraft({
+                          ...draft,
+                          durationValue: Number(t || 0),
+                        })
+                      }
+                    />
+                  </StepFieldRow>
+
+                  <StepFieldRow label="Intensity target" theme={theme}>
+                    <SelectRow
+                      value={draft.intensityType}
+                      onChange={(v) =>
+                        setDraft({ ...draft, intensityType: v })
+                      }
+                      options={INTENSITY_TYPES}
+                      theme={theme}
+                    />
+                    {draft.intensityType !== "None" && (
+                      <TextInput
+                        style={[
+                          st.input,
+                          {
+                            color: theme.text,
+                            borderColor: theme.border,
+                            backgroundColor: theme.card,
+                            marginTop: 8,
+                          },
+                        ]}
+                        placeholder={
+                          draft.intensityType === "Pace (/km)"
+                            ? "e.g. 4:00–4:05 /km"
+                            : draft.intensityType === "HR Zone"
+                            ? "e.g. Z2 / Z4"
+                            : "e.g. RPE 7–8"
+                        }
+                        placeholderTextColor={theme.placeholder}
+                        value={draft.intensityTarget}
+                        onChangeText={(t) =>
+                          setDraft({
+                            ...draft,
+                            intensityTarget: t,
+                          })
+                        }
+                      />
+                    )}
+                  </StepFieldRow>
+                </>
+              )}
+
+              {draft.isRepeat && (
+                <>
+                  <StepFieldRow label="Repetitions" theme={theme}>
+                    <TextInput
+                      style={[
+                        st.input,
+                        {
+                          color: theme.text,
+                          borderColor: theme.border,
+                          backgroundColor: theme.card,
+                        },
+                      ]}
+                      keyboardType="numeric"
+                      placeholder="e.g. 4"
+                      placeholderTextColor={theme.placeholder}
+                      value={String(draft.repeatReps || 2)}
+                      onChangeText={(t) =>
+                        setDraft({
+                          ...draft,
+                          repeatReps: Number(t || 1),
+                        })
+                      }
+                    />
+                  </StepFieldRow>
+
+                  <Text
+                    style={[
+                      st.label,
+                      { color: theme.subtext, marginTop: 6 },
+                    ]}
+                  >
+                    Inner steps
+                  </Text>
+                  <View style={{ gap: 8 }}>
+                    {(draft.steps || []).map((s, i) => (
+                      <View
+                        key={`inner-${i}`}
+                        style={[
+                          st.stepChip,
+                          {
+                            borderColor: theme.border,
+                            backgroundColor: theme.card,
+                          },
+                        ]}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text
+                            style={{
+                              color: theme.text,
+                              fontWeight: "700",
+                            }}
+                          >
+                            {s.type}
+                          </Text>
+                          <Text
+                            style={{
+                              color: theme.subtext,
+                              fontSize: 12,
+                            }}
+                          >
+                            {s.durationType
+                              .replace("(min)", "")
+                              .replace("(km)", "")
+                              .trim()}
+                            : {s.durationValue}
+                            {s.intensityType !== "None"
+                              ? ` · ${
+                                  s.intensityTarget ||
+                                  s.intensityType
+                                }`
+                              : ""}
+                          </Text>
+                          {!!normaliseStr(s.notes) && (
+                            <Text
+                              style={{
+                                color: theme.subtext,
+                                fontSize: 12,
+                                marginTop: 2,
+                              }}
+                            >
+                              {s.notes}
+                            </Text>
+                          )}
+                        </View>
+                        <View style={{ flexDirection: "row", gap: 8 }}>
+                          <TouchableOpacity
+                            onPress={() => {
+                              const copy = JSON.parse(
+                                JSON.stringify(s)
+                              );
+                              setDraft((d0) => {
+                                const d = { ...d0 };
+                                d.steps[i] = copy;
+                                return d;
+                              });
+                              setView("edit");
+                            }}
+                            style={[
+                              st.pillBtn,
+                              { borderColor: theme.border },
+                            ]}
+                          >
+                            <Feather
+                              name="edit"
+                              size={14}
+                              color={theme.text}
+                            />
+                            <Text
+                              style={{
+                                color: theme.text,
+                                fontWeight: "700",
+                              }}
+                            >
+                              Edit
+                            </Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={() => {
+                              const next = JSON.parse(
+                                JSON.stringify(draft)
+                              );
+                              next.steps.splice(i, 1);
+                              setDraft(next);
+                            }}
+                            style={[
+                              st.pillBtn,
+                              { borderColor: theme.border },
+                            ]}
+                          >
+                            <Feather
+                              name="trash-2"
+                              size={14}
+                              color="#B91C1C"
+                            />
+                            <Text
+                              style={{
+                                color: "#B91C1C",
+                                fontWeight: "700",
+                              }}
+                            >
+                              Remove
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+
+                  <View
+                    style={{ flexDirection: "row", gap: 10, marginTop: 10 }}
+                  >
+                    <TouchableOpacity
+                      onPress={() =>
+                        setDraft((d) => ({
+                          ...d,
+                          steps: [
+                            ...(d.steps || []),
+                            mkStep({
+                              type: "Intervals",
+                              durationType: "Time (min)",
+                              durationValue: 3,
+                            }),
+                          ],
+                        }))
+                      }
+                      style={[
+                        st.outlineBtn,
+                        { borderColor: theme.border },
+                      ]}
+                    >
+                      <Feather
+                        name="plus"
+                        size={16}
+                        color={theme.text}
+                      />
+                      <Text
+                        style={{
+                          color: theme.text,
+                          fontWeight: "800",
+                        }}
+                      >
+                        Add inner step
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+
+              <View
+                style={{ flexDirection: "row", gap: 10, marginTop: 12 }}
+              >
+                <TouchableOpacity
+                  onPress={saveEdit}
+                  style={[
+                    st.primaryBtn,
+                    { backgroundColor: theme.primaryBg },
+                  ]}
+                >
+                  <Feather
+                    name="check"
+                    size={16}
+                    color={theme.primaryText}
+                  />
+                  <Text
+                    style={{
+                      color: theme.primaryText,
+                      fontWeight: "800",
+                    }}
+                  >
+                    Save step
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          )}
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+/* ----------------- session editor with STEPS button ----------------- */
+function SessionRow({ theme, session, onChange, onDelete }) {
+  const [stepsOpen, setStepsOpen] = useState(false);
+  const segments = Array.isArray(session.segments)
+    ? session.segments
+    : [];
+
+  const wu = segments.find((s) => /^warm/i.test(s.type));
+  const cd = segments.find((s) => /^cool/i.test(s.type));
+  const mains = segments.filter(
+    (s) => !/^(warm|cool)/i.test(s.type)
+  );
+  const stepsSummary = `${wu ? "WU" : ""}${
+    mains.length ? (wu ? " • " : "") + `${mains.length} main` : ""
+  }${cd ? " • CD" : ""}`;
+
+  return (
+    <View
+      style={[
+        st.sessionRow,
+        { borderColor: theme.border, backgroundColor: theme.card },
+      ]}
+    >
+      <TextInput
+        placeholder="Title (e.g. Easy + strides)"
+        placeholderTextColor={theme.placeholder}
+        value={session.title}
+        onChangeText={(t) => onChange({ ...session, title: t })}
+        style={[
+          st.input,
+          {
+            color: theme.text,
+            borderColor: theme.border,
+            backgroundColor: theme.card,
+          },
+        ]}
+      />
+
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <TextInput
+          placeholder="Duration (min)"
+          placeholderTextColor={theme.placeholder}
+          keyboardType="numeric"
+          value={
+            session.targetDurationMin != null
+              ? String(session.targetDurationMin)
+              : session.durationMin
+              ? String(session.durationMin)
+              : ""
+          }
+          onChangeText={(t) =>
+            onChange(
+              normaliseSessionForPlan({
+                ...session,
+                durationMin: Number(t) || 0,
+                targetDurationMin: Number(t) || 0,
+              })
+            )
+          }
+          style={[
+            st.inputHalf,
+            {
+              color: theme.text,
+              borderColor: theme.border,
+              backgroundColor: theme.card,
+            },
+          ]}
+        />
+        <TextInput
+          placeholder="Distance (km)"
+          placeholderTextColor={theme.placeholder}
+          keyboardType="numeric"
+          value={
+            session.targetDistanceKm != null
+              ? String(session.targetDistanceKm)
+              : session.distanceKm
+              ? String(session.distanceKm)
+              : ""
+          }
+          onChangeText={(t) =>
+            onChange(
+              normaliseSessionForPlan({
+                ...session,
+                distanceKm: Number(t) || 0,
+                targetDistanceKm: Number(t) || 0,
+              })
+            )
+          }
+          style={[
+            st.inputHalf,
+            {
+              color: theme.text,
+              borderColor: theme.border,
+              backgroundColor: theme.card,
+            },
+          ]}
+        />
+      </View>
+
+      <TextInput
+        placeholder="Notes (e.g. route, surface, shoes)"
+        placeholderTextColor={theme.placeholder}
+        value={session.notes || ""}
+        onChangeText={(t) => onChange({ ...session, notes: t })}
+        style={[
+          st.input,
+          {
+            color: theme.text,
+            borderColor: theme.border,
+            backgroundColor: theme.card,
+          },
+        ]}
+      />
+
+      <TouchableOpacity
+        onPress={() => setStepsOpen(true)}
+        style={[
+          st.pillBtn,
+          { borderColor: theme.border, alignSelf: "flex-start" },
+        ]}
+      >
+        <Feather name="list" size={16} color={theme.text} />
+        <Text style={{ color: theme.text, fontWeight: "700" }}>
+          Steps {segments.length ? `(${segments.length})` : ""}
+          {stepsSummary ? ` — ${stepsSummary}` : ""}
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={onDelete} style={st.delBtn}>
+        <Feather name="trash-2" size={16} color="#B91C1C" />
+        <Text style={{ color: "#B91C1C", fontWeight: "700" }}>
+          Remove session
+        </Text>
+      </TouchableOpacity>
+
+      <StepEditorModal
+        visible={stepsOpen}
+        onClose={() => setStepsOpen(false)}
+        theme={theme}
+        session={session}
+        onChange={(s) => onChange(normaliseSessionForPlan(s))}
+      />
+    </View>
+  );
+}
+
+/* ----------------- Day/Week editors ----------------- */
+function DayColumn({ theme, day, onAdd, onChangeAt, onDeleteAt }) {
+  return (
+    <View style={{ flex: 1, minWidth: 220 }}>
+      <Text style={[st.dayTitle, { color: theme.text }]}>{day.day}</Text>
+      {day.sessions.map((sess, idx) => (
+        <SessionRow
+          key={idx}
+          theme={theme}
+          session={sess}
+          onChange={(s) => onChangeAt(idx, s)}
+          onDelete={() => onDeleteAt(idx)}
+        />
+      ))}
+      <TouchableOpacity
+        onPress={onAdd}
+        style={[
+          st.addBtn,
+          { borderColor: theme.border, backgroundColor: theme.card },
+        ]}
+      >
+        <Feather name="plus" size={16} color={theme.text} />
+        <Text style={{ color: theme.text, fontWeight: "700" }}>
+          Add session
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function WeekEditor({ theme, week, onChange, onDuplicate }) {
+  return (
+    <View style={{ gap: 12 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <Text style={[st.sectionTitle, { color: theme.text }]}>
+          {week.title || "Week"}
+        </Text>
+        <TouchableOpacity
+          onPress={onDuplicate}
+          style={[st.dupBtn, { backgroundColor: theme.muted }]}
+        >
+          <Feather name="copy" size={14} color="#111827" />
+          <Text style={{ color: "#111827", fontWeight: "700" }}>
+            Duplicate week
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 12 }}
+      >
+        {week.days.map((d, i) => (
+          <DayColumn
+            key={d.day}
+            theme={theme}
+            day={d}
+            onAdd={() => {
+              const next = { ...week };
+              next.days[i] = {
+                ...next.days[i],
+                sessions: [
+                  ...next.days[i].sessions,
+                  normaliseSessionForPlan({
+                    type: "Run",
+                    title: "",
+                    durationMin: 45,
+                    distanceKm: 0,
+                    notes: "",
+                    segments: [],
+                  }),
+                ],
+              };
+              onChange(next);
+            }}
+            onChangeAt={(idx, s) => {
+              const next = { ...week };
+              const list = [...next.days[i].sessions];
+              list[idx] = normaliseSessionForPlan(s);
+              next.days[i] = { ...next.days[i], sessions: list };
+              onChange(next);
+            }}
+            onDeleteAt={(idx) => {
+              const next = { ...week };
+              const list = [...next.days[i].sessions];
+              list.splice(idx, 1);
+              next.days[i] = { ...next.days[i], sessions: list };
+              onChange(next);
+            }}
+          />
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
+/* ----------------- AI modal ----------------- */
+function AIGenerateModal({
+  visible,
+  onClose,
+  onGenerate,
+  theme,
+  onGenerateViaChatGPT,
+  aiCalling,
+}) {
+  const [goal, setGoal] = useState("Sub-40 10K in 4 weeks");
+  const [focus, setFocus] = useState("Run");
+  const [weeks, setWeeks] = useState("4");
+  const [daysPerWeek, setDaysPerWeek] = useState("4");
+  const [notes, setNotes] = useState(
+    "Current 5K: 20:00. Include warm-up/cool-down and clear paces & HR zones."
+  );
+
+  const submitLocal = () =>
+    onGenerate({
+      goal,
+      primaryActivity: focus,
+      weeks: Number(weeks) || 4,
+      daysPerWeek: Number(daysPerWeek) || 4,
+      extraNotes: notes,
+    });
+
+  const submitChatGPT = async () => {
+    try {
+      await onGenerateViaChatGPT?.({
+        goal,
+        primaryActivity: focus,
+        weeks: Number(weeks) || 4,
+        daysPerWeek: Number(daysPerWeek) || 4,
+        extraNotes: notes,
+      });
+    } catch (e) {
+      Alert.alert(
+        "AI error",
+        e?.message || "Could not generate via ChatGPT."
+      );
+    }
+  };
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <SafeAreaView style={[st.modalSafe, { backgroundColor: theme.bg }]}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1 }}
+        >
+          <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+            <Text style={[st.modalTitle, { color: theme.text }]}>
+              Generate with AI
+            </Text>
+            <Text style={{ color: theme.subtext, fontSize: 10 }}>
+              API_URL → {API_URL}
+            </Text>
+
+            <TextInput
+              style={[
+                st.input,
+                {
+                  color: theme.text,
+                  borderColor: theme.border,
+                  backgroundColor: theme.card,
+                },
+              ]}
+              placeholder="Goal"
+              placeholderTextColor={theme.placeholder}
+              value={goal}
+              onChangeText={setGoal}
+            />
+            <ActivityPicker
+              theme={theme}
+              value={focus}
+              onChange={setFocus}
+            />
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TextInput
+                style={[
+                  st.inputHalf,
+                  {
+                    color: theme.text,
+                    borderColor: theme.border,
+                    backgroundColor: theme.card,
+                  },
+                ]}
+                placeholder="Weeks"
+                placeholderTextColor={theme.placeholder}
+                keyboardType="numeric"
+                value={weeks}
+                onChangeText={setWeeks}
+              />
+              <TextInput
+                style={[
+                  st.inputHalf,
+                  {
+                    color: theme.text,
+                    borderColor: theme.border,
+                    backgroundColor: theme.card,
+                  },
+                ]}
+                placeholder="Days / week"
+                placeholderTextColor={theme.placeholder}
+                keyboardType="numeric"
+                value={daysPerWeek}
+                onChangeText={setDaysPerWeek}
+              />
+            </View>
+            <TextInput
+              style={[
+                st.input,
+                {
+                  color: theme.text,
+                  borderColor: theme.border,
+                  backgroundColor: theme.card,
+                  minHeight: 80,
+                },
+              ]}
+              multiline
+              placeholder="Anything to add?"
+              placeholderTextColor={theme.placeholder}
+              value={notes}
+              onChangeText={setNotes}
+            />
+
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
+              <TouchableOpacity
+                onPress={onClose}
+                style={[st.outlineBtn, { borderColor: theme.border }]}
+              >
+                <Text
+                  style={{ color: theme.text, fontWeight: "700" }}
+                >
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={submitLocal}
+                style={[
+                  st.primaryBtn,
+                  { backgroundColor: theme.primaryBg },
+                ]}
+              >
+                <Feather
+                  name="sparkles"
+                  size={16}
+                  color={theme.primaryText}
+                />
+                <Text
+                  style={{
+                    color: theme.primaryText,
+                    fontWeight: "800",
+                  }}
+                >
+                  Generate
+                </Text>
+              </TouchableOpacity>
+              {onGenerateViaChatGPT && (
+                <TouchableOpacity
+                  onPress={submitChatGPT}
+                  disabled={aiCalling}
+                  style={[
+                    st.primaryBtn,
+                    {
+                      backgroundColor: theme.primaryBg,
+                      opacity: aiCalling ? 0.6 : 1,
+                    },
+                  ]}
+                >
+                  <Feather
+                    name="cpu"
+                    size={16}
+                    color={theme.primaryText}
+                  />
+                  <Text
+                    style={{
+                      color: theme.primaryText,
+                      fontWeight: "800",
+                    }}
+                  >
+                    {aiCalling ? "Thinking…" : "Use ChatGPT"}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <TouchableOpacity
+              onPress={async () => {
+                try {
+                  const r = await fetch(`${API_URL}/health`);
+                  const t = await r.text();
+                  Alert.alert("Health", t);
+                } catch (err) {
+                  Alert.alert("Health failed", String(err));
+                }
+              }}
+              style={[
+                st.primaryBtn,
+                { backgroundColor: theme.primaryBg, marginTop: 8 },
+              ]}
+            >
+              <Text
+                style={{
+                  color: theme.primaryText,
+                  fontWeight: "800",
+                }}
+              >
+                Ping API
+              </Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
+// Remove ALL undefined values before sending to Firestore (objects + arrays)
+function sanitiseForFirestore(value) {
+  // Arrays – clean each element AND drop any that end up undefined
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => sanitiseForFirestore(v))
+      .filter((v) => v !== undefined);
+  }
+
+  // Objects – recurse into each key, drop keys that end up undefined
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      const cleaned = sanitiseForFirestore(v);
+      if (cleaned !== undefined) {
+        out[k] = cleaned;
+      }
+    }
+    return out;
+  }
+
+  // Primitives – just pass through, but NEVER return undefined
+  return value;
+}
+
+
+/* ----------------- page ----------------- */
+export default function TrainCreate() {
+  const theme = useScreenTheme();
+  const router = useRouter();
+  const params = useLocalSearchParams();
+
+  const { createPlan: createAiPlan } = useAiPlan();
+
+  const [planId, setPlanId] = useState(null);
+  const [planName, setPlanName] = useState("Custom Plan");
+  const [primaryActivity, setPrimaryActivity] = useState("Run");
+  const [weeks, setWeeks] = useState([emptyWeek("Week 1")]);
+  const [paceGuide, setPaceGuide] = useState([]);
+
+  const [aiVisible, setAiVisible] = useState(false);
+  const [aiCalling, setAiCalling] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [mode, setMode] = useState("preview");
+
+  useEffect(() => {
+    (async () => {
+      if (!params?.edit) return;
+      try {
+        const uid = uidOrThrow();
+        if (params.id) {
+          const snap = await getDoc(
+            doc(db, "users", uid, "plans", String(params.id))
+          );
+          if (snap.exists()) {
+            const d = snap.data();
+            setPlanId(snap.id);
+            setPlanName(d.name || "Training Plan");
+            setPrimaryActivity("Run");
+            setWeeks(
+              Array.isArray(d.weeks) && d.weeks.length
+                ? d.weeks
+                : [emptyWeek("Week 1")]
+            );
+            setPaceGuide(d.paceGuide || []);
+            return;
+          }
+        }
+        const ref = collection(db, "users", uid, "plans");
+        const latest = await getDocs(
+          query(ref, orderBy("updatedAt", "desc"), limit(1))
+        );
+        if (!latest.empty) {
+          const doc0 = latest.docs[0];
+          const d = doc0.data();
+          setPlanId(doc0.id);
+          setPlanName(d.name || "Training Plan");
+          setPrimaryActivity("Run");
+          setWeeks(
+            Array.isArray(d.weeks) && d.weeks.length
+              ? d.weeks
+              : [emptyWeek("Week 1")]
+          );
+          setPaceGuide(d.paceGuide || []);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, [params?.edit, params?.id]);
+
+  const totals = useMemo(() => {
+    let sessions = 0,
+      mins = 0,
+      km = 0;
+    weeks.forEach((w) =>
+      w.days.forEach((d) =>
+        d.sessions.forEach((s) => {
+          sessions += 1;
+          const duration =
+            s.targetDurationMin != null
+              ? s.targetDurationMin
+              : s.durationMin || 0;
+          const dist =
+            s.targetDistanceKm != null
+              ? s.targetDistanceKm
+              : s.distanceKm || 0;
+          mins += Number(duration || 0);
+          km += Number(dist || 0);
+        })
+      )
+    );
+    return { sessions, mins, km: Number(km.toFixed(1)) };
+  }, [weeks]);
+
+  const addWeek = () =>
+    setWeeks((w) => [...w, emptyWeek(`Week ${w.length + 1}`)]);
+
+  const handleGenerateViaChatGPT = async (prefs) => {
+    try {
+      setAiCalling(true);
+      const uid = uidOrThrow();
+
+      const weeksCount = Number(prefs.weeks) || 4;
+      const sessionsPerWeek = Number(prefs.daysPerWeek) || 4;
+
+      const now = new Date();
+      const targetDateObj = new Date(
+        now.getTime() + weeksCount * 7 * 24 * 60 * 60 * 1000
+      );
+      const targetEventDate = targetDateObj.toISOString().slice(0, 10);
+
+      const goalLower = String(prefs.goal || "").toLowerCase();
+      let goalType = "10k";
+      if (goalLower.includes("hyrox")) goalType = "Hyrox";
+      else if (goalLower.includes("half")) goalType = "Half";
+      else if (goalLower.includes("marathon")) goalType = "Marathon";
+
+      const plan = await createAiPlan({
+        userId: uid,
+        goalType,
+        targetEventDate,
+        targetTime: "",
+        current10kTime: "",
+        sessionsPerWeek,
+        weeks: weeksCount,
+        goal: prefs.goal,
+        primaryActivity: "Run",
+        extraNotes: prefs.extraNotes,
+      });
+
+      const weeksFromPlan = trainingPlanToWeeks(plan);
+
+      setPlanName(prefs.goal || "AI Plan");
+      setPrimaryActivity("Run");
+      setWeeks(weeksFromPlan);
+      setPaceGuide([]);
+      setAiVisible(false);
+      setMode("preview");
+    } catch (e) {
+      const msg = e?.message || "Could not generate via AI.";
+      Alert.alert("AI error", msg);
+    } finally {
+      setAiCalling(false);
+    }
+  };
+
+  const handleAIGenerate = async (prefs) => {
+    return handleGenerateViaChatGPT(prefs);
+  };
+
+const savePlan = async () => {
+  try {
+    setSaving(true);
+    const uid = uidOrThrow();
+
+    const weeksForSave = normaliseWeeksForSave(weeks);
+
+    // 1) Build base payload WITHOUT timestamps
+    const basePayload = {
+      name: (planName || "").trim() || "Training Plan",
+      primaryActivity: "Run",
+      totals,
+      weeks: weeksForSave,
+      paceGuide,
+    };
+
+    // 2) Strip out any undefined (deeply)
+    const cleanPayload = sanitiseForFirestore(basePayload);
+
+    if (planId) {
+      // Update existing plan
+      const ref = doc(db, "users", uid, "plans", planId);
+      await setDoc(
+        ref,
+        {
+          ...cleanPayload,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } else {
+      // Create new plan
+      const ref = await addDoc(
+        collection(db, "users", uid, "plans"),
+        {
+          ...cleanPayload,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }
+      );
+      setPlanId(ref.id);
+    }
+
+    Alert.alert("Saved", "Your plan has been saved.");
+    router.replace("/train");
+  } catch (e) {
+    Alert.alert("Save failed", e?.message || "Could not save plan.");
+  } finally {
+    setSaving(false);
+  }
+};
+
+
+  const preview = planToPreview(normaliseWeeksForSave(weeks));
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
+      <AIGenerateModal
+        visible={aiVisible}
+        onClose={() => setAiVisible(false)}
+        onGenerate={handleAIGenerate}
+        onGenerateViaChatGPT={handleGenerateViaChatGPT}
+        aiCalling={aiCalling}
+        theme={theme}
+      />
+
+      <ScrollView
+        contentContainerStyle={{
+          padding: 16,
+          paddingBottom: 140,
+          gap: 14,
+        }}
+      >
+        <View style={st.rowBetween}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={[st.pillBtn, { borderColor: theme.border }]}
+          >
+            <Feather name="chevron-left" size={18} color={theme.text} />
+            <Text style={{ color: theme.text, fontWeight: "700" }}>
+              Back
+            </Text>
+          </TouchableOpacity>
+
+          <Text style={[st.h4, { color: theme.text }]}>Create Plan</Text>
+
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <TouchableOpacity
+              onPress={() => setAiVisible(true)}
+              style={[st.pillBtn, { borderColor: theme.border }]}
+            >
+              <Feather name="sparkles" size={16} color={theme.text} />
+              <Text style={{ color: theme.text, fontWeight: "700" }}>
+                AI
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() =>
+                setMode((m) => (m === "edit" ? "preview" : "edit"))
+              }
+              style={[st.pillBtn, { borderColor: theme.border }]}
+            >
+              <Feather
+                name={mode === "edit" ? "eye" : "edit"}
+                size={16}
+                color={theme.text}
+              />
+              <Text style={{ color: theme.text, fontWeight: "700" }}>
+                {mode === "edit" ? "Preview" : "Edit"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View
+          style={[
+            st.card,
+            { backgroundColor: theme.card, borderColor: theme.border },
+          ]}
+        >
+          <Text style={[st.label, { color: theme.subtext }]}>
+            Plan name
+          </Text>
+          <TextInput
+            style={[
+              st.input,
+              {
+                color: theme.text,
+                borderColor: theme.border,
+                backgroundColor: theme.card,
+              },
+            ]}
+            placeholder="Custom Plan"
+            placeholderTextColor={theme.placeholder}
+            value={planName}
+            onChangeText={setPlanName}
+          />
+          <Text
+            style={[
+              st.label,
+              { color: theme.subtext, marginTop: 10 },
+            ]}
+          >
+            Primary activity
+          </Text>
+          <ActivityPicker
+            theme={theme}
+            value={primaryActivity}
+            onChange={setPrimaryActivity}
+          />
+        </View>
+
+        {mode === "edit" ? (
+          <>
+            {weeks.map((w, idx) => (
+              <View
+                key={idx}
+                style={[
+                  st.card,
+                  {
+                    backgroundColor: theme.card,
+                    borderColor: theme.border,
+                  },
+                ]}
+              >
+                <Text
+                  style={[st.weekTitle, { color: theme.text }]}
+                >{`${w.title || `Week ${idx + 1}`}`}</Text>
+                <WeekEditor
+                  theme={theme}
+                  week={w}
+                  onChange={(next) => {
+                    const copy = [...weeks];
+                    copy[idx] = next;
+                    setWeeks(copy);
+                  }}
+                  onDuplicate={() => {
+                    const dup = JSON.parse(JSON.stringify(w));
+                    setWeeks((prev) => {
+                      const c = [...prev];
+                      c.splice(idx + 1, 0, dup);
+                      return c;
+                    });
+                  }}
+                />
+                <View
+                  style={{
+                    flexDirection: "row",
+                    gap: 10,
+                    marginTop: 10,
+                  }}
+                >
+                  <TouchableOpacity
+                    onPress={() =>
+                      setWeeks((prev) =>
+                        prev.filter((_, i) => i !== idx)
+                      )
+                    }
+                    style={[
+                      st.outlineBtn,
+                      { borderColor: theme.border },
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        color: theme.text,
+                        fontWeight: "700",
+                      }}
+                    >
+                      Remove week
+                    </Text>
+                  </TouchableOpacity>
+                  {idx === weeks.length - 1 && (
+                    <TouchableOpacity
+                      onPress={addWeek}
+                      style={[
+                        st.primaryBtn,
+                        { backgroundColor: theme.primaryBg },
+                      ]}
+                    >
+                      <Feather
+                        name="plus"
+                        size={16}
+                        color={theme.primaryText}
+                      />
+                      <Text
+                        style={{
+                          color: theme.primaryText,
+                          fontWeight: "800",
+                        }}
+                      >
+                        Add week
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            ))}
+          </>
+        ) : (
+          <View style={{ gap: 18 }}>
+            {!!paceGuide.length && (
+              <View
+                style={[
+                  st.card,
+                  {
+                    backgroundColor: theme.card,
+                    borderColor: theme.border,
+                    gap: 4,
+                  },
+                ]}
+              >
+                <Text style={[st.weekTitle, { color: theme.text }]}>
+                  Pace guide
+                </Text>
+                {paceGuide.map((p, i) => (
+                  <Text
+                    key={i}
+                    style={{ color: theme.subtext }}
+                  >{`\u2022 ${p}`}</Text>
+                ))}
+              </View>
+            )}
+
+            {preview.map((wk) => (
+              <View
+                key={wk.title}
+                style={[
+                  st.card,
+                  {
+                    backgroundColor: theme.card,
+                    borderColor: theme.border,
+                  },
+                ]}
+              >
+                <Text style={[st.weekTitle, { color: theme.text }]}>
+                  {wk.title}
+                </Text>
+                <View
+                  style={[st.previewRow, { borderColor: theme.border }]}
+                >
+                  <Text
+                    style={[
+                      st.previewHeadCell,
+                      { color: theme.subtext },
+                    ]}
+                  >
+                    Day
+                  </Text>
+                  <Text
+                    style={[
+                      st.previewHeadCell,
+                      { color: theme.subtext, flex: 1.2 },
+                    ]}
+                  >
+                    Session
+                  </Text>
+                  <Text
+                    style={[
+                      st.previewHeadCell,
+                      { color: theme.subtext, flex: 2 },
+                    ]}
+                  >
+                    Details
+                  </Text>
+                  <Text
+                    style={[
+                      st.previewHeadCell,
+                      { color: theme.subtext },
+                    ]}
+                  >
+                    Target
+                  </Text>
+                </View>
+                {wk.rows.map((r, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      st.previewRow,
+                      { borderColor: theme.border },
+                    ]}
+                  >
+                    <Text
+                      style={[st.previewCell, { color: theme.text }]}
+                    >
+                      {r.day}
+                    </Text>
+                    <Text
+                      style={[
+                        st.previewCell,
+                        { color: theme.text, flex: 1.2 },
+                      ]}
+                    >
+                      {r.session}
+                    </Text>
+                    <Text
+                      style={[
+                        st.previewCell,
+                        { color: theme.text, flex: 2 },
+                      ]}
+                    >
+                      {r.details}
+                    </Text>
+                    <Text
+                      style={[st.previewCell, { color: theme.text }]}
+                    >
+                      {r.target}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ))}
+          </View>
+        )}
+
+        <View style={{ flexDirection: "row", gap: 10 }}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={[st.outlineBtn, { borderColor: theme.border }]}
+          >
+            <Text style={{ fontWeight: "700", color: theme.text }}>
+              Cancel
+            </Text>
+          </TouchableOpacity>
+          <Text style={{ color: "red" }}>saving = {String(saving)}</Text>
+
+          <TouchableOpacity
+            onPress={savePlan}
+            disabled={saving}
+            style={[
+              st.primaryBtn,
+              { backgroundColor: theme.primaryBg },
+            ]}
+          >
+            <Feather
+              name="save"
+              size={16}
+              color={theme.primaryText}
+            />
+            <Text
+              style={{
+                color: theme.primaryText,
+                fontWeight: "800",
+              }}
+            >
+              {saving ? "Saving…" : "Save plan"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+/* ----------------- styles ----------------- */
+const st = StyleSheet.create({
+  h4: { fontSize: 18, fontWeight: "800" },
+  card: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    padding: 12,
+    gap: 8,
+  },
+  label: { fontSize: 12, fontWeight: "700" },
+
+  input: { borderWidth: 1, borderRadius: 12, padding: 12 },
+  inputHalf: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+  },
+
+  pill: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+
+  weekTitle: { fontSize: 16, fontWeight: "800" },
+  sectionTitle: { fontSize: 14, fontWeight: "800" },
+
+  sessionRow: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    padding: 10,
+    gap: 8,
+    marginBottom: 8,
+  },
+  dayTitle: { fontSize: 14, fontWeight: "800", marginBottom: 6 },
+  addBtn: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  dupBtn: {
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "center",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+  },
+
+  outlineBtn: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingVertical: 12,
+  },
+  primaryBtn: {
+    flex: 1,
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+    paddingVertical: 12,
+  },
+
+  rowBetween: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  pillBtn: {
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "center",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+
+  modalSafe: { flex: 1 },
+  modalTitle: { fontSize: 18, fontWeight: "800" },
+
+  stepChip: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    padding: 10,
+    gap: 6,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  previewRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  previewHeadCell: { width: 90, fontSize: 12, fontWeight: "800" },
+  previewCell: { width: 90, fontSize: 13, lineHeight: 18 },
+
+  delBtn: {
+    marginTop: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+});
