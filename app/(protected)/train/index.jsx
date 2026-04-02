@@ -2437,8 +2437,10 @@ export default function TrainIndex() {
 
     try {
       setSendingToWatch(true);
-      const uid = auth.currentUser?.uid;
+      const user = auth.currentUser;
+      const uid = user?.uid;
       if (!uid) throw new Error("No user");
+      const idToken = await user.getIdToken();
 
       const sess = todayHero.session;
       if (!sess?.workout) throw new Error("No workout data");
@@ -2452,12 +2454,29 @@ export default function TrainIndex() {
 
       const res = await fetch(`${API_URL}/garmin/send-workout`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) throw new Error("Failed to send workout");
-      Alert.alert("Sent", "Workout sent to your watch.");
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          result?.error || result?.message || "Failed to send workout"
+        );
+      }
+
+      if (result?.synced) {
+        Alert.alert("Sent", "Workout sent to your watch.");
+      } else {
+        Alert.alert(
+          "Garmin connected",
+          result?.message ||
+            "Workout was prepared, but direct Garmin upload is not configured yet."
+        );
+      }
     } catch (e) {
       Alert.alert("Couldn’t send to watch", e?.message || "Try again.");
     } finally {

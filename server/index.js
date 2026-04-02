@@ -12,6 +12,7 @@ import coachChatRoute from "./routes/coach-chat.js";
 import garminHealthRoutes from "./routes/garmin-health.js";
 import garminWebhookRoutes from "./routes/garmin-webhook.js";
 import garminAuthRoutes from "./routes/garmin.js"; // OAuth logic
+import garminTrainingRoutes from "./routes/garmin-training.js";
 import generateRunRouter from "./routes/generate-run.js";
 import generateRunV2Router from "./routes/generate-run-v2.js";
 import generateStrengthRouter from "./routes/generate-strength.js";
@@ -58,6 +59,9 @@ app.use("/auth/garmin", garminAuthRoutes);
 
 // 3. Health Data Retrieval (API calls to Garmin for history)
 app.use("/garmin/health", garminHealthRoutes);
+
+// 4. Workout send/export routes
+app.use("/garmin", garminTrainingRoutes);
 
 // ============================================================================
 // AI & Training Routes (Passing OpenAI client where needed)
