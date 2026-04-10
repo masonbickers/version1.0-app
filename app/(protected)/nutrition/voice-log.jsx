@@ -85,7 +85,6 @@ function formatDayLabel(iso) {
 
 let Voice = null;
 try {
-  // eslint-disable-next-line global-require
   Voice = require("@react-native-voice/voice").default;
 } catch {
   Voice = null;
@@ -114,8 +113,6 @@ export default function VoiceLogPage() {
   const initialMeal =
     params?.mealType && MEAL_TYPES.includes(String(params.mealType)) ? String(params.mealType) : "";
 
-  const [userReady, setUserReady] = useState(false);
-
   // voice state
   const [voiceReady, setVoiceReady] = useState(!!Voice);
   const [listening, setListening] = useState(false);
@@ -133,111 +130,27 @@ export default function VoiceLogPage() {
 
   const listeningRef = useRef(false);
   const stoppedByUserRef = useRef(false);
+  const transcriptRef = useRef("");
+  const partialRef = useRef("");
+  const autoAnalyseRef = useRef(null);
 
   // auth gate
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u) router.replace("/(auth)/login");
-      setUserReady(!!u);
     });
     return () => unsub();
   }, [router]);
 
   const goBack = useCallback(() => {
     router.replace({
-      pathname: "/nutrition/add-food",
+      pathname: "/nutrition/add",
       params: { date: selectedDateISO, mealType: chosenMeal || "" },
     });
   }, [router, selectedDateISO, chosenMeal]);
 
-  /* ---------------- Voice lifecycle ---------------- */
-
-  useEffect(() => {
-    if (!Voice) {
-      setVoiceReady(false);
-      return;
-    }
-
-    setVoiceReady(true);
-
-    Voice.onSpeechStart = () => {
-      listeningRef.current = true;
-      setListening(true);
-      setPartial("");
-      stoppedByUserRef.current = false;
-    };
-
-    Voice.onSpeechEnd = async () => {
-      listeningRef.current = false;
-      setListening(false);
-
-      // If we didn't stop manually, we can auto-analyse after speech ends
-      if (!stoppedByUserRef.current) {
-        // Give results a beat to land (some devices fire end before results)
-        setTimeout(() => {
-          autoAnalyseIfPossible();
-        }, 250);
-      }
-    };
-
-    Voice.onSpeechResults = (e) => {
-      const text = e?.value?.[0] || "";
-      if (text) {
-        setTranscript(text);
-        setPartial("");
-      }
-    };
-
-    Voice.onSpeechPartialResults = (e) => {
-      const text = e?.value?.[0] || "";
-      if (text) setPartial(text);
-    };
-
-    Voice.onSpeechError = (e) => {
-      listeningRef.current = false;
-      setListening(false);
-      const msg = e?.error?.message || "Voice recognition failed.";
-      Alert.alert("Voice error", msg);
-    };
-
-    return () => {
-      try {
-        Voice.destroy().then(Voice.removeAllListeners);
-      } catch {}
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const startListening = useCallback(async () => {
-    if (!Voice) return;
-    if (busy) return;
-
-    try {
-      setCandidate(null);
-      setTranscript("");
-      setPartial("");
-      stoppedByUserRef.current = false;
-
-      // en-GB for UK
-      await Voice.start("en-GB");
-    } catch (e) {
-      setListening(false);
-      Alert.alert("Couldn’t start voice", e?.message || "Try again.");
-    }
-  }, [busy]);
-
-  const stopListening = useCallback(async () => {
-    if (!Voice) return;
-    try {
-      stoppedByUserRef.current = true;
-      await Voice.stop();
-      setListening(false);
-    } catch {}
-  }, []);
-
-  const autoAnalyseIfPossible = useCallback(async () => {
-    // prefer full transcript; fallback to partial
-    const text = (transcript || partial || "").trim();
+  const autoAnalyseIfPossible = useCallback(async (spokenText = "") => {
+    const text = String(spokenText || transcriptRef.current || partialRef.current || "").trim();
     if (!text) return;
     if (!API_URL) {
       Alert.alert("Config error", "Missing API_URL (EXPO_PUBLIC_API_URL).");
@@ -277,13 +190,135 @@ export default function VoiceLogPage() {
     } finally {
       setBusy(false);
     }
-  }, [transcript, partial]);
+  }, []);
+
+  useEffect(() => {
+    autoAnalyseRef.current = autoAnalyseIfPossible;
+  }, [autoAnalyseIfPossible]);
+
+  /* ---------------- Voice lifecycle ---------------- */
+
+  useEffect(() => {
+    let mounted = true;
+
+    if (!Voice) {
+      setVoiceReady(false);
+      return;
+    }
+
+    (async () => {
+      try {
+        const available = await Voice.isAvailable();
+        if (mounted) setVoiceReady(Boolean(available));
+      } catch {
+        // If availability check fails on a device, still allow start() attempt.
+        if (mounted) setVoiceReady(true);
+      }
+    })();
+
+    Voice.onSpeechStart = () => {
+      listeningRef.current = true;
+      setListening(true);
+      setPartial("");
+      partialRef.current = "";
+      stoppedByUserRef.current = false;
+    };
+
+    Voice.onSpeechEnd = async () => {
+      listeningRef.current = false;
+      setListening(false);
+
+      // If we didn't stop manually, we can auto-analyse after speech ends
+      if (!stoppedByUserRef.current) {
+        const spoken = String(transcriptRef.current || partialRef.current || "").trim();
+        if (!spoken) return;
+        // Give results a beat to land (some devices fire end before results)
+        setTimeout(() => {
+          autoAnalyseRef.current?.(spoken);
+        }, 250);
+      }
+    };
+
+    Voice.onSpeechResults = (e) => {
+      const text = e?.value?.[0] || "";
+      if (text) {
+        setTranscript(text);
+        setPartial("");
+        transcriptRef.current = text;
+        partialRef.current = "";
+      }
+    };
+
+    Voice.onSpeechPartialResults = (e) => {
+      const text = e?.value?.[0] || "";
+      if (text) {
+        setPartial(text);
+        partialRef.current = text;
+      }
+    };
+
+    Voice.onSpeechError = (e) => {
+      listeningRef.current = false;
+      setListening(false);
+      const msg = String(e?.error?.message || "Voice recognition failed.");
+      const normalized = msg.toLowerCase();
+      if (normalized.includes("no speech") || normalized.includes("no match") || normalized.includes("timeout")) {
+        return;
+      }
+      Alert.alert("Voice error", msg);
+    };
+
+    return () => {
+      mounted = false;
+      try {
+        Voice.destroy();
+      } catch {}
+      try {
+        Voice.removeAllListeners();
+      } catch {}
+    };
+  }, []);
+
+  const startListening = useCallback(async () => {
+    if (!Voice) return;
+    if (busy) return;
+    if (!voiceReady) {
+      Alert.alert("Voice unavailable", "Speech recognition is not available on this device.");
+      return;
+    }
+
+    try {
+      setCandidate(null);
+      setTranscript("");
+      setPartial("");
+      transcriptRef.current = "";
+      partialRef.current = "";
+      stoppedByUserRef.current = false;
+
+      // en-GB for UK
+      await Voice.start("en-GB");
+    } catch (e) {
+      setListening(false);
+      Alert.alert("Couldn’t start voice", e?.message || "Try again.");
+    }
+  }, [busy, voiceReady]);
+
+  const stopListening = useCallback(async () => {
+    if (!Voice) return;
+    try {
+      stoppedByUserRef.current = true;
+      await Voice.stop();
+      setListening(false);
+    } catch {}
+  }, []);
 
   const onWrong = useCallback(() => {
     setCandidate(null);
     setMealPromptOpen(false);
     setTranscript("");
     setPartial("");
+    transcriptRef.current = "";
+    partialRef.current = "";
   }, []);
 
   const onCorrect = useCallback(() => {
@@ -330,6 +365,8 @@ export default function VoiceLogPage() {
         setCandidate(null);
         setTranscript("");
         setPartial("");
+        transcriptRef.current = "";
+        partialRef.current = "";
       } catch (e) {
         Alert.alert("Couldn’t add item", e?.message || "Please try again.");
       } finally {

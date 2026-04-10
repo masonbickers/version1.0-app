@@ -12,6 +12,7 @@ import { useCallback, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    Linking,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -57,19 +58,39 @@ export default function BarcodeScannerScreen() {
     return ok ? raw : new Date().toISOString();
   }, [params.date]);
 
+  const mealTypeParam = useMemo(() => {
+    const raw = typeof params.mealType === "string" ? params.mealType : "";
+    return raw.trim();
+  }, [params.mealType]);
+
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
 
   const s = makeStyles(colors, isDark, insets);
+
+  const normaliseBarcode = useCallback((raw) => {
+    const digits = String(raw || "").replace(/\D/g, "");
+    return /^\d{8,18}$/.test(digits) ? digits : "";
+  }, []);
 
   const handleBarCodeScanned = useCallback(
     ({ data, type }) => {
       if (scanned) return;
       setScanned(true);
 
+      const code = normaliseBarcode(data);
+      if (!code) {
+        Alert.alert(
+          "Unsupported code",
+          "Please scan a standard EAN/UPC barcode.",
+          [{ text: "OK", onPress: () => setScanned(false) }]
+        );
+        return;
+      }
+
       Alert.alert(
         "Barcode scanned",
-        `Type: ${type}\nCode: ${data}`,
+        `Type: ${type}\nCode: ${code}`,
         [
           { text: "Scan again", onPress: () => setScanned(false) },
           {
@@ -79,8 +100,9 @@ export default function BarcodeScannerScreen() {
               router.replace({
                 pathname: "/nutrition/barcode-result",
                 params: {
-                  barcode: String(data),
+                  barcode: code,
                   date: dateParam,
+                  mealType: mealTypeParam,
                 },
               });
             },
@@ -90,7 +112,7 @@ export default function BarcodeScannerScreen() {
         { cancelable: false }
       );
     },
-    [router, scanned, dateParam]
+    [router, scanned, dateParam, mealTypeParam, normaliseBarcode]
   );
 
   if (!permission) {
@@ -114,7 +136,12 @@ export default function BarcodeScannerScreen() {
 
           <TouchableOpacity
             style={s.primaryButton}
-            onPress={requestPermission}
+            onPress={async () => {
+              const result = await requestPermission();
+              if (!result?.granted) {
+                Linking.openSettings().catch(() => {});
+              }
+            }}
             activeOpacity={0.9}
           >
             <Text style={s.primaryButtonText}>Enable camera</Text>

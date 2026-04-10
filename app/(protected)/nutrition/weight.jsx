@@ -19,17 +19,16 @@ import {
   doc,
   getDoc,
   onSnapshot,
-  orderBy,
-  query,
   serverTimestamp,
 } from "firebase/firestore";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
   Keyboard,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -58,6 +57,72 @@ const GRAPH_PADDING_LEFT = 52;
 const GRAPH_PADDING_RIGHT = 16;
 const GRAPH_PADDING_TOP = 18;
 const GRAPH_PADDING_BOTTOM = 26;
+const GRAPH_Y_MIN_SPAN_KG = 2.4;
+const GRAPH_Y_SPREAD_MULTIPLIER = 1.75;
+const PERIOD_OPTIONS = [
+  { key: "1W", chipLabel: "1W", rangeLabel: "Last 7 days", daysBack: 7 },
+  { key: "1M", chipLabel: "1M", rangeLabel: "Last 30 days", daysBack: 30 },
+  { key: "3M", chipLabel: "3M", rangeLabel: "Last 90 days", daysBack: 90 },
+  { key: "6M", chipLabel: "6M", rangeLabel: "Last 180 days", daysBack: 180 },
+  { key: "ALL", chipLabel: "1Y", rangeLabel: "Last 12 months", daysBack: 365 },
+];
+
+function withHexAlpha(color, alpha) {
+  const raw = String(color || "").trim();
+  const a = String(alpha || "").trim();
+  if (!/^([0-9A-Fa-f]{2})$/.test(a)) return raw;
+  if (/^#[0-9A-Fa-f]{6}$/.test(raw)) return `${raw}${a}`;
+  if (/^#[0-9A-Fa-f]{3}$/.test(raw)) {
+    const r = raw[1];
+    const g = raw[2];
+    const b = raw[3];
+    return `#${r}${r}${g}${g}${b}${b}${a}`;
+  }
+  return raw;
+}
+
+function coerceDate(value) {
+  if (!value) return null;
+
+  if (typeof value?.toDate === "function") {
+    const d = value.toDate();
+    return d instanceof Date && !isNaN(d.getTime()) ? d : null;
+  }
+
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === "number") {
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  if (typeof value === "string") {
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const sec =
+    typeof value?.seconds === "number"
+      ? value.seconds
+      : typeof value?._seconds === "number"
+      ? value._seconds
+      : null;
+
+  if (Number.isFinite(sec)) {
+    const nanos =
+      typeof value?.nanoseconds === "number"
+        ? value.nanoseconds
+        : typeof value?._nanoseconds === "number"
+        ? value._nanoseconds
+        : 0;
+    const d = new Date(sec * 1000 + Math.floor(nanos / 1e6));
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  return null;
+}
 
 export default function WeightPage() {
   const { colors, isDark } = useTheme();
@@ -81,6 +146,7 @@ export default function WeightPage() {
   const [goalLoading, setGoalLoading] = useState(true);
 
   const [selectedPoint, setSelectedPoint] = useState(null);
+  const [showAddEntrySheet, setShowAddEntrySheet] = useState(false);
 
   const s = makeStyles(colors, isDark, accent, onAccent);
 
@@ -94,10 +160,9 @@ export default function WeightPage() {
     if (!user) return;
 
     const ref = collection(db, "users", user.uid, "weights");
-    const q = query(ref, orderBy("date", "desc"));
 
     const unsub = onSnapshot(
-      q,
+      ref,
       (snap) => {
         const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setWeights(rows);
@@ -128,49 +193,62 @@ export default function WeightPage() {
     run();
   }, [user]);
 
-  const latest = weights[0] || null;
-
-  const normaliseDate = (tsOrDate) => {
-    if (!tsOrDate) return null;
-    if (tsOrDate?.toDate) return tsOrDate.toDate();
-    if (tsOrDate instanceof Date) return tsOrDate;
-    const d = new Date(tsOrDate);
-    return isNaN(d.getTime()) ? null : d;
-  };
+  const normaliseDate = useCallback((tsOrDate) => coerceDate(tsOrDate), []);
 
   const weightsAsc = useMemo(() => {
     return [...weights].sort((a, b) => {
-      const da = normaliseDate(a.date) || new Date(0);
-      const db = normaliseDate(b.date) || new Date(0);
+      const da = normaliseDate(a.date || a.createdAt) || new Date(0);
+      const db = normaliseDate(b.date || b.createdAt) || new Date(0);
       return da - db;
     });
-  }, [weights]);
+  }, [weights, normaliseDate]);
+
+  const weightsDesc = useMemo(() => {
+    return [...weightsAsc].reverse();
+  }, [weightsAsc]);
+
+  const latest = weightsDesc[0] || null;
+
+  const getWeightsForPeriod = useCallback((rows, periodKey) => {
+    if (!rows.length) return [];
+
+    const selected =
+      PERIOD_OPTIONS.find((option) => option.key === periodKey) || null;
+    const daysBack = selected?.daysBack;
+
+    if (!Number.isFinite(daysBack)) return rows;
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysBack);
+
+    return rows.filter((w) => {
+      const d = normaliseDate(w.date || w.createdAt);
+      return d && d >= cutoff;
+    });
+  }, [normaliseDate]);
+
+  const graphablePeriods = useMemo(
+    () =>
+      PERIOD_OPTIONS.filter(
+        (option) => getWeightsForPeriod(weightsAsc, option.key).length >= 1
+      ),
+    [weightsAsc, getWeightsForPeriod]
+  );
+
+  const activePeriod = useMemo(() => {
+    if (graphablePeriods.some((option) => option.key === period)) return period;
+    return graphablePeriods[0]?.key || period;
+  }, [graphablePeriods, period]);
 
   // filter by selected period
   const filteredWeights = useMemo(() => {
-    if (!weightsAsc.length) return [];
-
-    if (period === "ALL") return weightsAsc;
-
-    const now = new Date();
-    let daysBack = 30;
-    if (period === "1W") daysBack = 7;
-    else if (period === "1M") daysBack = 30;
-    else if (period === "3M") daysBack = 90;
-
-    const cutoff = new Date();
-    cutoff.setDate(now.getDate() - daysBack);
-
-    return weightsAsc.filter((w) => {
-      const d = normaliseDate(w.date);
-      return d && d >= cutoff;
-    });
-  }, [weightsAsc, period]);
+    return getWeightsForPeriod(weightsAsc, activePeriod);
+  }, [weightsAsc, activePeriod, getWeightsForPeriod]);
 
   // clear selected point when period changes / data changes
   useEffect(() => {
     setSelectedPoint(null);
-  }, [period, weightsAsc.length]);
+  }, [activePeriod, weightsAsc.length]);
 
   const trend = useMemo(() => {
     if (filteredWeights.length < 2) return null;
@@ -181,8 +259,8 @@ export default function WeightPage() {
     const end = Number(last.weight || last.value || 0);
     const diff = end - start;
 
-    const startDate = normaliseDate(first.date);
-    const endDate = normaliseDate(last.date);
+    const startDate = normaliseDate(first.date || first.createdAt);
+    const endDate = normaliseDate(last.date || last.createdAt);
     if (!startDate || !endDate) return { start, end, diff };
 
     const ms = endDate.getTime() - startDate.getTime();
@@ -196,7 +274,7 @@ export default function WeightPage() {
       days,
       perWeek,
     };
-  }, [filteredWeights]);
+  }, [filteredWeights, normaliseDate]);
 
   const todayLabel = useMemo(() => {
     const d = new Date();
@@ -228,17 +306,17 @@ export default function WeightPage() {
 
   const handleAddWeight = async () => {
     const trimmed = newWeight.trim().replace(",", ".");
-    if (!trimmed) return;
+    if (!trimmed) return false;
 
     const value = Number(trimmed);
     if (!isFinite(value) || value <= 0) {
       Alert.alert("Check value", "Enter a valid weight in kg.");
-      return;
+      return false;
     }
 
     if (!user) {
       Alert.alert("Not signed in", "Please log in again.");
-      return;
+      return false;
     }
 
     try {
@@ -256,11 +334,13 @@ export default function WeightPage() {
       setNewWeight("");
       setNewNote("");
       Keyboard.dismiss();
+      return true;
     } catch (err) {
       Alert.alert(
         "Could not save",
         err?.message || "Please try again in a moment."
       );
+      return false;
     } finally {
       setSaving(false);
     }
@@ -271,7 +351,7 @@ export default function WeightPage() {
 
     Alert.alert(
       "Delete entry?",
-      `Remove ${item.weight} kg from ${formatDate(item.date)}?`,
+      `Remove ${item.weight} kg from ${formatDate(item.date || item.createdAt)}?`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -304,31 +384,71 @@ export default function WeightPage() {
     return `Up ${rounded} kg over this period.`;
   }, [trend]);
 
-  const headerSubtitle = useMemo(() => {
+  const headerSubtitle = (() => {
     if (!latest) return `Today • ${todayLabel}`;
-    const d = normaliseDate(latest.date);
-    const isToday =
-      d && d.toDateString() === new Date().toDateString();
+    const d = normaliseDate(latest.date || latest.createdAt);
+    const isToday = d && d.toDateString() === new Date().toDateString();
     if (isToday) return `Latest • Today ${todayLabel}`;
-    return `Latest • ${formatDate(latest.date)} at ${formatTime(
-      latest.date
+    return `Latest • ${formatDate(latest.date || latest.createdAt)} at ${formatTime(
+      latest.date || latest.createdAt
     )}`;
-  }, [latest, todayLabel]);
+  })();
 
   // label like "Last 7 days" / "Last 30 days"
   const periodLabel = useMemo(() => {
-    switch (period) {
-      case "1W":
-        return "Last 7 days";
-      case "1M":
-        return "Last 30 days";
-      case "3M":
-        return "Last 90 days";
-      case "ALL":
-      default:
-        return "All time";
-    }
-  }, [period]);
+    return (
+      PERIOD_OPTIONS.find((option) => option.key === activePeriod)
+        ?.rangeLabel || "All time"
+    );
+  }, [activePeriod]);
+
+  const currentWeightValue = latest ? Number(latest.weight || latest.value || 0) : null;
+  const startWeightValue =
+    filteredWeights.length > 0
+      ? Number(filteredWeights[0].weight || filteredWeights[0].value || 0)
+      : null;
+  const changeValue = trend?.diff ?? null;
+  const weeklyChangeValue = trend?.perWeek ?? null;
+
+  const trendIconName = useMemo(() => {
+    if (!trend) return "minus";
+    if (trend.diff < 0) return "trending-down";
+    if (trend.diff > 0) return "trending-up";
+    return "minus";
+  }, [trend]);
+
+  const formatKg = useCallback((value, digits = 1) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "--";
+    return `${n.toFixed(digits).replace(/\.0$/, "")} kg`;
+  }, []);
+
+  const formatSignedKg = useCallback((value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "--";
+    const abs = Math.abs(n).toFixed(1).replace(/\.0$/, "");
+    if (n === 0) return "0 kg";
+    return `${n > 0 ? "+" : "-"}${abs} kg`;
+  }, []);
+
+  const adjustDraftWeight = useCallback(
+    (delta) => {
+      const parsed = Number(newWeight.trim().replace(",", "."));
+      const fallback = Number(latest?.weight || latest?.value || 0);
+      const base = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+      if (!Number.isFinite(base) || base <= 0) return;
+
+      const next = Math.max(0, Math.round((base + delta) * 10) / 10);
+      setNewWeight(next.toFixed(1).replace(/\.0$/, ""));
+    },
+    [newWeight, latest]
+  );
+
+  const applyLatestWeight = useCallback(() => {
+    const fallback = Number(latest?.weight || latest?.value || 0);
+    if (!Number.isFinite(fallback) || fallback <= 0) return;
+    setNewWeight(fallback.toFixed(1).replace(/\.0$/, ""));
+  }, [latest]);
 
   // ---- simple "is the plan working?" text based on goalType + trend ----
   const planFeedback = useMemo(() => {
@@ -396,7 +516,9 @@ export default function WeightPage() {
       <View style={{ flex: 1 }}>
         <Text style={s.entryWeight}>{item.weight} kg</Text>
         <Text style={s.entryDate}>
-          {formatDate(item.date)} · {formatTime(item.date)}
+          {formatDate(item.date || item.createdAt)} · {formatTime(
+            item.date || item.createdAt
+          )}
         </Text>
         {item.note ? (
           <Text style={s.entryNote} numberOfLines={1}>
@@ -405,7 +527,14 @@ export default function WeightPage() {
         ) : null}
       </View>
 
-      <Feather name="trash-2" size={18} color={colors.subtext} />
+      <TouchableOpacity
+        onPress={() => handleDeleteWeight(item)}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        style={s.deleteMini}
+        activeOpacity={0.8}
+      >
+        <Feather name="trash-2" size={16} color={colors.subtext} />
+      </TouchableOpacity>
     </TouchableOpacity>
   );
 
@@ -418,18 +547,19 @@ export default function WeightPage() {
           style={s.page}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          {/* HEADER */}
-          <View style={s.header}>
+          {/* HEADER + OVERVIEW */}
+          <View style={s.headerCard}>
             <View style={s.headerRow}>
               <TouchableOpacity
                 onPress={() => router.back()}
                 style={s.backButton}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <Feather name="chevron-left" size={24} color={colors.text} />
+                <Feather name="chevron-left" size={22} color={colors.text} />
               </TouchableOpacity>
 
               <View style={{ flex: 1 }}>
+                <Text style={s.headerEyebrow}>Body Metrics</Text>
                 <Text style={s.headerTitle}>Weight</Text>
                 <Text style={s.headerSubtitle}>{headerSubtitle}</Text>
 
@@ -447,6 +577,36 @@ export default function WeightPage() {
                 </View>
               </View>
             </View>
+
+            <View style={s.kpiGrid}>
+              <View style={s.kpiCard}>
+                <Text style={s.kpiLabel}>Current</Text>
+                <Text style={s.kpiValue}>{formatKg(currentWeightValue)}</Text>
+              </View>
+              <View style={s.kpiCard}>
+                <Text style={s.kpiLabel}>Change</Text>
+                <Text style={s.kpiValue}>{formatSignedKg(changeValue)}</Text>
+              </View>
+              <View style={s.kpiCard}>
+                <Text style={s.kpiLabel}>Weekly</Text>
+                <Text style={s.kpiValue}>
+                  {Number.isFinite(weeklyChangeValue)
+                    ? formatSignedKg(weeklyChangeValue)
+                    : "--"}
+                </Text>
+              </View>
+              <View style={s.kpiCard}>
+                <Text style={s.kpiLabel}>Start</Text>
+                <Text style={s.kpiValue}>{formatKg(startWeightValue)}</Text>
+              </View>
+            </View>
+
+            <View style={s.trendRow}>
+              <Feather name={trendIconName} size={16} color={colors.subtext} />
+              <Text style={s.trendText}>{trendLabel}</Text>
+            </View>
+
+            <View style={s.headerNeonEdge} />
           </View>
 
           {loading && (
@@ -460,42 +620,17 @@ export default function WeightPage() {
             contentContainerStyle={s.scrollContent}
             keyboardShouldPersistTaps="handled"
           >
-            {/* LATEST / SUMMARY */}
-            <View style={s.section}>
-              <View style={s.latestCard}>
-                <Text style={s.latestLabel}>Current</Text>
-                <Text style={s.latestValue}>
-                  {latest ? `${latest.weight} kg` : "-- kg"}
-                </Text>
-                {latest && (
-                  <Text style={s.latestDateText}>
-                    Logged {formatDate(latest.date)} at{" "}
-                    {formatTime(latest.date)}
-                  </Text>
-                )}
-
-                <View style={s.trendRow}>
-                  <Feather
-                    name="trending-up"
-                    size={16}
-                    color={colors.subtext}
-                  />
-                  <Text style={s.trendText}>{trendLabel}</Text>
-                </View>
-              </View>
-            </View>
-
             {/* PERIOD SELECTOR + GRAPH */}
             <View style={s.section}>
               <View style={s.sectionHeader}>
                 <Text style={s.sectionTitle}>Trend</Text>
                 <View style={s.periodRow}>
-                  {["1W", "1M", "3M", "ALL"].map((p) => {
-                    const active = period === p;
+                  {graphablePeriods.map((option) => {
+                    const active = activePeriod === option.key;
                     return (
                       <TouchableOpacity
-                        key={p}
-                        onPress={() => setPeriod(p)}
+                        key={option.key}
+                        onPress={() => setPeriod(option.key)}
                         activeOpacity={0.8}
                         style={[
                           s.periodChip,
@@ -508,7 +643,7 @@ export default function WeightPage() {
                             active && s.periodChipTextActive,
                           ]}
                         >
-                          {p === "ALL" ? "All" : p}
+                          {option.chipLabel}
                         </Text>
                       </TouchableOpacity>
                     );
@@ -517,7 +652,7 @@ export default function WeightPage() {
               </View>
 
               <View style={s.graphCard}>
-                {filteredWeights.length < 2 ? (
+                {filteredWeights.length < 1 ? (
                   <Text style={s.emptyText}>
                     Not enough entries yet to show a trend. Log a few more
                     weights to see the graph.
@@ -528,6 +663,7 @@ export default function WeightPage() {
                     colors={colors}
                     accent={accent}
                     periodLabel={periodLabel}
+                    periodKey={activePeriod}
                     onPointPress={setSelectedPoint}
                   />
                 )}
@@ -559,58 +695,6 @@ export default function WeightPage() {
               </View>
             </View>
 
-            {/* ADD NEW ENTRY */}
-            <View style={s.section}>
-              <Text style={s.sectionTitle}>Add entry</Text>
-
-              <View style={s.addRow}>
-                <View style={s.addLeft}>
-                  <TextInput
-                    style={s.weightInput}
-                    placeholder="Weight"
-                    placeholderTextColor={colors.subtext}
-                    keyboardType="decimal-pad"
-                    value={newWeight}
-                    onChangeText={setNewWeight}
-                  />
-                  <Text style={s.weightUnit}>kg</Text>
-                </View>
-
-                <TouchableOpacity
-                  style={[
-                    s.addButton,
-                    {
-                      backgroundColor: saving ? colors.subtext : accent,
-                    },
-                  ]}
-                  onPress={handleAddWeight}
-                  disabled={saving || !newWeight.trim()}
-                  activeOpacity={0.8}
-                >
-                  {saving ? (
-                    <ActivityIndicator color={onAccent} />
-                  ) : (
-                    <>
-                      <Feather name="check" size={16} color={onAccent} />
-                      <Text style={s.addButtonText}>Save</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-
-              <TextInput
-                style={s.noteInput}
-                placeholder="Note (optional, e.g. morning fasted, post-training…)"
-                placeholderTextColor={colors.subtext}
-                value={newNote}
-                onChangeText={setNewNote}
-                multiline
-              />
-              <Text style={s.addHint}>
-                Long-press an entry below to delete it.
-              </Text>
-            </View>
-
             {/* HISTORY */}
             <View style={s.section}>
               <View style={s.sectionHeader}>
@@ -627,11 +711,11 @@ export default function WeightPage() {
                 </Text>
               ) : (
                 <View style={s.listCard}>
-                  {weights.map((w, idx) => (
+                  {weightsDesc.map((w, idx) => (
                     <View
                       key={w.id}
                       style={[
-                        idx !== weights.length - 1 && s.listDivider,
+                        idx !== weightsDesc.length - 1 && s.listDivider,
                       ]}
                     >
                       {renderRow(w)}
@@ -641,6 +725,145 @@ export default function WeightPage() {
               )}
             </View>
           </ScrollView>
+
+          <TouchableOpacity
+            style={s.fabAdd}
+            onPress={() => setShowAddEntrySheet(true)}
+            activeOpacity={0.85}
+          >
+            <Feather name="plus" size={17} color={onAccent} />
+            <Text style={s.fabAddText}>Add entry</Text>
+          </TouchableOpacity>
+
+          <Modal
+            visible={showAddEntrySheet}
+            transparent
+            animationType="slide"
+            onRequestClose={() => setShowAddEntrySheet(false)}
+          >
+            <View style={s.sheetOverlay}>
+              <TouchableOpacity
+                style={s.sheetBackdrop}
+                activeOpacity={1}
+                onPress={() => {
+                  if (!saving) setShowAddEntrySheet(false);
+                }}
+              />
+
+              <KeyboardAvoidingView
+                style={s.sheetKeyboard}
+                behavior={Platform.OS === "ios" ? "padding" : undefined}
+              >
+                <View style={s.sheetCard}>
+                  <View style={s.sheetHandle} />
+                  <View style={s.sheetHeader}>
+                    <Text style={s.sheetTitle}>Add Entry</Text>
+                    <TouchableOpacity
+                      onPress={() => setShowAddEntrySheet(false)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={s.sheetClose}
+                    >
+                      <Feather name="x" size={16} color={colors.text} />
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={s.sheetSubtitle}>
+                    Log today’s weight quickly.
+                  </Text>
+
+                  <View style={s.addCard}>
+                    <View style={s.addRow}>
+                      <TouchableOpacity
+                        style={s.adjustButton}
+                        onPress={() => adjustDraftWeight(-0.1)}
+                        activeOpacity={0.8}
+                      >
+                        <Feather name="minus" size={14} color={colors.text} />
+                        <Text style={s.adjustButtonText}>0.1</Text>
+                      </TouchableOpacity>
+
+                      <View style={s.addLeft}>
+                        <TextInput
+                          style={s.weightInput}
+                          placeholder="Weight"
+                          placeholderTextColor={colors.subtext}
+                          keyboardType="decimal-pad"
+                          value={newWeight}
+                          onChangeText={setNewWeight}
+                        />
+                        <Text style={s.weightUnit}>kg</Text>
+                      </View>
+
+                      <TouchableOpacity
+                        style={s.adjustButton}
+                        onPress={() => adjustDraftWeight(0.1)}
+                        activeOpacity={0.8}
+                      >
+                        <Feather name="plus" size={14} color={colors.text} />
+                        <Text style={s.adjustButtonText}>0.1</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[
+                          s.addButton,
+                          {
+                            backgroundColor: saving ? colors.subtext : accent,
+                          },
+                        ]}
+                        onPress={async () => {
+                          const saved = await handleAddWeight();
+                          if (saved) setShowAddEntrySheet(false);
+                        }}
+                        disabled={saving || !newWeight.trim()}
+                        activeOpacity={0.8}
+                      >
+                        {saving ? (
+                          <ActivityIndicator color={onAccent} />
+                        ) : (
+                          <>
+                            <Feather name="check" size={16} color={onAccent} />
+                            <Text style={s.addButtonText}>Save</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={s.quickActionRow}>
+                      <TouchableOpacity
+                        style={s.ghostAction}
+                        onPress={applyLatestWeight}
+                        disabled={!latest}
+                        activeOpacity={0.8}
+                      >
+                        <Feather
+                          name="clock"
+                          size={14}
+                          color={colors.subtext}
+                        />
+                        <Text style={s.ghostActionText}>
+                          {latest
+                            ? `Use latest (${formatKg(latest.weight)})`
+                            : "No latest yet"}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <TextInput
+                      style={s.noteInput}
+                      placeholder="Note (optional, e.g. morning fasted, post-training…)"
+                      placeholderTextColor={colors.subtext}
+                      value={newNote}
+                      onChangeText={setNewNote}
+                      multiline
+                    />
+                  </View>
+
+                  <Text style={s.addHint}>
+                    Tap the bin icon to delete. Long-press an entry also works.
+                  </Text>
+                </View>
+              </KeyboardAvoidingView>
+            </View>
+          </Modal>
         </KeyboardAvoidingView>
       </TouchableWithoutFeedback>
     </SafeAreaView>
@@ -649,18 +872,117 @@ export default function WeightPage() {
 
 /* ---------------- GRAPH COMPONENT ---------------- */
 
-function WeightGraph({ data, colors, accent, periodLabel, onPointPress }) {
+function formatXAxisTick(date, periodKey) {
+  if (!(date instanceof Date) || isNaN(date.getTime())) return "";
+
+  if (periodKey === "1W") {
+    return date.toLocaleDateString("en-GB", {
+      weekday: "short",
+    });
+  }
+
+  if (periodKey === "ALL") {
+    return date.toLocaleDateString("en-GB", {
+      month: "short",
+      year: "2-digit",
+    });
+  }
+
+  return date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function compressAxisTicks(ticks, minGapPx, maxCount) {
+  if (!Array.isArray(ticks) || ticks.length <= 2) return ticks || [];
+
+  const sorted = [...ticks]
+    .filter((tick) => Number.isFinite(tick?.x) && typeof tick?.label === "string")
+    .sort((a, b) => a.x - b.x);
+  if (sorted.length <= 2) return sorted;
+
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  const middle = sorted.slice(1, -1);
+
+  const out = [first];
+  middle.forEach((tick) => {
+    const prev = out[out.length - 1];
+    if (tick.x - prev.x >= minGapPx && last.x - tick.x >= minGapPx * 0.7) {
+      out.push(tick);
+    }
+  });
+
+  if (last.x - out[out.length - 1].x < minGapPx * 0.7) {
+    out[out.length - 1] = last;
+  } else {
+    out.push(last);
+  }
+
+  if (out.length <= maxCount) return out;
+
+  const sampled = [out[0]];
+  const inner = out.slice(1, -1);
+  const innerWanted = Math.max(0, maxCount - 2);
+
+  if (innerWanted === 1) {
+    sampled.push(inner[Math.floor(inner.length / 2)]);
+  } else if (innerWanted > 1) {
+    for (let i = 0; i < innerWanted; i += 1) {
+      const idx = Math.round((i * (inner.length - 1)) / (innerWanted - 1));
+      sampled.push(inner[idx]);
+    }
+  }
+
+  sampled.push(out[out.length - 1]);
+  return sampled;
+}
+
+function WeightGraph({
+  data,
+  colors,
+  accent,
+  periodLabel,
+  periodKey,
+  onPointPress,
+}) {
   const width = SCREEN_WIDTH - 36; // page padding matches main layout
   const height = GRAPH_HEIGHT;
 
   const pointsData = useMemo(() => {
-    if (!data || data.length < 2) return null;
+    if (!data || data.length < 1) return null;
 
     const sorted = [...data].sort((a, b) => {
-      const da = a.date?.toDate?.() || new Date(a.date);
-      const db = b.date?.toDate?.() || new Date(b.date);
+      const da = coerceDate(a.date || a.createdAt) || new Date(0);
+      const db = coerceDate(b.date || b.createdAt) || new Date(0);
       return da - db;
     });
+
+    const dates = sorted.map((row) => {
+      return coerceDate(row?.date || row?.createdAt);
+    });
+    if (dates.some((d) => !(d instanceof Date) || isNaN(d.getTime()))) {
+      return null;
+    }
+
+    const timestamps = dates.map((d) => d.getTime());
+    const minDataMs = Math.min(...timestamps);
+    const maxDataMs = Math.max(...timestamps);
+
+    const selectedPeriod = PERIOD_OPTIONS.find(
+      (option) => option.key === periodKey
+    );
+    const periodDaysBack = selectedPeriod?.daysBack;
+
+    const nowMs = Date.now();
+    const maxMs = Number.isFinite(periodDaysBack)
+      ? Math.max(nowMs, maxDataMs)
+      : maxDataMs;
+    const minMs = Number.isFinite(periodDaysBack)
+      ? maxMs - periodDaysBack * 24 * 60 * 60 * 1000
+      : minDataMs;
+    const hasTimeSpan = maxMs > minMs;
 
     const values = sorted.map((d) => Number(d.weight || d.value || 0));
     let minV = Math.min(...values);
@@ -668,15 +990,15 @@ function WeightGraph({ data, colors, accent, periodLabel, onPointPress }) {
 
     if (!isFinite(minV) || !isFinite(maxV)) return null;
 
-    // Give a bit of headroom so the line doesn't hug the edges
-    if (minV === maxV) {
-      minV -= 0.5;
-      maxV += 0.5;
-    } else {
-      const pad = (maxV - minV) * 0.15;
-      minV -= pad;
-      maxV += pad;
-    }
+    // Keep a wider Y-domain so the axis has more spread.
+    const rawSpan = Math.max(0, maxV - minV);
+    const center = (maxV + minV) / 2;
+    const targetSpan =
+      rawSpan === 0
+        ? GRAPH_Y_MIN_SPAN_KG
+        : Math.max(GRAPH_Y_MIN_SPAN_KG, rawSpan * GRAPH_Y_SPREAD_MULTIPLIER);
+    minV = center - targetSpan / 2;
+    maxV = center + targetSpan / 2;
 
     const span = maxV - minV || 1;
     const usableWidth = width - GRAPH_PADDING_LEFT - GRAPH_PADDING_RIGHT;
@@ -684,9 +1006,11 @@ function WeightGraph({ data, colors, accent, periodLabel, onPointPress }) {
 
     const points = sorted.map((row, index) => {
       const v = values[index];
+      const xRatio = hasTimeSpan
+        ? (timestamps[index] - minMs) / (maxMs - minMs)
+        : index / (sorted.length - 1 || 1);
       const x =
-        GRAPH_PADDING_LEFT +
-        (index / (sorted.length - 1 || 1)) * usableWidth;
+        GRAPH_PADDING_LEFT + xRatio * usableWidth;
       const y =
         GRAPH_PADDING_TOP +
         (1 - (v - minV) / span) * usableHeight;
@@ -695,9 +1019,12 @@ function WeightGraph({ data, colors, accent, periodLabel, onPointPress }) {
         x,
         y,
         weight: v,
-        date: row.date,
+        date: row.date || row.createdAt,
         note: row.note,
-        raw: row,
+        raw: {
+          ...row,
+          date: row.date || row.createdAt,
+        },
       };
     });
 
@@ -705,20 +1032,119 @@ function WeightGraph({ data, colors, accent, periodLabel, onPointPress }) {
       points,
       min: minV,
       max: maxV,
-      mid: minV + span / 2,
+      span,
+      minMs,
+      maxMs,
+      timestamps,
+      usableWidth,
+      usableHeight,
     };
-  }, [data, width, height]);
+  }, [data, width, height, periodKey]);
+
+  const yTicks = useMemo(() => {
+    if (!pointsData) return [];
+    const { max, span, usableHeight } = pointsData;
+    return [0, 0.25, 0.5, 0.75, 1].map((ratio) => ({
+      value: max - span * ratio,
+      y: GRAPH_PADDING_TOP + ratio * usableHeight,
+    }));
+  }, [pointsData]);
+
+  const xTicks = useMemo(() => {
+    if (!pointsData) return [];
+
+    const { minMs, maxMs, usableWidth } = pointsData;
+    if (!isFinite(minMs) || !isFinite(maxMs)) return [];
+
+    if (periodKey === "ALL") {
+      const startDate = new Date(minMs);
+      const endDate = new Date(maxMs);
+      const candidates = [
+        { ts: minMs, label: formatXAxisTick(startDate, "ALL") },
+      ];
+
+      const cursor = new Date(
+        startDate.getFullYear(),
+        startDate.getMonth() + 1,
+        1
+      );
+
+      while (cursor.getTime() < maxMs) {
+        candidates.push({
+          ts: cursor.getTime(),
+          label: cursor.toLocaleDateString("en-GB", {
+            month: "short",
+            year: "2-digit",
+          }),
+        });
+        cursor.setMonth(cursor.getMonth() + 1);
+      }
+
+      candidates.push({
+        ts: maxMs,
+        label: formatXAxisTick(endDate, "ALL"),
+      });
+
+      const rawTicks = candidates.map((tick) => {
+        const ratio = maxMs === minMs ? 0 : (tick.ts - minMs) / (maxMs - minMs);
+        return {
+          x: GRAPH_PADDING_LEFT + ratio * usableWidth,
+          label: tick.label,
+        };
+      });
+
+      return compressAxisTicks(rawTicks, 56, 5);
+    }
+
+    const countByPeriod = {
+      "1W": 7,
+      "1M": 5,
+      "3M": 6,
+      "6M": 6,
+      ALL: 6,
+    };
+    const tickCount = Math.max(2, countByPeriod[periodKey] || 5);
+
+    if (maxMs === minMs) {
+      const onlyDate = new Date(minMs);
+      return [
+        {
+          x: GRAPH_PADDING_LEFT,
+          label: formatXAxisTick(onlyDate, periodKey),
+        },
+      ];
+    }
+
+    const ticks = Array.from({ length: tickCount }, (_, index) => {
+      const ratio = index / (tickCount - 1);
+      const tickMs = minMs + ratio * (maxMs - minMs);
+      const tickDate = new Date(tickMs);
+      return {
+        x: GRAPH_PADDING_LEFT + ratio * usableWidth,
+        label: formatXAxisTick(tickDate, periodKey),
+      };
+    });
+
+    const deduped = ticks.filter(
+      (tick, index, arr) =>
+        index === 0 ||
+        index === arr.length - 1 ||
+        tick.label !== arr[index - 1].label
+    );
+    const gapByPeriod = {
+      "1W": 34,
+      "1M": 46,
+      "3M": 50,
+      "6M": 52,
+      ALL: 56,
+    };
+    return compressAxisTicks(deduped, gapByPeriod[periodKey] || 46, 6);
+  }, [pointsData, periodKey]);
 
   if (!pointsData) return null;
 
-  const { points, min, max, mid } = pointsData;
+  const { points } = pointsData;
   const polylinePoints = points.map((p) => `${p.x},${p.y}`).join(" ");
-
-  const firstLabel = formatLabel(points[0]?.date);
-  const midLabel = formatLabel(
-    points[Math.floor(points.length / 2)]?.date
-  );
-  const lastLabel = formatLabel(points[points.length - 1]?.date);
 
   // area path under line
   const areaPath = (() => {
@@ -737,22 +1163,28 @@ function WeightGraph({ data, colors, accent, periodLabel, onPointPress }) {
 
   return (
     <Svg width={width} height={height}>
-      {/* Horizontal grid lines at max / mid / min */}
-      {[
-        { value: max, labelY: GRAPH_PADDING_TOP + 8 },
-        {
-          value: mid,
-          labelY:
-            GRAPH_PADDING_TOP +
-            (height - GRAPH_PADDING_TOP - GRAPH_PADDING_BOTTOM) / 2,
-        },
-        { value: min, labelY: height - GRAPH_PADDING_BOTTOM },
-      ].map((row, idx) => (
+      {/* Horizontal grid lines with richer Y scale */}
+      {yTicks.map((row, idx) => (
         <GridRow
           key={idx}
           width={width}
-          y={row.labelY}
+          y={row.y}
           label={`${row.value.toFixed(1)} kg`}
+          colors={colors}
+        />
+      ))}
+
+      {/* Vertical guide lines for time ticks */}
+      {xTicks.map((tick, idx) => (
+        <Line
+          key={`x-grid-${idx}`}
+          x1={tick.x}
+          x2={tick.x}
+          y1={GRAPH_PADDING_TOP}
+          y2={height - GRAPH_PADDING_BOTTOM}
+          stroke={colors?.subtext || "#4B5563"}
+          strokeWidth={1}
+          opacity={0.12}
         />
       ))}
 
@@ -783,40 +1215,44 @@ function WeightGraph({ data, colors, accent, periodLabel, onPointPress }) {
         />
       ))}
 
-      {/* Timeframe label above axis */}
+      {/* Top labels */}
       <TextSvg
-        x={width / 2}
-        y={height - GRAPH_PADDING_BOTTOM + 10}
+        x={GRAPH_PADDING_LEFT}
+        y={GRAPH_PADDING_TOP - 6}
+        text="Weight (kg)"
+        anchor="start"
+        color={colors.subtext}
+      />
+      <TextSvg
+        x={width - GRAPH_PADDING_RIGHT}
+        y={GRAPH_PADDING_TOP - 6}
         text={periodLabel}
-        anchor="middle"
+        anchor="end"
+        color={colors.subtext}
       />
 
       {/* Date labels on X-axis */}
-      <TextSvg
-        x={GRAPH_PADDING_LEFT}
-        y={height - 6}
-        text={firstLabel}
-        anchor="start"
-      />
-      {midLabel && (
+      {xTicks.map((tick, index) => (
         <TextSvg
-          x={width / 2}
+          key={`x-label-${index}`}
+          x={tick.x}
           y={height - 6}
-          text={midLabel}
-          anchor="middle"
+          text={tick.label}
+          anchor={
+            index === 0
+              ? "start"
+              : index === xTicks.length - 1
+              ? "end"
+              : "middle"
+          }
+          color={colors.subtext}
         />
-      )}
-      <TextSvg
-        x={width - GRAPH_PADDING_RIGHT}
-        y={height - 6}
-        text={lastLabel}
-        anchor="end"
-      />
+      ))}
     </Svg>
   );
 }
 
-function GridRow({ width, y, label }) {
+function GridRow({ width, y, label, colors }) {
   return (
     <>
       <Line
@@ -824,27 +1260,28 @@ function GridRow({ width, y, label }) {
         x2={width - GRAPH_PADDING_RIGHT}
         y1={y}
         y2={y}
-        stroke="#4B5563"
+        stroke={colors?.subtext || "#4B5563"}
         strokeWidth={1}
         strokeDasharray="4 4"
-        opacity={0.6}
+        opacity={0.35}
       />
       <TextSvg
         x={GRAPH_PADDING_LEFT - 10}
         y={y + 3}
         text={label}
         anchor="end"
+        color={colors?.subtext}
       />
     </>
   );
 }
 
-function TextSvg({ x, y, text, anchor = "start" }) {
+function TextSvg({ x, y, text, anchor = "start", color = "#9CA3AF" }) {
   return (
     <SvgText
       x={x}
       y={y}
-      fill="#9CA3AF"
+      fill={color}
       fontSize={10}
       textAnchor={anchor}
     >
@@ -853,40 +1290,28 @@ function TextSvg({ x, y, text, anchor = "start" }) {
   );
 }
 
-function formatLabel(tsOrDate) {
-  if (!tsOrDate) return "";
-  const d =
-    tsOrDate?.toDate?.() instanceof Function
-      ? tsOrDate.toDate()
-      : tsOrDate instanceof Date
-      ? tsOrDate
-      : new Date(tsOrDate);
-  if (isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-  });
-}
-
 /* ---------------- STYLES ---------------- */
 
 function makeStyles(colors, isDark, accent, onAccent) {
-  const cardBg = isDark ? "#12141A" : colors.sapSilverLight || colors.card;
-  const panelBg = isDark ? "#0E1015" : "#FFFFFF";
-  const borderSoft = isDark ? "rgba(255,255,255,0.11)" : colors.sapSilverMedium || colors.border;
-  const borderHard = isDark ? "rgba(255,255,255,0.16)" : "#D7DBE3";
+  const cardBase = colors.card || (isDark ? "#101219" : "#F3F4F6");
+  const cardBg = withHexAlpha(cardBase, isDark ? "D4" : "F4");
+  const panelBg = withHexAlpha(cardBase, isDark ? "CC" : "F2");
+  const panelBgSoft = withHexAlpha(cardBase, isDark ? "B8" : "EA");
+  const borderSoft =
+    colors.border || (isDark ? "rgba(255,255,255,0.10)" : "#E1E3E8");
+  const borderHard = borderSoft;
 
   return StyleSheet.create({
     safe: {
       flex: 1,
-      backgroundColor: isDark ? "#050506" : "#F5F5F7",
+      backgroundColor: colors.bg || (isDark ? "#050506" : "#F5F5F7"),
     },
     page: {
       flex: 1,
-      paddingHorizontal: 18,
+      paddingHorizontal: 16,
     },
     scrollContent: {
-      paddingBottom: 40,
+      paddingBottom: 120,
     },
 
     loadingOverlay: {
@@ -897,9 +1322,16 @@ function makeStyles(colors, isDark, accent, onAccent) {
     },
 
     /* HEADER */
-    header: {
+    headerCard: {
       marginTop: 6,
       marginBottom: 18,
+      borderRadius: 22,
+      borderWidth: 0,
+      borderColor: "transparent",
+      backgroundColor: "transparent",
+      paddingHorizontal: 12,
+      paddingTop: 10,
+      paddingBottom: 12,
     },
     headerRow: {
       flexDirection: "row",
@@ -917,11 +1349,19 @@ function makeStyles(colors, isDark, accent, onAccent) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: borderHard,
     },
+    headerEyebrow: {
+      fontSize: 11,
+      fontWeight: "800",
+      color: colors.subtext,
+      textTransform: "uppercase",
+      letterSpacing: 0.8,
+      marginBottom: 4,
+    },
     headerTitle: {
-      fontSize: 31,
+      fontSize: 26,
       fontWeight: "800",
       color: colors.text,
-      marginBottom: 2,
+      marginBottom: 1,
       letterSpacing: 0.1,
     },
     headerSubtitle: {
@@ -943,9 +1383,9 @@ function makeStyles(colors, isDark, accent, onAccent) {
       paddingHorizontal: 10,
       paddingVertical: 7,
       borderRadius: 999,
-      backgroundColor: panelBg,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: borderSoft,
+      backgroundColor: "transparent",
+      borderWidth: 0,
+      borderColor: "transparent",
     },
     headerMetaText: {
       color: colors.text,
@@ -953,17 +1393,52 @@ function makeStyles(colors, isDark, accent, onAccent) {
       fontWeight: "800",
       letterSpacing: 0.1,
     },
+    kpiGrid: {
+      marginTop: 10,
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    kpiCard: {
+      width: "48%",
+      borderRadius: 14,
+      backgroundColor: "transparent",
+      borderWidth: 0,
+      borderColor: "transparent",
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+    },
+    kpiLabel: {
+      fontSize: 11,
+      color: colors.subtext,
+      fontWeight: "800",
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+      marginBottom: 3,
+    },
+    kpiValue: {
+      fontSize: 15,
+      color: colors.text,
+      fontWeight: "800",
+    },
+    headerNeonEdge: {
+      marginTop: 10,
+      height: 2,
+      borderRadius: 999,
+      backgroundColor: withHexAlpha(accent, isDark ? "B0" : "90"),
+    },
 
     /* SECTIONS */
     section: {
       marginBottom: 26,
     },
     sectionTitle: {
-      fontSize: 15,
-      fontWeight: "800",
+      fontSize: 13,
+      fontWeight: "900",
       color: colors.text,
       marginBottom: 8,
-      letterSpacing: 0.2,
+      letterSpacing: 0.7,
+      textTransform: "uppercase",
     },
     sectionHeader: {
       flexDirection: "row",
@@ -976,32 +1451,6 @@ function makeStyles(colors, isDark, accent, onAccent) {
       color: colors.subtext,
     },
 
-    /* LATEST CARD */
-    latestCard: {
-      borderRadius: 16,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
-      backgroundColor: cardBg,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: borderSoft,
-    },
-    latestLabel: {
-      fontSize: 12,
-      color: colors.subtext,
-      letterSpacing: 0.2,
-      fontWeight: "700",
-      marginBottom: 4,
-    },
-    latestValue: {
-      fontSize: 32,
-      fontWeight: "800",
-      color: colors.text,
-    },
-    latestDateText: {
-      fontSize: 12,
-      color: colors.subtext,
-      marginTop: 4,
-    },
     trendRow: {
       flexDirection: "row",
       alignItems: "center",
@@ -1042,12 +1491,10 @@ function makeStyles(colors, isDark, accent, onAccent) {
     },
 
     graphCard: {
-      borderRadius: 16,
       paddingVertical: 8,
-      paddingHorizontal: 8,
-      backgroundColor: cardBg,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: borderSoft,
+      paddingHorizontal: 0,
+      backgroundColor: "transparent",
+      borderWidth: 0,
       marginTop: 6,
     },
 
@@ -1056,7 +1503,7 @@ function makeStyles(colors, isDark, accent, onAccent) {
       paddingHorizontal: 8,
       paddingVertical: 8,
       borderRadius: 12,
-      backgroundColor: isDark ? "#101216" : "#ECEFF4",
+      backgroundColor: panelBgSoft,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: borderSoft,
     },
@@ -1079,7 +1526,7 @@ function makeStyles(colors, isDark, accent, onAccent) {
       paddingHorizontal: 10,
       paddingVertical: 8,
       borderRadius: 12,
-      backgroundColor: isDark ? "#0B0C10" : "#ECEFF4",
+      backgroundColor: panelBgSoft,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: borderSoft,
     },
@@ -1100,11 +1547,36 @@ function makeStyles(colors, isDark, accent, onAccent) {
     },
 
     /* ADD ENTRY */
+    addCard: {
+      borderRadius: 20,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+      backgroundColor: cardBg,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+    },
     addRow: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 10,
+      gap: 8,
       marginBottom: 8,
+    },
+    adjustButton: {
+      height: 38,
+      borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+      backgroundColor: panelBg,
+      paddingHorizontal: 8,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 4,
+    },
+    adjustButtonText: {
+      color: colors.subtext,
+      fontSize: 11,
+      fontWeight: "700",
     },
     addLeft: {
       flex: 1,
@@ -1137,12 +1609,32 @@ function makeStyles(colors, isDark, accent, onAccent) {
       borderRadius: 12,
       gap: 6,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: "rgba(0,0,0,0.12)",
+      borderColor: withHexAlpha(accent, isDark ? "66" : "8A"),
     },
     addButtonText: {
       color: onAccent,
       fontWeight: "700",
       fontSize: 14,
+    },
+    quickActionRow: {
+      marginBottom: 8,
+    },
+    ghostAction: {
+      borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+      backgroundColor: panelBg,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      alignSelf: "flex-start",
+    },
+    ghostActionText: {
+      color: colors.subtext,
+      fontSize: 12,
+      fontWeight: "700",
     },
     noteInput: {
       borderRadius: 12,
@@ -1161,9 +1653,92 @@ function makeStyles(colors, isDark, accent, onAccent) {
       color: colors.subtext,
     },
 
+    fabAdd: {
+      position: "absolute",
+      right: 18,
+      bottom: 18,
+      height: 46,
+      borderRadius: 999,
+      paddingHorizontal: 14,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      backgroundColor: accent,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: withHexAlpha(accent, isDark ? "8A" : "AA"),
+      shadowColor: "#000",
+      shadowOpacity: 0.2,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 8,
+    },
+    fabAddText: {
+      color: onAccent,
+      fontSize: 13,
+      fontWeight: "800",
+      letterSpacing: 0.2,
+    },
+
+    sheetOverlay: {
+      flex: 1,
+      justifyContent: "flex-end",
+    },
+    sheetBackdrop: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: "rgba(0,0,0,0.45)",
+    },
+    sheetKeyboard: {
+      width: "100%",
+    },
+    sheetCard: {
+      width: "100%",
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      backgroundColor: colors.bg || (isDark ? "#050506" : "#F5F5F7"),
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+      paddingHorizontal: 16,
+      paddingTop: 10,
+      paddingBottom: 16,
+    },
+    sheetHandle: {
+      alignSelf: "center",
+      width: 42,
+      height: 4,
+      borderRadius: 999,
+      backgroundColor: withHexAlpha(colors.subtext || "#9CA3AF", "55"),
+      marginBottom: 10,
+    },
+    sheetHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 2,
+    },
+    sheetTitle: {
+      fontSize: 18,
+      fontWeight: "800",
+      color: colors.text,
+    },
+    sheetSubtitle: {
+      fontSize: 13,
+      color: colors.subtext,
+      marginBottom: 10,
+    },
+    sheetClose: {
+      width: 30,
+      height: 30,
+      borderRadius: 10,
+      alignItems: "center",
+      justifyContent: "center",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+      backgroundColor: panelBg,
+    },
+
     /* LIST */
     listCard: {
-      borderRadius: 16,
+      borderRadius: 20,
       backgroundColor: cardBg,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: borderSoft,
@@ -1178,6 +1753,16 @@ function makeStyles(colors, isDark, accent, onAccent) {
       flexDirection: "row",
       alignItems: "center",
       gap: 10,
+    },
+    deleteMini: {
+      width: 30,
+      height: 30,
+      borderRadius: 10,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+      backgroundColor: panelBg,
+      alignItems: "center",
+      justifyContent: "center",
     },
     entryWeight: {
       fontSize: 16,

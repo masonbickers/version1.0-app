@@ -27,8 +27,6 @@ import { API_URL } from "../../../config/api";
 import { useTheme } from "../../../providers/ThemeProvider";
 
 const PRIMARY = "#E6FF3B";
-const SILVER_LIGHT = "#F3F4F6";
-const SILVER_MEDIUM = "#E1E3E8";
 
 const MEAL_TYPES = ["Breakfast", "Lunch", "Dinner", "Snack"];
 
@@ -46,8 +44,6 @@ export default function BarcodeResultScreen() {
   useEffect(() => {
     const parent = navigation.getParent?.();
     if (!parent) return;
-
-    const prev = parent.getState?.(); // not used, but keeps it safe
 
     parent.setOptions?.({
       tabBarStyle: { display: "none" },
@@ -72,13 +68,19 @@ export default function BarcodeResultScreen() {
     return ok ? raw : new Date().toISOString();
   }, [params.date]);
 
+  const mealTypeParam = useMemo(() => {
+    const raw = typeof params.mealType === "string" ? params.mealType : "";
+    const clean = raw.trim();
+    return MEAL_TYPES.includes(clean) ? clean : "";
+  }, [params.mealType]);
+
   // ---------------- State ----------------
   const [loading, setLoading] = useState(true);
   const [lookupError, setLookupError] = useState("");
   const [product, setProduct] = useState(null);
 
   // serving controls
-  const [mealType, setMealType] = useState("Lunch");
+  const [mealType, setMealType] = useState(mealTypeParam || "Lunch");
   const [unitMode, setUnitMode] = useState("serving"); // "serving" | "grams"
   const [qty, setQty] = useState(1); // servings or grams depending on mode
 
@@ -104,11 +106,6 @@ export default function BarcodeResultScreen() {
         setLoading(true);
         setLookupError("");
 
-        // 🔧 CHANGE THIS ENDPOINT TO MATCH YOUR SERVER
-        // Example options:
-        // - `${API_URL}/nutrition/barcode-lookup`
-        // - `${API_URL}/nutrition/barcode`
-        // - `${API_URL}/nutrition/lookup-barcode`
         const endpoint = `${API_URL}/nutrition/barcode-lookup`;
 
         const res = await fetch(endpoint, {
@@ -241,10 +238,11 @@ export default function BarcodeResultScreen() {
       params: {
         barcode: String(barcode),
         date: dateParam,
+        mealType,
         fromBarcode: "1",
       },
     });
-  }, [router, barcode, dateParam]);
+  }, [router, barcode, dateParam, mealType]);
 
   if (loading) {
     return (
@@ -278,7 +276,12 @@ export default function BarcodeResultScreen() {
 
             <TouchableOpacity
               style={s.secondaryBtn}
-              onPress={() => router.replace("/nutrition/barcode")}
+              onPress={() =>
+                router.replace({
+                  pathname: "/nutrition/barcode",
+                  params: { date: dateParam, mealType },
+                })
+              }
               activeOpacity={0.9}
             >
               <Text style={s.secondaryBtnText}>Scan again</Text>

@@ -16,6 +16,7 @@
  */
 
 import { Feather } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import {
@@ -36,7 +37,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -44,6 +44,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { API_URL } from "../../../config/api";
 import { auth, db } from "../../../firebaseConfig";
@@ -71,6 +72,41 @@ const COLLECTIONS = {
   mealTemplates: "mealTemplates",
   meals: "meals", // logged meals (history comes from here)
 };
+
+const PRIMARY = "#E6FF3B";
+const SILVER_LIGHT = "#F3F4F6";
+const SILVER_MEDIUM = "#E1E3E8";
+
+function useScreenTheme() {
+  const { colors, isDark } = useTheme();
+  const accentBg = colors?.accentBg ?? colors?.sapPrimary ?? PRIMARY;
+  return {
+    bg: isDark ? "#050506" : "#F5F5F7",
+    card: colors?.card ?? (isDark ? "#101219" : SILVER_LIGHT),
+    text: colors?.text ?? (isDark ? "#E5E7EB" : "#0F172A"),
+    subtext: colors?.subtext ?? (isDark ? "#A1A1AA" : "#64748B"),
+    border:
+      colors?.border ?? (isDark ? "rgba(255,255,255,0.10)" : SILVER_MEDIUM),
+    primaryBg: accentBg,
+    primaryText: colors?.sapOnPrimary ?? "#050506",
+    muted: colors?.surfaceAlt ?? (isDark ? "#18191E" : "#E6E7EC"),
+    isDark,
+  };
+}
+
+function withHexAlpha(color, alpha) {
+  const raw = String(color || "").trim();
+  const a = String(alpha || "").trim();
+  if (!/^([0-9A-Fa-f]{2})$/.test(a)) return raw;
+  if (/^#[0-9A-Fa-f]{6}$/.test(raw)) return `${raw}${a}`;
+  if (/^#[0-9A-Fa-f]{3}$/.test(raw)) {
+    const r = raw[1];
+    const g = raw[2];
+    const b = raw[3];
+    return `#${r}${r}${g}${g}${b}${b}${a}`;
+  }
+  return raw;
+}
 
 function safeLower(x) {
   return String(x || "").toLowerCase();
@@ -217,7 +253,9 @@ function toQuickAIRow(ai, quickText) {
 }
 
 export default function AddFoodPage() {
-  const { colors, isDark } = useTheme();
+  const theme = useScreenTheme();
+  const colors = theme;
+  const isDark = theme.isDark;
   const router = useRouter();
   const params = useLocalSearchParams();
 
@@ -254,23 +292,24 @@ export default function AddFoodPage() {
   const [addingId, setAddingId] = useState(""); // row.id currently adding
 
   // ✅ QUICK LOG (AI) state
-  const [quickText, setQuickText] = useState("");
   const [quickLoading, setQuickLoading] = useState(false);
   const [quickCandidate, setQuickCandidate] = useState(null);
   const [quickConfirmOpen, setQuickConfirmOpen] = useState(false);
+  const [quickComposerOpen, setQuickComposerOpen] = useState(false);
+  const [quickComposerText, setQuickComposerText] = useState("");
   const quickLastTextRef = useRef("");
+  const barcodePrefillKeyRef = useRef("");
 
   // SAP GEL tokens
-  const accentBg = colors?.accentBg ?? colors?.sapPrimary ?? "#E6FF3B";
-  const accentText = colors?.accentText ?? (isDark ? accentBg : "#7A8F00");
-  const silverLight =
-    colors?.sapSilverLight ?? (isDark ? "#111217" : "#F3F4F6");
-  const silverMed = colors?.sapSilverMedium ?? "#E1E3E8";
+  const accentBg = theme.primaryBg;
+  const accentText = theme.primaryText;
+  const silverLight = theme.card;
+  const silverMed = theme.border;
 
   const s = useMemo(
     () =>
-      makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed),
-    [colors, isDark, accentBg, accentText, silverLight, silverMed]
+      makeStyles(theme, isDark, accentBg, accentText, silverLight, silverMed),
+    [theme, isDark, accentBg, accentText, silverLight, silverMed]
   );
 
   // auth gate
@@ -296,6 +335,83 @@ export default function AddFoodPage() {
     () => formatDayLabel(selectedDateISO),
     [selectedDateISO]
   );
+
+  const barcodePrefill = useMemo(() => {
+    if (String(params?.fromBarcode || "") !== "1") return null;
+
+    const title = String(params?.title || "").trim();
+    if (!title) return null;
+
+    const preferredMeal = MEAL_TYPES.includes(String(params?.mealType || ""))
+      ? String(params?.mealType)
+      : "";
+
+    const barcode = String(params?.barcode || "").trim();
+    const brand = String(params?.brand || "").trim();
+
+    const toNum = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const calories = toNum(params?.calories);
+    const protein = toNum(params?.protein);
+    const carbs = toNum(params?.carbs);
+    const fat = toNum(params?.fat);
+
+    const quantityRaw = Number(params?.quantity);
+    const quantity = Number.isFinite(quantityRaw) && quantityRaw > 0 ? quantityRaw : 1;
+    const unitMode = String(params?.unitMode || "serving").toLowerCase() === "grams" ? "grams" : "serving";
+    const servingSizeRaw = Number(params?.servingSize);
+    const servingSize = Number.isFinite(servingSizeRaw) && servingSizeRaw > 0 ? servingSizeRaw : 1;
+    const servingUnit = String(
+      params?.servingUnit || (unitMode === "grams" ? "g" : "serving")
+    ).trim();
+
+    const servingText =
+      unitMode === "grams"
+        ? `${Math.round(quantity)} g`
+        : `${quantity} serving${quantity === 1 ? "" : "s"} • ${servingSize} ${servingUnit}`;
+
+    const notes = [
+      barcode ? `Barcode: ${barcode}` : "",
+      brand ? `Brand: ${brand}` : "",
+      `Quantity: ${servingText}`,
+    ]
+      .filter(Boolean)
+      .join(" • ");
+
+    const row = normaliseRow(
+      {
+        id: `barcode:${barcode || safeLower(title)}:${safeLower(String(quantity))}`,
+        title,
+        brand,
+        calories,
+        protein,
+        carbs,
+        fat,
+        servingText,
+        notes,
+      },
+      "barcode"
+    );
+
+    return { row, preferredMeal };
+  }, [
+    params?.fromBarcode,
+    params?.title,
+    params?.mealType,
+    params?.barcode,
+    params?.brand,
+    params?.calories,
+    params?.protein,
+    params?.carbs,
+    params?.fat,
+    params?.quantity,
+    params?.unitMode,
+    params?.servingSize,
+    params?.servingUnit,
+  ]);
 
   /** ✅ consistent “close/back” behaviour */
   const goBackToNutrition = useCallback(() => {
@@ -409,11 +525,10 @@ export default function AddFoodPage() {
   }, [router, selectedDateISO, mealType]);
 
   const handleQuickAdd = useCallback(() => {
-    router.push({
-      pathname: "/nutrition/quick-add",
-      params: { date: selectedDateISO, mealType },
-    });
-  }, [router, selectedDateISO, mealType]);
+    const seed = String(search || "").trim();
+    setQuickComposerText((prev) => (String(prev || "").trim() ? prev : seed));
+    setQuickComposerOpen(true);
+  }, [search]);
 
   /* ---------------- data helpers ---------------- */
 
@@ -558,6 +673,22 @@ export default function AddFoodPage() {
     setMealPromptOpen(true);
   }, []);
 
+  useEffect(() => {
+    if (!barcodePrefill?.row) return;
+
+    const key = String(barcodePrefill.row.id || "");
+    if (!key) return;
+    if (barcodePrefillKeyRef.current === key) return;
+    barcodePrefillKeyRef.current = key;
+
+    if (barcodePrefill.preferredMeal && barcodePrefill.preferredMeal !== mealType) {
+      setMealType(barcodePrefill.preferredMeal);
+    }
+
+    setQuickConfirmOpen(false);
+    openMealPromptForRow(barcodePrefill.row);
+  }, [barcodePrefill, mealType, openMealPromptForRow]);
+
   const confirmAddWithMeal = useCallback(
     async (chosenMeal) => {
       if (!pendingRow) return;
@@ -590,11 +721,11 @@ export default function AddFoodPage() {
     async (text) => {
       if (!API_URL) {
         Alert.alert("Config error", "Missing API_URL (EXPO_PUBLIC_API_URL).");
-        return;
+        return false;
       }
 
       const q = String(text || "").trim();
-      if (!q) return;
+      if (!q) return false;
 
       try {
         setQuickLoading(true);
@@ -612,23 +743,35 @@ export default function AddFoodPage() {
         const row = toQuickAIRow(data, q);
         setQuickCandidate(row);
         setQuickConfirmOpen(true);
+        return true;
       } catch (e) {
         Alert.alert(
           "Couldn’t analyse",
           e?.message || "Please try a different description."
         );
+        return false;
       } finally {
         setQuickLoading(false);
       }
     },
-    [API_URL]
+    []
   );
+
+  const submitQuickComposer = useCallback(async () => {
+    const q = String(quickComposerText || "").trim();
+    if (!q) {
+      Alert.alert("Add text first", "Type a meal description to quick log it.");
+      return;
+    }
+    const ok = await runQuickAI(q);
+    if (ok) setQuickComposerOpen(false);
+  }, [quickComposerText, runQuickAI]);
 
   const onQuickWrong = useCallback(async () => {
     // re-run the same prompt again
-    const q = quickLastTextRef.current || quickText.trim();
+    const q = quickLastTextRef.current || search.trim();
     await runQuickAI(q);
-  }, [runQuickAI, quickText]);
+  }, [runQuickAI, search]);
 
   const onQuickCorrect = useCallback(() => {
     if (!quickCandidate) return;
@@ -682,7 +825,7 @@ export default function AddFoodPage() {
 
         const rows = (data?.results || []).map((r) => normaliseRow(r, "global"));
         setGlobalResults(rows);
-      } catch (e) {
+      } catch {
         if (!alive) return;
         setGlobalResults([]);
         setGlobalError("Couldn’t load global results.");
@@ -810,107 +953,84 @@ export default function AddFoodPage() {
   };
 
   return (
-    <SafeAreaView style={s.safe}>
+    <SafeAreaView edges={["top", "left", "right"]} style={s.safe}>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <View style={s.page}>
-          {/* Top bar */}
-          <View style={s.topBar}>
-            <TouchableOpacity
-              onPress={goBackToNutrition}
-              style={s.iconBtn}
-              activeOpacity={0.8}
-            >
-              <Feather name="x" size={20} color={colors.text} />
-            </TouchableOpacity>
-
-            <Pressable
-              onPress={() => setMealPickerOpen((v) => !v)}
-              style={s.titlePicker}
-            >
-              <Text style={s.topTitle}>Select a meal</Text>
-              <View style={s.mealChip}>
-                <Text style={s.mealChipText}>{mealType}</Text>
-                <Feather name="chevron-down" size={14} color={accentText} />
-              </View>
-            </Pressable>
-
-            <View style={{ width: 40 }} />
-          </View>
-
-          {/* ✅ Day being added to */}
-          <View style={s.dayStrip}>
-            <Text style={s.dayStripText}>Adding to</Text>
-            <View style={s.dayPill}>
-              <Text style={s.dayPillText}>{selectedDayLabel}</Text>
-            </View>
-          </View>
-
-          {/* Meal dropdown (header picker) */}
-          {mealPickerOpen ? (
-            <View style={s.dropdown}>
-              {MEAL_TYPES.map((mt) => {
-                const active = mt === mealType;
-                return (
-                  <TouchableOpacity
-                    key={mt}
-                    style={[s.dropdownItem, active && s.dropdownItemActive]}
-                    onPress={() => {
-                      setMealType(mt);
-                      setMealPickerOpen(false);
-                    }}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={[s.dropdownText, active && s.dropdownTextActive]}>
-                      {mt}
-                    </Text>
-                    {active ? <Feather name="check" size={16} color="#111111" /> : null}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          ) : null}
-
-          {/* ✅ QUICK LOG (AI) */}
-          <View style={s.quickWrap}>
-            <View style={s.quickHeadRow}>
-              <Text style={s.quickTitle}>Quick log</Text>
-              <Text style={s.quickSub}>Describe your food in one line</Text>
-            </View>
-
-            <View style={s.quickBox}>
-              <TextInput
-                placeholder="e.g. chicken wrap and crisps"
-                placeholderTextColor={colors.subtext}
-                value={quickText}
-                onChangeText={setQuickText}
-                style={s.quickInput}
-                keyboardAppearance={isDark ? "dark" : "light"}
-                returnKeyType="done"
-                autoCorrect
-              />
+          <View style={s.headerCard}>
+            {/* Top bar */}
+            <View style={s.topBar}>
               <TouchableOpacity
-                style={[s.quickSend, (!quickText.trim() || quickLoading) && { opacity: 0.5 }]}
-                onPress={() => runQuickAI(quickText)}
-                disabled={!quickText.trim() || quickLoading}
-                activeOpacity={0.85}
+                onPress={goBackToNutrition}
+                style={s.iconBtn}
+                activeOpacity={0.8}
               >
-                {quickLoading ? (
-                  <ActivityIndicator color="#111111" />
-                ) : (
-                  <Feather name="sparkles" size={16} color="#111111" />
-                )}
+                <Feather name="chevron-left" size={20} color={colors.text} />
               </TouchableOpacity>
+
+              <Pressable
+                onPress={() => setMealPickerOpen((v) => !v)}
+                style={s.titlePicker}
+              >
+                <Text style={s.topTitle}>Add meal</Text>
+                <View style={s.mealChip}>
+                  <Text style={s.mealChipText}>{mealType}</Text>
+                  <Feather name="chevron-down" size={14} color={accentText} />
+                </View>
+              </Pressable>
+
+              <View style={{ width: 34 }} />
             </View>
+
+            {/* ✅ Day being added to */}
+            <View style={s.dayStrip}>
+              <Text style={s.dayStripText}>Adding to</Text>
+              <View style={s.dayPill}>
+                <Text style={s.dayPillText}>{selectedDayLabel}</Text>
+              </View>
+            </View>
+
+            {/* Meal dropdown (header picker) */}
+            {mealPickerOpen ? (
+              <View style={s.dropdown}>
+                {MEAL_TYPES.map((mt) => {
+                  const active = mt === mealType;
+                  return (
+                    <TouchableOpacity
+                      key={mt}
+                      style={[s.dropdownItem, active && s.dropdownItemActive]}
+                      onPress={() => {
+                        setMealType(mt);
+                        setMealPickerOpen(false);
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[s.dropdownText, active && s.dropdownTextActive]}>
+                        {mt}
+                      </Text>
+                      {active ? <Feather name="check" size={16} color="#111111" /> : null}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : null}
+
+            <LinearGradient
+              colors={["transparent", accentBg, "transparent"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={s.headerNeonEdge}
+            />
           </View>
 
-          {/* Search */}
+          {/* Search + Quick AI */}
+          <Text style={s.searchHeader}>Quick Log & Search</Text>
           <View style={s.searchBox}>
             <Feather name="search" size={16} color={colors.subtext} />
             <TextInput
-              placeholder="Search foods, meals, recipes…"
+              placeholder="Search foods… or type and tap ✨ for quick log"
               placeholderTextColor={colors.subtext}
               value={search}
               onChangeText={setSearch}
@@ -920,14 +1040,28 @@ export default function AddFoodPage() {
               autoCorrect={false}
               autoCapitalize="none"
             />
-            {!!search ? (
+            <View style={s.searchActions}>
+              {!!search ? (
+                <TouchableOpacity
+                  onPress={() => setSearch("")}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Feather name="x-circle" size={16} color={colors.subtext} />
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity
-                onPress={() => setSearch("")}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={[s.quickSearchBtn, (!search.trim() || quickLoading) && { opacity: 0.5 }]}
+                onPress={() => runQuickAI(search)}
+                disabled={!search.trim() || quickLoading}
+                activeOpacity={0.85}
               >
-                <Feather name="x-circle" size={16} color={colors.subtext} />
+                {quickLoading ? (
+                  <ActivityIndicator color="#111111" />
+                ) : (
+                  <Feather name="sparkles" size={14} color="#111111" />
+                )}
               </TouchableOpacity>
-            ) : null}
+            </View>
           </View>
 
           {/* Tabs */}
@@ -949,10 +1083,10 @@ export default function AddFoodPage() {
 
           {/* Action tiles */}
           <View style={s.actionsGrid}>
-            <ActionTile label="Barcode" icon="maximize" onPress={handleBarcode} s={s} accentText={accentText} />
-            <ActionTile label="Voice log" icon="mic" onPress={handleVoice} s={s} accentText={accentText} />
-            <ActionTile label="Meal scan" icon="camera" onPress={handleMealScan} s={s} accentText={accentText} />
-            <ActionTile label="Quick add" icon="plus-circle" onPress={handleQuickAdd} s={s} accentText={accentText} />
+            <ActionTile label="Barcode" icon="maximize" onPress={handleBarcode} s={s} iconColor={accentBg} />
+            <ActionTile label="Voice log" icon="mic" onPress={handleVoice} s={s} iconColor={accentBg} />
+            <ActionTile label="Meal scan" icon="camera" onPress={handleMealScan} s={s} iconColor={accentBg} />
+            <ActionTile label="Quick add" icon="plus-circle" onPress={handleQuickAdd} s={s} iconColor={accentBg} />
           </View>
 
           {/* Lists */}
@@ -1062,10 +1196,86 @@ export default function AddFoodPage() {
               </View>
             )}
 
-            <View style={{ height: 24 }} />
           </ScrollView>
 
           {/* ✅ Meal-type prompt modal (shown on + press or quick-log confirm) */}
+          <Modal
+            visible={quickComposerOpen}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setQuickComposerOpen(false)}
+          >
+            <Pressable
+              style={s.modalOverlay}
+              onPress={() => setQuickComposerOpen(false)}
+            >
+              <Pressable style={s.modalCard} onPress={() => {}}>
+                <View style={s.modalHead}>
+                  <Text style={s.modalTitle}>Quick Add</Text>
+                  <TouchableOpacity
+                    onPress={() => setQuickComposerOpen(false)}
+                    style={s.modalClose}
+                    activeOpacity={0.85}
+                  >
+                    <Feather name="x" size={18} color={colors.text} />
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={s.modalSub}>
+                  Type what you ate, then we’ll estimate macros before you confirm.
+                </Text>
+
+                <View style={{ height: 12 }} />
+
+                <View style={s.quickComposerInputWrap}>
+                  <TextInput
+                    value={quickComposerText}
+                    onChangeText={setQuickComposerText}
+                    placeholder="e.g. chicken wrap, banana, protein shake"
+                    placeholderTextColor={colors.subtext}
+                    style={s.quickComposerInput}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardAppearance={isDark ? "dark" : "light"}
+                    returnKeyType="done"
+                    onSubmitEditing={submitQuickComposer}
+                    editable={!quickLoading}
+                    autoFocus
+                  />
+                </View>
+
+                <View style={{ height: 12 }} />
+
+                <View style={s.aiBtnRow}>
+                  <TouchableOpacity
+                    style={[s.aiBtn, s.aiBtnGhost]}
+                    onPress={() => setQuickComposerOpen(false)}
+                    activeOpacity={0.9}
+                    disabled={quickLoading}
+                  >
+                    <Text style={s.aiBtnGhostText}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[s.aiBtn, s.aiBtnSolid, quickLoading && { opacity: 0.7 }]}
+                    onPress={submitQuickComposer}
+                    activeOpacity={0.9}
+                    disabled={quickLoading}
+                  >
+                    {quickLoading ? (
+                      <ActivityIndicator color="#111111" />
+                    ) : (
+                      <>
+                        <Feather name="sparkles" size={16} color="#111111" />
+                        <Text style={s.aiBtnSolidText}>Analyse</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </Pressable>
+            </Pressable>
+          </Modal>
+
           <Modal
             visible={mealPromptOpen}
             transparent
@@ -1138,6 +1348,7 @@ export default function AddFoodPage() {
           </Modal>
 
           {/* ✅ Quick-log confirmation modal (AI found this item → Correct/Wrong) */}
+          {/* ✅ Quick-log confirmation modal (AI found this item → Correct/Wrong) */}
           <Modal
             visible={quickConfirmOpen}
             transparent
@@ -1161,7 +1372,7 @@ export default function AddFoodPage() {
                 </View>
 
                 <Text style={s.modalSub}>
-                  For: “{quickLastTextRef.current || quickText.trim() || "—"}”
+                  For: “{quickLastTextRef.current || search.trim() || "—"}”
                 </Text>
 
                 <View style={{ height: 12 }} />
@@ -1225,44 +1436,55 @@ export default function AddFoodPage() {
   );
 }
 
-function ActionTile({ label, icon, onPress, s, accentText }) {
+function ActionTile({ label, icon, onPress, s, iconColor }) {
   return (
     <TouchableOpacity style={s.tile} onPress={onPress} activeOpacity={0.85}>
       <View style={s.tileIconWrap}>
-        <Feather name={icon} size={18} color={accentText} />
+        <Feather name={icon} size={18} color={iconColor} />
       </View>
       <Text style={s.tileLabel}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
-function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed) {
+function makeStyles(theme, isDark, accentBg, accentText, silverLight, silverMed) {
+  const colors = theme;
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: colors.bg },
-    page: { flex: 1, paddingHorizontal: 18 },
+    page: { flex: 1, paddingHorizontal: 16 },
+
+    headerCard: {
+      marginTop: 4,
+      marginBottom: 12,
+      borderRadius: 22,
+      backgroundColor: "transparent",
+      overflow: "hidden",
+      paddingHorizontal: 14,
+      paddingTop: 10,
+      paddingBottom: 10,
+    },
+    headerNeonEdge: { height: 3, marginTop: 10 },
 
     topBar: {
-      marginTop: 6,
-      marginBottom: 12,
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
     },
     iconBtn: {
-      width: 40,
-      height: 40,
-      borderRadius: 14,
-      backgroundColor: isDark ? "#101114" : silverLight,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: isDark ? "rgba(0,0,0,0.55)" : "#FFFFFF",
+      borderWidth: isDark ? 0 : StyleSheet.hairlineWidth,
+      borderColor: colors.border,
       alignItems: "center",
       justifyContent: "center",
     },
     titlePicker: { alignItems: "center", gap: 6 },
     topTitle: {
-      fontSize: 15,
+      fontSize: 13,
       fontWeight: "800",
-      letterSpacing: 0.5,
+      letterSpacing: 0.7,
       textTransform: "uppercase",
       color: colors.text,
     },
@@ -1273,13 +1495,12 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       paddingHorizontal: 12,
       paddingVertical: 7,
       borderRadius: 999,
-      backgroundColor: isDark ? "#111217" : "#FFFFFF",
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors.border,
+      backgroundColor: accentBg,
+      borderWidth: 0,
     },
     mealChipText: {
-      color: colors.text,
-      fontWeight: "700",
+      color: accentText,
+      fontWeight: "800",
       fontSize: 12,
       letterSpacing: 0.4,
       textTransform: "uppercase",
@@ -1287,8 +1508,7 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
 
     /* ✅ day strip */
     dayStrip: {
-      marginTop: -4,
-      marginBottom: 12,
+      marginTop: 10,
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "center",
@@ -1305,9 +1525,9 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       paddingHorizontal: 12,
       paddingVertical: 6,
       borderRadius: 999,
-      backgroundColor: isDark ? "#111217" : "#FFFFFF",
+      backgroundColor: withHexAlpha(colors.card, isDark ? "B8" : "EA"),
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      borderColor: colors.border,
     },
     dayPillText: {
       color: colors.text,
@@ -1318,12 +1538,12 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
     },
 
     dropdown: {
-      backgroundColor: isDark ? "#0F1014" : "#FFFFFF",
+      backgroundColor: withHexAlpha(colors.card, isDark ? "EE" : "FA"),
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      borderColor: colors.border,
       borderRadius: 16,
       padding: 8,
-      marginBottom: 12,
+      marginTop: 10,
     },
     dropdownItem: {
       paddingHorizontal: 12,
@@ -1343,71 +1563,36 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
     },
     dropdownTextActive: { color: "#111111" },
 
-    /* QUICK LOG */
-    quickWrap: {
-      marginBottom: 12,
-      borderRadius: 20,
-      backgroundColor: isDark ? "#111217" : silverLight,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
-      padding: 12,
-    },
-    quickHeadRow: { marginBottom: 8 },
-    quickTitle: {
+    /* Search */
+    searchHeader: {
       color: colors.text,
+      fontSize: 12,
       fontWeight: "900",
       letterSpacing: 0.7,
       textTransform: "uppercase",
-      fontSize: 12,
+      marginBottom: 8,
     },
-    quickSub: {
-      color: colors.subtext,
-      fontSize: 12,
-      marginTop: 2,
-    },
-    quickBox: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 10,
-    },
-    quickInput: {
-      flex: 1,
-      color: colors.text,
-      paddingVertical: 10,
-      paddingHorizontal: 12,
-      borderRadius: 999,
-      borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
-      backgroundColor: isDark ? "#0F1014" : "#FFFFFF",
-      fontSize: 14,
-    },
-    quickSend: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: accentBg,
-      alignItems: "center",
-      justifyContent: "center",
-      shadowColor: "#000",
-      shadowOpacity: 0.12,
-      shadowRadius: 8,
-      shadowOffset: { width: 0, height: 5 },
-      elevation: 2,
-    },
-
-    /* Search */
     searchBox: {
       paddingHorizontal: 12,
       paddingVertical: 10,
       borderRadius: 999,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
-      backgroundColor: isDark ? "#111217" : silverLight,
+      borderColor: colors.border,
+      backgroundColor: withHexAlpha(colors.card, isDark ? "D4" : "F4"),
       flexDirection: "row",
       alignItems: "center",
       gap: 10,
     },
     searchInput: { flex: 1, color: colors.text, paddingVertical: 0, fontSize: 14 },
+    searchActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+    quickSearchBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: accentBg,
+      alignItems: "center",
+      justifyContent: "center",
+    },
 
     tabsRow: {
       flexDirection: "row",
@@ -1422,7 +1607,7 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       borderRadius: 999,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
-      backgroundColor: isDark ? "#111217" : "#FFFFFF",
+      backgroundColor: withHexAlpha(colors.card, isDark ? "C8" : "EE"),
     },
     tabActive: { backgroundColor: accentBg, borderColor: accentBg },
     tabText: {
@@ -1442,9 +1627,9 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
     },
     tile: {
       width: "48%",
-      backgroundColor: isDark ? "#111217" : silverLight,
+      backgroundColor: "transparent",
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      borderColor: colors.border,
       borderRadius: 18,
       paddingVertical: 12,
       paddingHorizontal: 12,
@@ -1456,9 +1641,9 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       width: 36,
       height: 36,
       borderRadius: 14,
-      backgroundColor: isDark ? "#0F1014" : "#FFFFFF",
+      backgroundColor: "transparent",
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      borderColor: colors.border,
       alignItems: "center",
       justifyContent: "center",
     },
@@ -1470,7 +1655,7 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       fontSize: 12,
     },
 
-    scrollContent: { paddingBottom: 24 },
+    scrollContent: { paddingBottom: 0 },
 
     sectionHead: {
       flexDirection: "row",
@@ -1493,7 +1678,7 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       paddingHorizontal: 10,
       paddingVertical: 7,
       borderRadius: 999,
-      backgroundColor: isDark ? "#111217" : "#FFFFFF",
+      backgroundColor: withHexAlpha(colors.card, isDark ? "C8" : "EE"),
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
     },
@@ -1516,10 +1701,10 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
     subHeadRight: { color: colors.subtext, fontSize: 12, fontWeight: "700" },
 
     card: {
-      backgroundColor: isDark ? "#111217" : silverLight,
+      backgroundColor: withHexAlpha(colors.card, isDark ? "D4" : "F4"),
       borderRadius: 20,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      borderColor: colors.border,
       overflow: "hidden",
     },
     rowWrap: {
@@ -1564,10 +1749,10 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
     modalCard: {
       width: "100%",
       maxWidth: 520,
-      backgroundColor: isDark ? "#0F1014" : "#FFFFFF",
+      backgroundColor: withHexAlpha(colors.card, isDark ? "F2" : "FF"),
       borderRadius: 20,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      borderColor: colors.border,
       padding: 14,
     },
     modalHead: {
@@ -1586,9 +1771,9 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       width: 36,
       height: 36,
       borderRadius: 14,
-      backgroundColor: isDark ? "#111217" : silverLight,
+      backgroundColor: withHexAlpha(colors.card, isDark ? "CC" : "F2"),
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      borderColor: colors.border,
       alignItems: "center",
       justifyContent: "center",
     },
@@ -1598,13 +1783,27 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       fontSize: 12,
       fontWeight: "700",
     },
+    quickComposerInputWrap: {
+      borderRadius: 14,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      backgroundColor: withHexAlpha(colors.card, isDark ? "CC" : "F8"),
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+    },
+    quickComposerInput: {
+      color: colors.text,
+      fontSize: 14,
+      fontWeight: "600",
+      minHeight: 44,
+    },
     modalItem: {
       paddingHorizontal: 12,
       paddingVertical: 12,
       borderRadius: 14,
-      backgroundColor: isDark ? "#111217" : silverLight,
+      backgroundColor: withHexAlpha(colors.card, isDark ? "CC" : "F2"),
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      borderColor: colors.border,
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
@@ -1629,7 +1828,7 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       justifyContent: "center",
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
-      backgroundColor: isDark ? "#111217" : silverLight,
+      backgroundColor: withHexAlpha(colors.card, isDark ? "CC" : "F2"),
     },
     modalCancelText: {
       color: colors.text,
@@ -1641,9 +1840,9 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
 
     /* AI confirm card */
     aiCard: {
-      backgroundColor: isDark ? "#111217" : silverLight,
+      backgroundColor: withHexAlpha(colors.card, isDark ? "CC" : "F2"),
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMed,
+      borderColor: colors.border,
       borderRadius: 16,
       padding: 12,
     },
@@ -1681,7 +1880,7 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       borderWidth: StyleSheet.hairlineWidth,
     },
     aiBtnGhost: {
-      backgroundColor: isDark ? "#111217" : silverLight,
+      backgroundColor: withHexAlpha(colors.card, isDark ? "CC" : "F2"),
       borderColor: colors.border,
     },
     aiBtnGhostText: {

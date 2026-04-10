@@ -100,18 +100,21 @@ function FooterInner() {
     if (!isOnLiveRoute) router.push(liveRoute);
   };
 
-  const getSegment = (path) => {
-    const parts = path.split("/").filter(Boolean);
-    return parts[parts.length - 1] || "";
-  };
-
-  const currentSegment = getSegment(pathname);
-
   /* ----------------------- Highlighter slider ------------------------ */
   const slideX = useRef(new Animated.Value(0)).current;
   const [tabWidth, setTabWidth] = useState(0);
+  const hasInitialisedSlider = useRef(false);
+  const prevSafeIndex = useRef(null);
+  const prevTabWidth = useRef(0);
 
-  const activeIndex = TABS.findIndex((t) => getSegment(t.path) === currentSegment);
+  // Match using the tab root path, so nested routes still map to the right tab.
+  const activeIndex = TABS.findIndex((t) => {
+    const tabPath = normalisePathForMatch(t.path);
+    return (
+      currentPathForMatch === tabPath ||
+      currentPathForMatch.startsWith(`${tabPath}/`)
+    );
+  });
   const safeIndex = activeIndex === -1 ? 0 : activeIndex;
 
   // one pill per tab, almost full width of that tab
@@ -122,6 +125,29 @@ function FooterInner() {
 
     const targetX =
       HORIZONTAL_PADDING + safeIndex * tabWidth + (tabWidth - sliderWidth) / 2;
+
+    // On first mount/remount (e.g. returning from fullscreen pages),
+    // place the pill directly at the correct tab with no slide animation.
+    if (!hasInitialisedSlider.current) {
+      slideX.setValue(targetX);
+      hasInitialisedSlider.current = true;
+      prevSafeIndex.current = safeIndex;
+      prevTabWidth.current = tabWidth;
+      return;
+    }
+
+    const tabChanged = prevSafeIndex.current !== safeIndex;
+    const widthChanged = prevTabWidth.current !== tabWidth;
+    prevSafeIndex.current = safeIndex;
+    prevTabWidth.current = tabWidth;
+
+    // Keep position synced if layout width changed (rotation/resize), no animation.
+    if (widthChanged && !tabChanged) {
+      slideX.setValue(targetX);
+      return;
+    }
+
+    if (!tabChanged) return;
 
     Animated.spring(slideX, {
       toValue: targetX,

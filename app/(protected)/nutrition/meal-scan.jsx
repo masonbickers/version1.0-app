@@ -27,6 +27,7 @@ import {
     ActivityIndicator,
     Alert,
     KeyboardAvoidingView,
+    Linking,
     Modal,
     Platform,
     Pressable,
@@ -129,22 +130,29 @@ export default function MealScanPage() {
 
   const goBack = useCallback(() => {
     router.replace({
-      pathname: "/nutrition/add-food",
+      pathname: "/nutrition/add",
       params: { date: selectedDateISO, mealType: chosenMeal || "" },
     });
   }, [router, selectedDateISO, chosenMeal]);
 
+  const requestCameraAccess = useCallback(async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      const granted = status === "granted";
+      setCameraReady(granted);
+      return granted;
+    } catch {
+      setCameraReady(false);
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
     // pre-request camera permission
     (async () => {
-      try {
-        const { status } = await ImagePicker.requestCameraPermissionsAsync();
-        setCameraReady(status === "granted");
-      } catch {
-        setCameraReady(false);
-      }
+      await requestCameraAccess();
     })();
-  }, []);
+  }, [requestCameraAccess]);
 
   const takePhotoAndAnalyse = useCallback(async () => {
     if (busy) return;
@@ -153,10 +161,21 @@ export default function MealScanPage() {
       return;
     }
 
-    // Ensure permission
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Camera required", "Please enable camera access.");
+    const hasAccess = await requestCameraAccess();
+    if (!hasAccess) {
+      Alert.alert(
+        "Camera required",
+        "Please enable camera access in Settings to scan meals.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Open Settings",
+            onPress: () => {
+              Linking.openSettings().catch(() => {});
+            },
+          },
+        ]
+      );
       return;
     }
 
@@ -170,12 +189,16 @@ export default function MealScanPage() {
         base64: true,
       });
 
-      if (result.canceled || !result.assets?.[0]?.base64) return;
+      if (result.canceled) return;
+      const imageBase64 = result.assets?.[0]?.base64 || "";
+      if (!imageBase64) {
+        throw new Error("No image data captured. Please try again.");
+      }
 
       const res = await fetch(`${API_URL}/nutrition/estimate-macros`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64: result.assets[0].base64 }),
+        body: JSON.stringify({ imageBase64 }),
       });
 
       if (!res.ok) throw new Error(await res.text());
@@ -201,7 +224,7 @@ export default function MealScanPage() {
     } finally {
       setBusy(false);
     }
-  }, [busy, API_URL]);
+  }, [busy, requestCameraAccess]);
 
   const onWrong = useCallback(async () => {
     // re-scan: just open camera again
@@ -307,6 +330,21 @@ export default function MealScanPage() {
                   Enable camera access to scan meals. If you’ve denied it before, turn it on in
                   Settings.
                 </Text>
+                <View style={{ height: 12 }} />
+                <TouchableOpacity
+                  style={s.recheckBtn}
+                  onPress={() => {
+                    requestCameraAccess().then((granted) => {
+                      if (!granted) {
+                        Linking.openSettings().catch(() => {});
+                      }
+                    });
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="settings" size={16} color={colors.text} />
+                  <Text style={s.recheckBtnText}>Open Settings</Text>
+                </TouchableOpacity>
               </View>
             ) : null}
 
@@ -496,6 +534,26 @@ function makeStyles(colors, isDark, accentBg, accentText, silverLight, silverMed
       color: "#111111",
       fontWeight: "900",
       letterSpacing: 0.4,
+      textTransform: "uppercase",
+      fontSize: 12,
+    },
+
+    recheckBtn: {
+      borderRadius: 14,
+      paddingVertical: 12,
+      paddingHorizontal: 12,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      backgroundColor: isDark ? "#111217" : "#FFFFFF",
+    },
+    recheckBtnText: {
+      color: colors.text,
+      fontWeight: "900",
+      letterSpacing: 0.3,
       textTransform: "uppercase",
       fontSize: 12,
     },

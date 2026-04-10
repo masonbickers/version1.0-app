@@ -4,7 +4,7 @@
 import { Feather } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Keyboard,
@@ -27,7 +27,6 @@ import {
   Timestamp,
   collection,
   doc,
-  getDocs,
   limit,
   onSnapshot,
   orderBy,
@@ -52,8 +51,128 @@ const FOOTER_OFFSET = 90;
 const VISIBLE_CHAT_STORAGE_KEY = "trainr_coach_chat_visible_v1";
 const MEMORY_CHAT_STORAGE_KEY = "trainr_coach_chat_memory_v1";
 
-const INITIAL_SYSTEM_MESSAGE =
-  "Hey, I'm your AI coach. I know your training plan and, when available, your nutrition goal and recent meals. I can help with running, Hyrox, strength, recovery, and fuelling. Ask me anything – from how to fuel, what to adjust if you have a niggle, to how to tweak your plan when life gets in the way.";
+const INITIAL_SYSTEM_MESSAGE = [
+  "I'm your AI coach.",
+  "",
+  "I can help with:",
+  "- training",
+  "- nutrition",
+  "- recovery",
+  "- plan changes",
+  "",
+  "I use your plan, recent training, and nutrition data when it's available.",
+  "",
+  "Ask me things like:",
+  "- What should I focus on this week?",
+  "- How should I fuel today's session?",
+  "- Adjust my plan if my legs feel heavy.",
+].join("\n");
+
+const QUICK_PROMPTS = [
+  "What should I focus on this week?",
+  "How should I fuel today's training?",
+  "Review my recent training and tell me what stands out.",
+  "Adjust my plan if my legs feel heavy this week.",
+];
+
+const PLAN_DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const PLAN_COLLECTIONS = ["plans", "runPlans", "trainingPlans"];
+
+function startOfISOWeek(d) {
+  const date = new Date(d);
+  const day = date.getDay();
+  const diff = (day === 0 ? -6 : 1) - day;
+  date.setDate(date.getDate() + diff);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function addDays(d, n) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
+function toISODate(d) {
+  const value = new Date(d);
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatDayDate(d) {
+  return new Date(d).toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function formatFullDate(d) {
+  return new Date(d).toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function formatTimeOfDay(d) {
+  return new Date(d).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function buildClockContext(d = new Date()) {
+  const value = new Date(d);
+  const timeZone =
+    Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone || null;
+
+  return {
+    timezone: timeZone,
+    todayIso: toISODate(value),
+    todayLabel: formatFullDate(value),
+    weekday: value.toLocaleDateString("en-GB", { weekday: "long" }),
+    localTime: formatTimeOfDay(value),
+    generatedAtIso: value.toISOString(),
+  };
+}
+
+function createWelcomeMessage() {
+  return {
+    id: "welcome",
+    role: "assistant",
+    content: INITIAL_SYSTEM_MESSAGE,
+    createdAt: Date.now(),
+  };
+}
+
+function getMessageTimestamp(message) {
+  const explicit = Number(message?.createdAt || 0);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+
+  const idMatch = String(message?.id || "").match(/-(\d{10,})$/);
+  if (!idMatch) return null;
+
+  const inferred = Number(idMatch[1]);
+  return Number.isFinite(inferred) && inferred > 0 ? inferred : null;
+}
+
+function formatMessageTime(message) {
+  const timestamp = getMessageTimestamp(message);
+  if (!timestamp) return "";
+
+  try {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
 
 // ------------------------------------------------------
 function removeUndefinedDeep(value) {
@@ -184,24 +303,504 @@ function buildPlanContextText(plan) {
     .join("\n");
 }
 
+function normaliseList(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.values(value);
+  return [];
+}
+
+function extractPlanWeeks(plan) {
+  const candidates = [
+    plan?.weeks,
+    plan?.plan?.weeks,
+    plan?.planData?.weeks,
+    plan?.generatedPlan?.weeks,
+    plan?.activePlan?.weeks,
+    plan?.output?.weeks,
+    plan?.result?.weeks,
+    plan?.template?.weeks,
+    plan?.program?.weeks,
+    plan?.schedule?.weeks,
+    plan?.payload?.weeks,
+  ];
+
+  for (const candidate of candidates) {
+    const weeks = normaliseList(candidate);
+    if (weeks.length) return weeks;
+  }
+
+  return [];
+}
+
+function extractPlanSessionPreviews(plan, maxCount = 10) {
+  const weeks = extractPlanWeeks(plan);
+  const previews = [];
+
+  weeks.forEach((week, weekIndex) => {
+    const weekLabel =
+      week?.title ||
+      (week?.weekNumber != null ? `Week ${week.weekNumber}` : `Week ${weekIndex + 1}`);
+    const days = normaliseList(week?.days);
+
+    if (days.length) {
+      days.forEach((day, dayIndex) => {
+        const dayLabel = day?.day || day?.label || day?.name || `Day ${dayIndex + 1}`;
+        const sessions = normaliseList(day?.sessions);
+
+        sessions.forEach((session, sessionIndex) => {
+          if (previews.length >= maxCount) return;
+          previews.push({
+            key: `${weekIndex}-${dayIndex}-${sessionIndex}`,
+            weekLabel,
+            dayLabel,
+            title:
+              session?.title || session?.name || session?.type || session?.sessionType || "Session",
+            durationMin:
+              Number(session?.targetDurationMin ?? session?.durationMin ?? 0) || null,
+            distanceKm:
+              Number(session?.targetDistanceKm ?? session?.distanceKm ?? 0) || null,
+            type: session?.workout?.sport || session?.sessionType || session?.type || "",
+          });
+        });
+      });
+      return;
+    }
+
+    const sessions = [
+      ...normaliseList(week?.sessions),
+      ...normaliseList(week?.workouts),
+    ];
+
+    sessions.forEach((session, sessionIndex) => {
+      if (previews.length >= maxCount) return;
+      previews.push({
+        key: `${weekIndex}-0-${sessionIndex}`,
+        weekLabel,
+        dayLabel: weekLabel,
+        title:
+          session?.title || session?.name || session?.type || session?.sessionType || "Session",
+        durationMin:
+          Number(session?.targetDurationMin ?? session?.durationMin ?? 0) || null,
+        distanceKm:
+          Number(session?.targetDistanceKm ?? session?.distanceKm ?? 0) || null,
+        type: session?.workout?.sport || session?.sessionType || session?.type || "",
+      });
+    });
+  });
+
+  return previews.slice(0, maxCount);
+}
+
+function inferPlanKindFromDoc(planDoc) {
+  const kind = String(planDoc?.kind || "").toLowerCase();
+  const source = String(planDoc?.source || "").toLowerCase();
+  const primary = String(
+    planDoc?.primaryActivity || planDoc?.meta?.primaryActivity || ""
+  ).toLowerCase();
+
+  if (
+    kind === "run" ||
+    primary.includes("run") ||
+    source.includes("generate-run") ||
+    source.includes("run")
+  ) {
+    return "run";
+  }
+
+  if (
+    kind === "strength" ||
+    primary.includes("strength") ||
+    primary.includes("gym") ||
+    source.includes("generate-strength") ||
+    source.includes("strength")
+  ) {
+    return "strength";
+  }
+
+  return kind || "training";
+}
+
+function summariseSessionForContext(session) {
+  if (!session) return null;
+
+  const durationMinRaw =
+    session?.targetDurationMin ??
+    session?.durationMin ??
+    (Number(session?.workout?.totalDurationSec || 0)
+      ? Number(session.workout.totalDurationSec) / 60
+      : null);
+
+  const distanceKmRaw =
+    session?.targetDistanceKm ??
+    session?.distanceKm ??
+    session?.plannedDistanceKm ??
+    session?.workout?.totalDistanceKm ??
+    null;
+
+  return removeUndefinedDeep({
+    title:
+      session?.title ||
+      session?.name ||
+      session?.type ||
+      session?.sessionType ||
+      "Session",
+    sessionType: session?.sessionType || session?.type || session?.workout?.sport || null,
+    durationMin: roundOrNull(durationMinRaw, 1),
+    distanceKm: roundOrNull(distanceKmRaw, 2),
+    notes: String(session?.notes || session?.description || "").trim() || null,
+  });
+}
+
+function normalisePlanWeeksForContext(weeks) {
+  return normaliseList(weeks)
+    .slice(0, 24)
+    .map((week, weekIndex) => {
+      const weekLabel =
+        week?.title ||
+        (week?.weekNumber != null ? `Week ${week.weekNumber}` : `Week ${weekIndex + 1}`);
+
+      const rawDays = normaliseList(week?.days);
+      if (rawDays.length) {
+        const dayMap = new Map(
+          rawDays.map((day) => [String(day?.day || "").trim(), day])
+        );
+        const orderedLabels = [
+          ...PLAN_DAY_ORDER,
+          ...rawDays
+            .map((day) => String(day?.day || "").trim())
+            .filter((label) => label && !PLAN_DAY_ORDER.includes(label)),
+        ];
+
+        const days = orderedLabels.map((label, dayIndex) => {
+          const rawDay = dayMap.get(label) || { day: label || `Day ${dayIndex + 1}` };
+          const sessions = normaliseList(rawDay?.sessions)
+            .map(summariseSessionForContext)
+            .filter(Boolean);
+
+          return {
+            day: label || rawDay?.day || `Day ${dayIndex + 1}`,
+            sessions,
+          };
+        });
+
+        return {
+          title: weekLabel,
+          weekIndex0:
+            typeof week?.weekIndex0 === "number" ? week.weekIndex0 : weekIndex,
+          weekNumber:
+            typeof week?.weekNumber === "number" ? week.weekNumber : weekIndex + 1,
+          days,
+        };
+      }
+
+      const sessions = [
+        ...normaliseList(week?.sessions),
+        ...normaliseList(week?.workouts),
+      ]
+        .map(summariseSessionForContext)
+        .filter(Boolean);
+
+      return {
+        title: weekLabel,
+        weekIndex0:
+          typeof week?.weekIndex0 === "number" ? week.weekIndex0 : weekIndex,
+        weekNumber:
+          typeof week?.weekNumber === "number" ? week.weekNumber : weekIndex + 1,
+        days: [{ day: weekLabel, sessions }],
+      };
+    });
+}
+
+function normalisePlanDocShape(source, idOverride = "") {
+  const data = source?.data ? source.data() : source || {};
+  const rawPlan = data?.plan || {};
+  const weeksRaw = rawPlan?.weeks || data?.weeks || [];
+  const kind = data?.kind || rawPlan?.kind || inferPlanKindFromDoc(data);
+  const nameFromMeta = data?.meta?.name;
+  const nameFromPlan = rawPlan?.name;
+  const nameFromData = data?.name;
+
+  const primaryActivity =
+    data?.meta?.primaryActivity ||
+    data?.primaryActivity ||
+    rawPlan?.primaryActivity ||
+    (kind === "run" ? "Run" : kind === "strength" ? "Strength" : "Training");
+
+  return {
+    id: idOverride || source?.id || data?.id || "",
+    sourceCollection:
+      source?.sourceCollection || data?.sourceCollection || "plans",
+    ...data,
+    rawDoc: data,
+    kind,
+    name: nameFromMeta || nameFromPlan || nameFromData || "Training Plan",
+    primaryActivity,
+    weeks: normalisePlanWeeksForContext(weeksRaw),
+  };
+}
+
+function sortPlansForContext(list) {
+  return [...(Array.isArray(list) ? list : [])].sort((a, b) => {
+    const aDate =
+      safeToDate(a?.updatedAt) ||
+      safeToDate(a?.createdAt) ||
+      safeToDate(a?.rawDoc?.updatedAt) ||
+      safeToDate(a?.rawDoc?.createdAt) ||
+      new Date(0);
+    const bDate =
+      safeToDate(b?.updatedAt) ||
+      safeToDate(b?.createdAt) ||
+      safeToDate(b?.rawDoc?.updatedAt) ||
+      safeToDate(b?.rawDoc?.createdAt) ||
+      new Date(0);
+    return bDate - aDate;
+  });
+}
+
+function selectActivePlans(docs) {
+  const list = Array.isArray(docs) ? docs.filter((item) => item?.id) : [];
+  const run = list.find((item) => inferPlanKindFromDoc(item) === "run") || null;
+  const strength =
+    list.find((item) => inferPlanKindFromDoc(item) === "strength") || null;
+
+  let primary = null;
+  let companion = null;
+
+  if (run) {
+    primary = run;
+    companion = strength && strength.id !== run.id ? strength : null;
+  } else if (strength) {
+    primary = strength;
+    companion =
+      list.find(
+        (item) =>
+          item.id !== strength.id &&
+          inferPlanKindFromDoc(item) !== inferPlanKindFromDoc(strength)
+      ) || null;
+  } else {
+    primary = list[0] || null;
+    companion = list[1] || null;
+  }
+
+  const activePlans = [primary, companion].filter(
+    (item, index, arr) => item?.id && arr.findIndex((p) => p?.id === item.id) === index
+  );
+
+  return {
+    primary,
+    companion: companion && companion?.id !== primary?.id ? companion : null,
+    activePlans,
+  };
+}
+
+function buildMergedExactSchedule(plans, maxItems = 24) {
+  const items = [];
+  const currentWeekStart = startOfISOWeek(new Date());
+
+  (Array.isArray(plans) ? plans : []).forEach((plan) => {
+    const weeks = Array.isArray(plan?.weeks) ? plan.weeks : [];
+    weeks.forEach((week, weekIndex) => {
+      const weekLabel =
+        week?.title ||
+        (week?.weekNumber != null ? `Week ${week.weekNumber}` : `Week ${weekIndex + 1}`);
+      const days = Array.isArray(week?.days) ? week.days : [];
+
+      days.forEach((day, dayIndex) => {
+        const sessions = Array.isArray(day?.sessions) ? day.sessions : [];
+        sessions.forEach((session, sessionIndex) => {
+          const summary = summariseSessionForContext(session);
+          if (!summary) return;
+          const date = addDays(currentWeekStart, weekIndex * 7 + dayIndex);
+
+          items.push({
+            planId: plan?.id || null,
+            planName: plan?.name || null,
+            planKind: inferPlanKindFromDoc(plan),
+            weekIndex,
+            weekLabel,
+            dayIndex,
+            dayLabel: day?.day || `Day ${dayIndex + 1}`,
+            isoDate: toISODate(date),
+            dateLabel: formatDayDate(date),
+            isToday: toISODate(date) === toISODate(new Date()),
+            sessionIndex,
+            ...summary,
+          });
+        });
+      });
+    });
+  });
+
+  return items
+    .sort((a, b) => {
+      if (a.weekIndex !== b.weekIndex) return a.weekIndex - b.weekIndex;
+      if (a.dayIndex !== b.dayIndex) return a.dayIndex - b.dayIndex;
+      if (a.planKind !== b.planKind) return String(a.planKind).localeCompare(String(b.planKind));
+      return a.sessionIndex - b.sessionIndex;
+    })
+    .slice(0, maxItems);
+}
+
+function roundOrNull(value, digits = 1) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Number(n.toFixed(digits)) : null;
+}
+
+function summariseRecentTraining(rows) {
+  const sessions = Array.isArray(rows) ? rows : [];
+  const now = new Date();
+  const sevenDaysAgo = new Date(now);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  const ordered = [...sessions].sort((a, b) => {
+    const aDate =
+      safeToDate(a?.completedAt) ||
+      safeToDate(a?.updatedAt) ||
+      safeToDate(a?.createdAt) ||
+      new Date(0);
+    const bDate =
+      safeToDate(b?.completedAt) ||
+      safeToDate(b?.updatedAt) ||
+      safeToDate(b?.createdAt) ||
+      new Date(0);
+    return bDate - aDate;
+  });
+
+  const recent = ordered.slice(0, 8).map((session) => {
+    const date =
+      safeToDate(session?.completedAt) ||
+      safeToDate(session?.updatedAt) ||
+      safeToDate(session?.createdAt);
+
+    return {
+      id: session?.id || "",
+      title: session?.title || session?.name || "Session",
+      type: session?.primaryActivity || session?.sessionType || session?.workout?.sport || "",
+      status: session?.status || "",
+      date: date ? date.toISOString() : null,
+      actualDurationMin: roundOrNull(
+        session?.actualDurationMin ??
+          (Number(session?.live?.durationSec || 0)
+            ? Number(session.live.durationSec) / 60
+            : null),
+        1
+      ),
+      actualDistanceKm: roundOrNull(
+        session?.actualDistanceKm ?? session?.live?.distanceKm ?? null,
+        2
+      ),
+      avgRPE: roundOrNull(session?.avgRPE ?? null, 1),
+      notes: String(session?.notes || "").trim(),
+    };
+  });
+
+  const last7dSessions = ordered.filter((session) => {
+    const date =
+      safeToDate(session?.completedAt) ||
+      safeToDate(session?.updatedAt) ||
+      safeToDate(session?.createdAt);
+    return date && date >= sevenDaysAgo;
+  });
+
+  const summary7d = last7dSessions.reduce(
+    (acc, session) => {
+      acc.count += 1;
+      acc.durationMin += Number(
+        session?.actualDurationMin ??
+          (Number(session?.live?.durationSec || 0)
+            ? Number(session.live.durationSec) / 60
+            : 0)
+      ) || 0;
+      acc.distanceKm += Number(session?.actualDistanceKm ?? session?.live?.distanceKm ?? 0) || 0;
+      const rpe = Number(session?.avgRPE || 0);
+      if (Number.isFinite(rpe) && rpe > 0) {
+        acc.rpeTotal += rpe;
+        acc.rpeCount += 1;
+      }
+      return acc;
+    },
+    { count: 0, durationMin: 0, distanceKm: 0, rpeTotal: 0, rpeCount: 0 }
+  );
+
+  return {
+    recent,
+    last7d: {
+      sessions: summary7d.count,
+      durationMin: Math.round(summary7d.durationMin),
+      distanceKm: roundOrNull(summary7d.distanceKm, 1),
+      avgRPE:
+        summary7d.rpeCount > 0
+          ? roundOrNull(summary7d.rpeTotal / summary7d.rpeCount, 1)
+          : null,
+    },
+  };
+}
+
+function summariseWeights(rows) {
+  const ordered = [...(Array.isArray(rows) ? rows : [])]
+    .map((row) => ({
+      ...row,
+      _date: safeToDate(row?.date || row?.createdAt),
+      _weight: Number(row?.weight || row?.value || 0),
+    }))
+    .filter((row) => row._date && Number.isFinite(row._weight) && row._weight > 0)
+    .sort((a, b) => a._date - b._date);
+
+  if (!ordered.length) return null;
+
+  const latest = ordered[ordered.length - 1];
+  const latestDate = latest._date;
+
+  const nearestFromDaysAgo = (days) => {
+    const target = new Date(latestDate);
+    target.setDate(target.getDate() - days);
+    let candidate = ordered[0];
+
+    ordered.forEach((row) => {
+      if (row._date <= latestDate && row._date >= target) {
+        candidate = row;
+      }
+    });
+
+    return candidate;
+  };
+
+  const from7d = nearestFromDaysAgo(7);
+  const from30d = nearestFromDaysAgo(30);
+
+  return {
+    latestKg: roundOrNull(latest._weight, 1),
+    latestDate: latestDate.toISOString(),
+    change7dKg:
+      from7d && from7d !== latest ? roundOrNull(latest._weight - from7d._weight, 1) : null,
+    change30dKg:
+      from30d && from30d !== latest ? roundOrNull(latest._weight - from30d._weight, 1) : null,
+    entriesCount: ordered.length,
+  };
+}
+
 export default function CoachChatPage() {
   const { isDark } = useTheme();
 
   const [input, setInput] = useState("");
 
-  const [messages, setMessages] = useState([
-    { id: "welcome", role: "assistant", content: INITIAL_SYSTEM_MESSAGE },
-  ]);
+  const [messages, setMessages] = useState([createWelcomeMessage()]);
 
   const [memoryMessages, setMemoryMessages] = useState([]);
   const [isSending, setIsSending] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [clockTick, setClockTick] = useState(() => Date.now());
 
-  const [plan, setPlan] = useState(null);
-  const [planDocId, setPlanDocId] = useState(null);
+  const [allPlans, setAllPlans] = useState([]);
 
   const [nutritionSummary, setNutritionSummary] = useState(null);
+  const [planPrefs, setPlanPrefs] = useState(null);
+  const [recentTrainSummary, setRecentTrainSummary] = useState({
+    recent: [],
+    last7d: { sessions: 0, durationMin: 0, distanceKm: 0, avgRPE: null },
+  });
+  const [weightSummary, setWeightSummary] = useState(null);
 
   const [user, setUser] = useState(null);
 
@@ -214,6 +813,11 @@ export default function CoachChatPage() {
   useEffect(() => {
     scrollToEnd();
   }, [messages, isSending]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setClockTick(Date.now()), 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   // keyboard listeners
   useEffect(() => {
@@ -281,32 +885,134 @@ export default function CoachChatPage() {
     ).catch((err) => console.log("[coach-chat] save memory err:", err));
   }, [memoryMessages, hydrated]);
 
-  // load latest plan
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setAllPlans([]);
+      return;
+    }
 
-    const loadLatestPlan = async () => {
-      try {
-        const plansRef = collection(db, "users", user.uid, "plans");
-        const snap = await getDocs(
-          query(plansRef, orderBy("updatedAt", "desc"), limit(1))
-        );
+    const latestByCollection = Object.create(null);
 
-        if (!snap.empty) {
-          const docSnap = snap.docs[0];
-          const data = docSnap.data();
-          setPlan({ id: docSnap.id, ...data });
-          setPlanDocId(docSnap.id);
-        } else {
-          setPlan(null);
-          setPlanDocId(null);
-        }
-      } catch (err) {
-        console.log("[coach-chat] failed to load plan:", err);
-      }
+    const syncPlans = () => {
+      const primaryPlans = latestByCollection.plans || [];
+      const merged = primaryPlans.length
+        ? primaryPlans
+        : PLAN_COLLECTIONS.flatMap((colName) => latestByCollection[colName] || []);
+
+      const deduped = [];
+      const seen = new Set();
+
+      sortPlansForContext(merged).forEach((doc) => {
+        const key = `${doc?.sourceCollection || "plans"}:${doc?.id || ""}`;
+        if (!doc?.id || seen.has(key)) return;
+        seen.add(key);
+        deduped.push(doc);
+      });
+
+      setAllPlans(deduped);
     };
 
-    loadLatestPlan();
+    const unsubs = PLAN_COLLECTIONS.map((colName) =>
+      onSnapshot(
+        query(collection(db, "users", user.uid, colName), limit(40)),
+        (snap) => {
+          latestByCollection[colName] = snap.docs
+            .map((docSnap) =>
+              normalisePlanDocShape(
+                {
+                  id: docSnap.id,
+                  data: () => docSnap.data(),
+                  sourceCollection: colName,
+                },
+                docSnap.id
+              )
+            )
+            .filter((doc) => doc?.id);
+          syncPlans();
+        },
+        (err) => {
+          console.log(`[coach-chat] failed to load ${colName}:`, err);
+          latestByCollection[colName] = [];
+          syncPlans();
+        }
+      )
+    );
+
+    return () => unsubs.forEach((unsub) => unsub?.());
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setPlanPrefs(null);
+      return;
+    }
+
+    const ref = doc(db, "users", user.uid, "planPrefs", "current");
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        setPlanPrefs(snap.exists() ? snap.data() : null);
+      },
+      (err) => {
+        console.log("[coach-chat] failed to load plan prefs:", err);
+        setPlanPrefs(null);
+      }
+    );
+
+    return () => unsub();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setRecentTrainSummary({
+        recent: [],
+        last7d: { sessions: 0, durationMin: 0, distanceKm: 0, avgRPE: null },
+      });
+      return;
+    }
+
+    const ref = collection(db, "users", user.uid, "trainSessions");
+    const q = query(ref, orderBy("updatedAt", "desc"), limit(12));
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setRecentTrainSummary(summariseRecentTraining(rows));
+      },
+      (err) => {
+        console.log("[coach-chat] recent train snapshot error:", err);
+        setRecentTrainSummary({
+          recent: [],
+          last7d: { sessions: 0, durationMin: 0, distanceKm: 0, avgRPE: null },
+        });
+      }
+    );
+
+    return () => unsub();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setWeightSummary(null);
+      return;
+    }
+
+    const ref = collection(db, "users", user.uid, "weights");
+
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setWeightSummary(summariseWeights(rows));
+      },
+      (err) => {
+        console.log("[coach-chat] weights snapshot error:", err);
+        setWeightSummary(null);
+      }
+    );
+
+    return () => unsub();
   }, [user]);
 
   // LIVE nutrition (same schema as Nutrition page: meals.date Timestamp)
@@ -512,26 +1218,231 @@ export default function CoachChatPage() {
     return `linked • ${n} meals (7d) • ${goal}`;
   }, [nutritionSummary]);
 
+  const { primary: plan, companion: companionPlan, activePlans } = useMemo(
+    () => selectActivePlans(allPlans),
+    [allPlans]
+  );
+
+  const planDocId = plan?.id || null;
+
+  const exactSchedule = useMemo(
+    () => buildMergedExactSchedule(activePlans, 28),
+    [activePlans]
+  );
+
+  const currentWeekSchedule = useMemo(
+    () => exactSchedule.filter((item) => Number(item?.weekIndex) === 0),
+    [exactSchedule]
+  );
+
+  const todaySchedule = useMemo(
+    () => exactSchedule.filter((item) => !!item?.isToday),
+    [exactSchedule]
+  );
+
+  const activePlansDetailed = useMemo(
+    () =>
+      activePlans.map((activePlan) => ({
+        id: activePlan?.id || null,
+        name: activePlan?.name || null,
+        kind: inferPlanKindFromDoc(activePlan),
+        primaryActivity: activePlan?.primaryActivity || null,
+        goalPrimaryFocus: activePlan?.goalPrimaryFocus || null,
+        targetEventName: activePlan?.targetEventName || null,
+        targetEventDate: activePlan?.targetEventDate || null,
+        weeksCount: Array.isArray(activePlan?.weeks) ? activePlan.weeks.length : 0,
+        weeks: Array.isArray(activePlan?.weeks) ? activePlan.weeks : [],
+      })),
+    [activePlans]
+  );
+
+  const clockContext = useMemo(
+    () => buildClockContext(new Date(clockTick)),
+    [clockTick]
+  );
+
+  const chatContext = useMemo(() => {
+    const profileFromNutrition = nutritionSummary?.goal
+      ? {
+          sex: nutritionSummary.goal.raw?.sex || null,
+          age: nutritionSummary.goal.raw?.age || null,
+          heightCm: nutritionSummary.goal.raw?.heightCm || null,
+          weightKg: nutritionSummary.goal.raw?.weightKg || null,
+        }
+      : null;
+
+    return {
+      athleteProfile: removeUndefinedDeep({
+        age: planPrefs?.age ?? profileFromNutrition?.age ?? null,
+        sex: planPrefs?.sex ?? profileFromNutrition?.sex ?? null,
+        heightCm: planPrefs?.heightCm ?? profileFromNutrition?.heightCm ?? null,
+        weightKg: planPrefs?.weightKg ?? profileFromNutrition?.weightKg ?? null,
+        goalDistance: planPrefs?.goalDistance ?? null,
+        goalPrimaryFocus: planPrefs?.goalPrimaryFocus ?? plan?.goalPrimaryFocus ?? null,
+        targetEventName: planPrefs?.targetEventName ?? plan?.targetEventName ?? null,
+        targetEventDate: planPrefs?.targetEventDate ?? plan?.targetEventDate ?? null,
+        injuries: planPrefs?.injuries ?? null,
+        constraints: planPrefs?.constraints ?? null,
+        notesForCoach: planPrefs?.notesForCoach ?? null,
+        bodyweightTrend: weightSummary,
+      }),
+      training: removeUndefinedDeep({
+        activePlan: plan
+          ? {
+              id: plan.id || null,
+              name: plan.name || null,
+              primaryActivity: plan.primaryActivity || null,
+              goalPrimaryFocus: plan.goalPrimaryFocus || null,
+              targetEventName: plan.targetEventName || null,
+              targetEventDate: plan.targetEventDate || null,
+              weeksCount: Array.isArray(plan?.weeks) ? plan.weeks.length : 0,
+              nextSessions: exactSchedule
+                .filter((item) => item?.planId === plan.id)
+                .slice(0, 12),
+            }
+          : null,
+        companionPlan: companionPlan
+          ? {
+              id: companionPlan.id || null,
+              name: companionPlan.name || null,
+              primaryActivity: companionPlan.primaryActivity || null,
+              goalPrimaryFocus: companionPlan.goalPrimaryFocus || null,
+              targetEventName: companionPlan.targetEventName || null,
+              targetEventDate: companionPlan.targetEventDate || null,
+              weeksCount: Array.isArray(companionPlan?.weeks)
+                ? companionPlan.weeks.length
+                : 0,
+              nextSessions: exactSchedule
+                .filter((item) => item?.planId === companionPlan.id)
+                .slice(0, 12),
+            }
+          : null,
+        activePlans: activePlansDetailed,
+        exactSchedule,
+        currentWeekSchedule,
+        todaySchedule,
+        weekDateAnchor: {
+          model: "week_0_is_current_iso_week",
+          currentWeekStartIso: toISODate(startOfISOWeek(new Date())),
+          todayIso: toISODate(new Date()),
+          todayLabel: formatDayDate(new Date()),
+        },
+        recentTraining: recentTrainSummary,
+      }),
+      nutrition: nutritionSummary
+        ? {
+            ...nutritionSummary,
+            recentMeals: Array.isArray(nutritionSummary.recentMeals)
+              ? nutritionSummary.recentMeals.slice(0, 10)
+              : [],
+          }
+        : null,
+      clock: clockContext,
+    };
+  }, [
+    activePlansDetailed,
+    clockContext,
+    companionPlan,
+    currentWeekSchedule,
+    exactSchedule,
+    nutritionSummary,
+    plan,
+    planPrefs,
+    recentTrainSummary,
+    todaySchedule,
+    weightSummary,
+  ]);
+
+  const contextBadges = useMemo(() => {
+    const badges = [];
+
+    if (activePlans.length > 1) {
+      badges.push(
+        `Plans: ${activePlans
+          .map((item) => item?.name)
+          .filter(Boolean)
+          .join(" + ")}`
+      );
+    } else if (plan?.name) {
+      badges.push(`Plan: ${plan.name}`);
+    }
+    if (exactSchedule.length) {
+      badges.push(`${exactSchedule.length} scheduled sessions loaded`);
+    }
+    if (recentTrainSummary?.last7d?.sessions) {
+      badges.push(`${recentTrainSummary.last7d.sessions} sessions in 7d`);
+    }
+    if (nutritionSummary?.goal) badges.push("Nutrition target linked");
+    if (nutritionSummary?.recentMeals?.length) {
+      badges.push(`${nutritionSummary.recentMeals.length} recent meals`);
+    }
+    if (weightSummary?.latestKg != null) {
+      badges.push(`${weightSummary.latestKg.toFixed(1)} kg`);
+    }
+    if (planPrefs?.injuries) badges.push("Injury notes loaded");
+
+    return badges.slice(0, 6);
+  }, [activePlans, exactSchedule.length, nutritionSummary, plan, planPrefs?.injuries, recentTrainSummary, weightSummary]);
+
+  const contextHighlights = useMemo(() => {
+    const highlights = [];
+
+    if (activePlans.length > 1) {
+      highlights.push({
+        icon: "calendar",
+        label: `${activePlans.length} active plans`,
+      });
+    } else if (plan?.name) {
+      highlights.push({ icon: "calendar", label: plan.name });
+    }
+    if (exactSchedule.length) {
+      highlights.push({
+        icon: "list",
+        label: `${exactSchedule.length} sessions loaded`,
+      });
+    }
+    if (recentTrainSummary?.last7d?.sessions) {
+      highlights.push({
+        icon: "activity",
+        label: `${recentTrainSummary.last7d.sessions} sessions in 7d`,
+      });
+    }
+    if (nutritionSummary?.goal) {
+      highlights.push({ icon: "coffee", label: "Nutrition linked" });
+    }
+    if (weightSummary?.latestKg != null) {
+      highlights.push({
+        icon: "bar-chart-2",
+        label: `${weightSummary.latestKg.toFixed(1)} kg`,
+      });
+    }
+
+    return highlights.slice(0, 4);
+  }, [activePlans.length, exactSchedule.length, nutritionSummary?.goal, plan?.name, recentTrainSummary?.last7d?.sessions, weightSummary?.latestKg]);
+
   const handleClearChat = async () => {
-    const reset = [
-      { id: "welcome", role: "assistant", content: INITIAL_SYSTEM_MESSAGE },
-    ];
+    const reset = [createWelcomeMessage()];
     setMessages(reset);
+    setMemoryMessages([]);
     try {
-      await AsyncStorage.setItem(VISIBLE_CHAT_STORAGE_KEY, JSON.stringify(reset));
+      await Promise.all([
+        AsyncStorage.setItem(VISIBLE_CHAT_STORAGE_KEY, JSON.stringify(reset)),
+        AsyncStorage.setItem(MEMORY_CHAT_STORAGE_KEY, JSON.stringify([])),
+      ]);
     } catch (err) {
       console.log("[coach-chat] failed to clear visible chat:", err);
     }
   };
 
-  const handleSend = async () => {
-    const trimmed = input.trim();
+  const submitMessage = useCallback(async (rawText) => {
+    const trimmed = String(rawText || "").trim();
     if (!trimmed || isSending) return;
 
     const userMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content: trimmed,
+      createdAt: Date.now(),
     };
 
     setMessages((prev) => [...prev, userMessage]);
@@ -542,48 +1453,36 @@ export default function CoachChatPage() {
     try {
       if (!API_URL) throw new Error("API_URL missing (check EXPO_PUBLIC_API_URL).");
 
-      // build system context that ALWAYS includes nutrition + plan
-      const nutritionText = buildNutritionContextText(nutritionSummary);
-      const planText = buildPlanContextText(
-        plan
-          ? {
-              ...plan,
-              meta: {
-                name: plan.name || "",
-                primaryActivity: plan.primaryActivity || "",
-                goalDistance: plan.goalDistance || "",
-                goalPrimaryFocus: plan.goalPrimaryFocus || "",
-                targetEventName: plan.targetEventName || "",
-                targetEventDate: plan.targetEventDate || "",
-              },
-            }
-          : null
-      );
-
-      const systemMsg = {
-        role: "system",
-        content:
-          `${INITIAL_SYSTEM_MESSAGE}\n\n` +
-          `---\n${planText}\n---\n` +
-          `${nutritionText}\n---\n` +
-          `Important: When answering, reference the nutrition context above if the user asks about meals/macros. If nutrition context is empty, say so.`,
-      };
-
       const mem = [...memoryMessages, userMessage]
         .filter((m) => m.role === "user" || m.role === "assistant")
         .slice(-40);
 
-      const payload = {
-        messages: [
-          systemMsg,
-          ...mem.map((m) => ({ role: m.role, content: m.content })),
-        ],
-        // still include for later server use, but SYSTEM is the guaranteed channel
-        nutrition: nutritionSummary || null,
-        plan: plan || null,
+      const requestContext = {
+        ...chatContext,
+        clock: buildClockContext(new Date()),
       };
 
-      console.log("[coach-chat] sending payload has nutrition:", !!nutritionSummary);
+      const payload = {
+        messages: mem.map((m) => ({ role: m.role, content: m.content })),
+        nutrition: nutritionSummary || null,
+        plan: plan?.rawDoc ? { id: plan.id, ...plan.rawDoc } : plan || null,
+        context: requestContext,
+      };
+
+      console.log(
+        "[coach-chat] sending payload context:",
+        !!requestContext,
+        "nutrition:",
+        !!nutritionSummary,
+        "plan:",
+        !!plan,
+        "activePlans:",
+        activePlans.length,
+        "exactSchedule:",
+        exactSchedule.length,
+        "todayIso:",
+        requestContext?.clock?.todayIso
+      );
 
       const res = await fetch(`${API_URL}/coach-chat`, {
         method: "POST",
@@ -621,6 +1520,7 @@ export default function CoachChatPage() {
         id: `assistant-${Date.now()}`,
         role: "assistant",
         content: replyText,
+        createdAt: Date.now(),
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -635,7 +1535,18 @@ export default function CoachChatPage() {
             updatedAt: serverTimestamp(),
           });
           await updateDoc(planRef, cleanedUpdates);
-          setPlan((prev) => ({ ...(prev || {}), ...data.updatedPlan }));
+          setAllPlans((prev) =>
+            prev.map((item) => {
+              if (item?.id !== planDocId) return item;
+              return normalisePlanDocShape(
+                {
+                  ...(item?.rawDoc || item || {}),
+                  ...data.updatedPlan,
+                },
+                item.id
+              );
+            })
+          );
         } catch (err) {
           console.log("[coach-chat] Failed to update plan:", err);
         }
@@ -647,6 +1558,7 @@ export default function CoachChatPage() {
         id: `err-${Date.now()}`,
         role: "assistant",
         content: err?.message || "I couldn't reach the server. Try again in a moment.",
+        createdAt: Date.now(),
       };
 
       setMessages((prev) => [...prev, errorMessage]);
@@ -654,10 +1566,27 @@ export default function CoachChatPage() {
     } finally {
       setIsSending(false);
     }
-  };
+  }, [
+    chatContext,
+    input,
+    isSending,
+    memoryMessages,
+    nutritionSummary,
+    activePlans.length,
+    exactSchedule.length,
+    plan,
+    planDocId,
+    user,
+  ]);
+
+  const handleSend = useCallback(() => {
+    submitMessage(input);
+  }, [input, submitMessage]);
 
   const renderBubble = (msg) => {
     const isUserBubble = msg.role === "user";
+    const messageTime = formatMessageTime(msg);
+
     return (
       <View
         key={msg.id}
@@ -666,13 +1595,25 @@ export default function CoachChatPage() {
           { justifyContent: isUserBubble ? "flex-end" : "flex-start" },
         ]}
       >
+        {!isUserBubble ? (
+          <View style={s.coachAvatar}>
+            <Feather name="message-circle" size={13} color="#111111" />
+          </View>
+        ) : null}
+
         <View style={[s.bubble, isUserBubble ? s.bubbleUser : s.bubbleCoach]}>
-          {!isUserBubble && <Text style={s.coachLabel}>Coach</Text>}
-          <Text style={s.bubbleText}>{msg.content}</Text>
+          <Text style={[s.bubbleText, isUserBubble && s.bubbleTextUser]}>{msg.content}</Text>
+          {!!messageTime && (
+            <View style={s.bubbleMetaRow}>
+              <Text style={[s.bubbleTime, isUserBubble && s.bubbleTimeUser]}>{messageTime}</Text>
+            </View>
+          )}
         </View>
       </View>
     );
   };
+
+  const showQuickPrompts = messages.length <= 1;
 
   return (
     <SafeAreaView style={s.safe} edges={["top", "bottom"]}>
@@ -694,32 +1635,54 @@ export default function CoachChatPage() {
       >
         <View style={s.page}>
           <View style={s.header}>
-            <View style={s.headerTextBlock}>
-              <Text style={s.headerTitle}>COACH</Text>
-              <Text style={s.headerSubtitle}>
-                AI training, fuelling & recovery — using your plan
-                {nutritionSummary?.goal ? " and nutrition goal" : ""}
-              </Text>
+            <View style={s.headerMainRow}>
+              <View style={s.headerIdentity}>
+                <View style={s.headerAvatar}>
+                  <Feather name="message-circle" size={16} color="#111111" />
+                </View>
+                <View style={s.headerTextBlock}>
+                  <Text style={s.headerTitle}>Coach</Text>
+                  <Text style={s.headerSubtitle}>
+                    Knows your training, nutrition and current plan
+                  </Text>
+                </View>
+              </View>
 
-              {plan && (
-                <Text style={s.headerPlanTag}>
-                  Linked plan: {plan.name || "Run plan"}
-                </Text>
-              )}
-
-              {/* ✅ tells you if meals are actually coming in */}
-              <Text style={s.headerPlanTag}>Nutrition: {nutritionLinkedText}</Text>
+              <View style={s.headerActions}>
+                <TouchableOpacity
+                  onPress={handleClearChat}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={s.clearBtn}
+                >
+                  <Feather name="trash-2" size={16} color={SUBTEXT} />
+                </TouchableOpacity>
+              </View>
             </View>
 
-            <View style={s.headerActions}>
-              <TouchableOpacity
-                onPress={handleClearChat}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                style={s.clearBtn}
-              >
-                <Feather name="trash-2" size={16} color={SUBTEXT} />
-                <Text style={s.clearBtnText}>Clear</Text>
-              </TouchableOpacity>
+            <View style={s.contextBadgeRow}>
+              {contextHighlights.map((item) => (
+                <View key={item.label} style={s.contextBadge}>
+                  <Feather name={item.icon} size={12} color="#CFCFD4" />
+                  <Text style={s.contextBadgeText}>{item.label}</Text>
+                </View>
+              ))}
+              {!contextHighlights.length ? (
+                <View style={s.contextBadge}>
+                  <Feather name="loader" size={12} color="#CFCFD4" />
+                  <Text style={s.contextBadgeText}>Loading context</Text>
+                </View>
+              ) : null}
+            </View>
+            {!!contextBadges.length ? (
+              <Text style={s.contextSubline}>
+                {contextBadges.slice(0, 2).join(" • ")}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={s.chatDayRow}>
+            <View style={s.chatDayPill}>
+              <Text style={s.chatDayText}>Today</Text>
             </View>
           </View>
 
@@ -731,14 +1694,35 @@ export default function CoachChatPage() {
               keyboardVisible && { paddingBottom: 24 },
             ]}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
             onContentSizeChange={scrollToEnd}
           >
+            {showQuickPrompts ? (
+              <View style={s.quickPromptWrap}>
+                <Text style={s.quickPromptLabel}>Suggested questions</Text>
+                <View style={s.quickPromptRow}>
+                  {QUICK_PROMPTS.map((prompt) => (
+                    <TouchableOpacity
+                      key={prompt}
+                      onPress={() => submitMessage(prompt)}
+                      style={s.quickPromptChip}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={s.quickPromptText}>{prompt}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
             {messages.map(renderBubble)}
 
             {isSending && (
               <View style={s.messageRow}>
-                <View style={[s.bubble, s.bubbleCoach]}>
-                  <Text style={s.coachLabel}>Coach</Text>
+                <View style={s.coachAvatar}>
+                  <Feather name="message-circle" size={13} color="#111111" />
+                </View>
+                <View style={[s.bubble, s.bubbleCoach, s.typingBubble]}>
                   <View style={s.typingRow}>
                     <ActivityIndicator size="small" color={PRIMARY} />
                     <Text style={s.typingText}>Thinking…</Text>
@@ -749,31 +1733,35 @@ export default function CoachChatPage() {
           </ScrollView>
 
           <View style={[s.inputWrapper, keyboardVisible && { bottom: 8 }]}>
-            <View style={s.inputContainer}>
-              <TextInput
-                value={input}
-                onChangeText={setInput}
-                placeholder="Ask about your plan, fuelling, niggles, or tweaks…"
-                placeholderTextColor={SUBTEXT}
-                multiline
-                style={s.input}
-                keyboardAppearance={isDark ? "dark" : "light"}
-              />
+            <View style={s.inputShell}>
+              <View style={s.inputContainer}>
+                <TextInput
+                  value={input}
+                  onChangeText={setInput}
+                  placeholder="Message Coach"
+                  placeholderTextColor={SUBTEXT}
+                  multiline
+                  style={s.input}
+                  keyboardAppearance={isDark ? "dark" : "light"}
+                />
 
-              <TouchableOpacity
-                disabled={!input.trim() || isSending}
-                onPress={handleSend}
-                style={[
-                  s.sendButton,
-                  (!input.trim() || isSending) && s.sendDisabled,
-                ]}
-              >
-                {isSending ? (
-                  <ActivityIndicator size="small" color="#111" />
-                ) : (
-                  <Feather name="arrow-up" size={17} color="#111" />
-                )}
-              </TouchableOpacity>
+                <TouchableOpacity
+                  disabled={!input.trim() || isSending}
+                  onPress={handleSend}
+                  style={[
+                    s.sendButton,
+                    (!input.trim() || isSending) && s.sendDisabled,
+                  ]}
+                  activeOpacity={0.85}
+                >
+                  {isSending ? (
+                    <ActivityIndicator size="small" color="#111" />
+                  ) : (
+                    <Feather name="arrow-up" size={17} color="#111" />
+                  )}
+                </TouchableOpacity>
+              </View>
+              <Text style={s.inputHint}>Uses your live plan and nutrition context</Text>
             </View>
           </View>
         </View>
@@ -802,117 +1790,249 @@ function makeStyles() {
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: "rgba(0,0,0,0.55)",
+      backgroundColor: "rgba(0,0,0,0.62)",
       zIndex: 0,
     },
 
     page: {
       flex: 1,
-      paddingHorizontal: 16,
+      paddingHorizontal: 14,
       paddingTop: 6,
-      paddingBottom: FOOTER_OFFSET + 20,
+      paddingBottom: FOOTER_OFFSET + 18,
       zIndex: 1,
       backgroundColor: "transparent",
     },
 
     header: {
-      paddingVertical: 8,
+      paddingTop: 4,
+      paddingBottom: 6,
+      gap: 8,
+    },
+    headerMainRow: {
       flexDirection: "row",
-      justifyContent: "space-between",
       alignItems: "center",
+      justifyContent: "space-between",
       gap: 12,
+    },
+    headerIdentity: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      flex: 1,
+      minWidth: 0,
+    },
+    headerAvatar: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: PRIMARY,
     },
     headerTextBlock: { flex: 1, minWidth: 0 },
     headerTitle: {
-      fontSize: 26,
-      fontWeight: "700",
+      fontSize: 22,
+      fontWeight: "800",
       color: TEXT,
-      marginBottom: 2,
+      marginBottom: 1,
     },
-    headerSubtitle: { color: SUBTEXT, fontSize: 13 },
-    headerPlanTag: {
-      color: SUBTEXT,
+    headerSubtitle: { color: SUBTEXT, fontSize: 12, lineHeight: 16 },
+    contextBadgeRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 6,
+    },
+    contextBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 999,
+      backgroundColor: "rgba(255,255,255,0.05)",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: "#232327",
+    },
+    contextBadgeText: {
+      color: "#C7C7CC",
       fontSize: 11,
-      marginTop: 4,
-      fontStyle: "italic",
+      fontWeight: "600",
+    },
+    contextSubline: {
+      color: "#838389",
+      fontSize: 11,
+      lineHeight: 15,
     },
 
     headerActions: { flexDirection: "row", alignItems: "center" },
     clearBtn: {
-      flexDirection: "row",
+      width: 34,
+      height: 34,
       alignItems: "center",
-      paddingHorizontal: 10,
-      paddingVertical: 6,
-      borderRadius: 999,
+      justifyContent: "center",
+      borderRadius: 17,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: "#2D2D2F",
-      backgroundColor: "#111111",
-      gap: 6,
+      borderColor: "#29292D",
+      backgroundColor: "#0F1012",
     },
-    clearBtnText: { fontSize: 11, color: SUBTEXT, fontWeight: "600" },
+
+    chatDayRow: {
+      alignItems: "center",
+      marginTop: 4,
+      marginBottom: 6,
+    },
+    chatDayPill: {
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 999,
+      backgroundColor: "rgba(255,255,255,0.06)",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: "#25252A",
+    },
+    chatDayText: {
+      color: "#B1B1B7",
+      fontSize: 11,
+      fontWeight: "700",
+    },
 
     messagesScroll: { flex: 1, zIndex: 1, backgroundColor: "transparent" },
-    messagesContent: { paddingBottom: FOOTER_OFFSET + 60, paddingTop: 10 },
+    messagesContent: { paddingBottom: FOOTER_OFFSET + 62, paddingTop: 2 },
 
-    messageRow: { flexDirection: "row", marginVertical: 6 },
+    messageRow: {
+      flexDirection: "row",
+      alignItems: "flex-end",
+      marginVertical: 4,
+      gap: 8,
+    },
+    coachAvatar: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: PRIMARY,
+      marginBottom: 2,
+    },
 
     bubble: {
       maxWidth: "82%",
       borderRadius: 18,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
+      paddingHorizontal: 13,
+      paddingVertical: 10,
     },
     bubbleCoach: {
-      backgroundColor: COACH_BUBBLE_BG,
+      backgroundColor: "rgba(16,17,20,0.96)",
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: "#E1E3E8",
+      borderColor: "#26272D",
+      borderBottomLeftRadius: 6,
     },
     bubbleUser: {
-      backgroundColor: USER_BUBBLE_BG,
+      backgroundColor: "#1A210F",
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: "#E1E3E8",
+      borderColor: "rgba(230,255,59,0.20)",
+      borderBottomRightRadius: 6,
     },
 
-    coachLabel: { fontSize: 11, color: SUBTEXT, marginBottom: 4 },
     bubbleText: { color: TEXT, fontSize: 15, lineHeight: 21 },
+    bubbleTextUser: { color: "#F5F7EA" },
+    bubbleMetaRow: {
+      marginTop: 6,
+      alignItems: "flex-end",
+    },
+    bubbleTime: {
+      fontSize: 10,
+      color: "#76767D",
+      fontWeight: "600",
+    },
+    bubbleTimeUser: {
+      color: "#A7B08A",
+    },
 
+    typingBubble: {
+      minWidth: 112,
+    },
     typingRow: { flexDirection: "row", alignItems: "center", gap: 8 },
     typingText: { fontSize: 13, color: SUBTEXT },
 
+    quickPromptWrap: {
+      marginBottom: 10,
+      paddingTop: 2,
+    },
+    quickPromptLabel: {
+      fontSize: 11,
+      color: SUBTEXT,
+      fontWeight: "700",
+      marginBottom: 8,
+      textTransform: "uppercase",
+      letterSpacing: 0.4,
+    },
+    quickPromptRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    quickPromptChip: {
+      maxWidth: "100%",
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+      borderRadius: 16,
+      backgroundColor: "rgba(255,255,255,0.04)",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: "#23242A",
+    },
+    quickPromptText: {
+      color: TEXT,
+      fontSize: 13,
+      lineHeight: 18,
+      fontWeight: "600",
+    },
+
     inputWrapper: {
       position: "absolute",
-      left: 16,
-      right: 16,
-      bottom: FOOTER_OFFSET - 10,
+      left: 14,
+      right: 14,
+      bottom: FOOTER_OFFSET - 12,
       zIndex: 2,
+    },
+    inputShell: {
+      gap: 6,
     },
     inputContainer: {
       flexDirection: "row",
       alignItems: "flex-end",
-      backgroundColor: "#111",
+      backgroundColor: "#101114",
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: "#E1E3E8",
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      borderRadius: 20,
+      borderColor: "#28292E",
+      paddingLeft: 14,
+      paddingRight: 8,
+      paddingTop: 10,
+      paddingBottom: 9,
+      borderRadius: 24,
     },
     input: {
       flex: 1,
       color: TEXT,
       fontSize: 15,
+      lineHeight: 20,
       padding: 0,
-      minHeight: 32,
+      minHeight: 26,
       maxHeight: 120,
     },
+    inputHint: {
+      fontSize: 11,
+      color: "#7D7E84",
+      textAlign: "center",
+    },
     sendButton: {
-      width: 36,
-      height: 36,
+      width: 38,
+      height: 38,
       backgroundColor: PRIMARY,
-      borderRadius: 18,
+      borderRadius: 19,
       alignItems: "center",
       justifyContent: "center",
       marginLeft: 8,
+      marginBottom: 1,
     },
-    sendDisabled: { backgroundColor: "#666" },
+    sendDisabled: { backgroundColor: "#5E624C" },
   });
 }

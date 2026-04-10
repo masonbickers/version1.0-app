@@ -34,19 +34,30 @@ const PROVIDERS = ["Garmin", "Strava", "Apple Health", "Other"];
 
 export default function LinkActivityScreen() {
   const router = useRouter();
-  const { sessionKey } = useLocalSearchParams();
+  const { sessionKey, provider: providerParam } = useLocalSearchParams();
   const { colors } = useTheme();
 
   const encodedKey = useMemo(
     () => (Array.isArray(sessionKey) ? sessionKey[0] : String(sessionKey || "")),
     [sessionKey]
   );
+  const initialProvider = useMemo(() => {
+    const raw = Array.isArray(providerParam) ? providerParam[0] : providerParam;
+    const value = String(raw || "").trim().toLowerCase();
+    if (!value) return "Garmin";
+    const match = PROVIDERS.find((opt) => opt.toLowerCase() === value);
+    return match || "Garmin";
+  }, [providerParam]);
 
-  const [provider, setProvider] = useState("Garmin");
+  const [provider, setProvider] = useState(initialProvider);
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [existingTrainSessionId, setExistingTrainSessionId] = useState(null);
+
+  useEffect(() => {
+    setProvider(initialProvider);
+  }, [initialProvider]);
 
   useEffect(() => {
     let cancelled = false;

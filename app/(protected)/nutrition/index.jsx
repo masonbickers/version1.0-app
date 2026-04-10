@@ -37,7 +37,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { API_URL } from "../../../config/api";
 import { auth, db } from "../../../firebaseConfig";
@@ -297,6 +297,7 @@ function fallbackTrainingMatch({ totals, goal, foodQuality, selectedDate }) {
 }
 
 export default function NutritionPage() {
+  const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -1051,7 +1052,7 @@ export default function NutritionPage() {
   /* ---------------------------------------- */
 
   return (
-    <SafeAreaView edges={["top"]} style={s.safe}>
+    <View style={[s.safe, { paddingTop: insets.top }]}>
       <LinearGradient
         colors={[topFadeStart, colors.bg]}
         start={{ x: 0, y: 0 }}
@@ -1168,6 +1169,9 @@ export default function NutritionPage() {
 
           <ScrollView
             ref={scrollRef}
+            style={{ flex: 1 }}
+            contentInsetAdjustmentBehavior="never"
+            automaticallyAdjustContentInsets={false}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={[
               s.scrollContent,
@@ -1802,7 +1806,7 @@ export default function NutritionPage() {
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 }
 

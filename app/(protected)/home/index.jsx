@@ -20,7 +20,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import HomeHeroImage from '../../../assets/images/home/img_home_hero_today.jpg';
 import { auth, db } from '../../../firebaseConfig';
@@ -486,6 +486,7 @@ function QuickLinkCard({ item, onPress, styles, accentBg }) {
 }
 
 export default function HomeIndexPage() {
+  const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
   const router = useRouter();
 
@@ -720,7 +721,7 @@ export default function HomeIndexPage() {
   );
 
   return (
-    <SafeAreaView edges={['top']} style={styles.safe}>
+    <View style={[styles.safe, { paddingTop: insets.top }]}>
       <LinearGradient
         colors={[topFadeStart, colors.bg]}
         start={{ x: 0, y: 0 }}
@@ -751,6 +752,9 @@ export default function HomeIndexPage() {
         </View>
 
         <ScrollView
+          style={{ flex: 1 }}
+          contentInsetAdjustmentBehavior="never"
+          automaticallyAdjustContentInsets={false}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
         >
@@ -978,7 +982,7 @@ export default function HomeIndexPage() {
           </View>
         </ScrollView>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

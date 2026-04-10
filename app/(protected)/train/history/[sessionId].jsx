@@ -154,6 +154,122 @@ function formatRpeLabel(value, prefix = "RPE") {
   return `${prefix} ${Number.isInteger(n) ? n : n.toFixed(1)}`;
 }
 
+function formatSignedDelta(value, options = {}) {
+  const { digits = 0, suffix = "" } = options;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return null;
+
+  const rounded = digits > 0 ? Number(n.toFixed(digits)) : Math.round(n);
+  const abs = Math.abs(rounded);
+  const absText = digits > 0 ? abs.toFixed(digits) : String(abs);
+  return `${rounded > 0 ? "+" : "-"}${absText}${suffix ? ` ${suffix}` : ""}`;
+}
+
+function compactText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getSessionDescriptionText(session) {
+  if (!session || typeof session !== "object") return "";
+
+  const candidates = [
+    session?.description,
+    session?.summary,
+    session?.workout?.description,
+    session?.workout?.summary,
+    session?.workout?.notes,
+    session?.notes,
+  ];
+
+  for (const item of candidates) {
+    const cleaned = compactText(item);
+    if (cleaned) return cleaned;
+  }
+
+  return "";
+}
+
+function buildDescriptionInsights(description, { isStrengthSession = false } = {}) {
+  const text = compactText(description);
+  if (!text) return null;
+
+  const lower = text.toLowerCase();
+  const focus = [];
+  const execution = [];
+  const recovery = [];
+  const addUnique = (arr, line) => {
+    if (!line || arr.includes(line)) return;
+    arr.push(line);
+  };
+
+  if (/\b(interval|repeat|tempo|threshold|vo2|max|speed|pace)\b/.test(lower)) {
+    addUnique(focus, "Quality pace work is the main performance target.");
+  }
+  if (/\b(long run|aerobic|easy|base|zone 2|z2)\b/.test(lower)) {
+    addUnique(focus, "Aerobic development and controlled effort are prioritized.");
+  }
+  if (/\b(hill|incline|climb)\b/.test(lower)) {
+    addUnique(focus, "Incline work is used to build strength and economy.");
+  }
+  if (/\b(strength|hypertrophy|compound|squat|deadlift|press|row|lunge)\b/.test(lower)) {
+    addUnique(focus, "Strength stimulus is the primary objective.");
+  }
+  if (/\b(hyrox|station|sled|wall ball|burpee)\b/.test(lower)) {
+    addUnique(focus, "Hybrid station quality and transitions are emphasized.");
+  }
+
+  if (/\bwarm\s?up|warmup\b/.test(lower)) {
+    addUnique(execution, "Warm up progressively before the main workload.");
+  }
+  if (/\bcool\s?down|cooldown\b/.test(lower)) {
+    addUnique(recovery, "Complete a full cooldown to support recovery.");
+  }
+  if (/\b(rest|recover|recovery)\b/.test(lower)) {
+    addUnique(execution, "Respect recoveries so work reps stay on quality.");
+  }
+  if (/\brpe\b/.test(lower)) {
+    addUnique(execution, "Use the RPE guidance to cap effort drift.");
+  }
+  if (/\b(negative split|build|progressive)\b/.test(lower)) {
+    addUnique(execution, "Build effort progressively instead of starting too hard.");
+  }
+  if (/\b(form|technique|cadence|posture)\b/.test(lower)) {
+    addUnique(execution, "Keep form consistent as fatigue builds.");
+  }
+  if (/\b(fuel|hydration|carb|electrolyte)\b/.test(lower)) {
+    addUnique(recovery, "Plan fueling and hydration around this session demand.");
+  }
+
+  if (!focus.length) {
+    addUnique(
+      focus,
+      isStrengthSession
+        ? "Session focus is structured strength execution quality."
+        : "Session focus is controlled execution quality."
+    );
+  }
+  if (!execution.length) {
+    addUnique(execution, "Keep pacing and effort even from first rep to last.");
+  }
+
+  const sentenceParts = text
+    .split(/[.!?]\s+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const firstSentence = sentenceParts[0] || text;
+
+  return {
+    source:
+      firstSentence.length > 180
+        ? `${firstSentence.slice(0, 177)}...`
+        : firstSentence,
+    headline: focus[0],
+    bullets: [...focus.slice(1), ...execution, ...recovery].slice(0, 4),
+  };
+}
+
 function getStrengthSnapshot(session) {
   const entries = Array.isArray(session?.strengthLog?.entries)
     ? session.strengthLog.entries
@@ -213,6 +329,24 @@ function StatCard({ label, value, theme }) {
     >
       <Text style={[st.statValue, { color: theme.text }]}>{value}</Text>
       <Text style={[st.statLabel, { color: theme.subtext }]}>{label}</Text>
+    </View>
+  );
+}
+
+function KeyStatCard({ label, value, sub, theme }) {
+  return (
+    <View
+      style={[
+        st.keyStatCard,
+        {
+          backgroundColor: withHexAlpha(theme.card, theme.isDark ? "A8" : "F2"),
+          borderColor: theme.border,
+        },
+      ]}
+    >
+      <Text style={[st.keyStatLabel, { color: theme.subtext }]}>{label}</Text>
+      <Text style={[st.keyStatValue, { color: theme.text }]}>{value}</Text>
+      {sub ? <Text style={[st.keyStatSub, { color: theme.subtext }]}>{sub}</Text> : null}
     </View>
   );
 }
@@ -290,6 +424,23 @@ export default function TrainHistoryDetail() {
     const raw = params?.sessionId;
     return Array.isArray(raw) ? raw[0] : raw;
   }, [params?.sessionId]);
+  const returnWeekIndex = useMemo(() => {
+    const raw = params?.returnWeekIndex;
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : null;
+  }, [params?.returnWeekIndex]);
+  const returnDayIndex = useMemo(() => {
+    const raw = params?.returnDayIndex;
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 && parsed < 7 ? Math.round(parsed) : null;
+  }, [params?.returnDayIndex]);
+  const hasExplicitTrainReturn = useMemo(() => {
+    const raw = params?.returnToken;
+    const token = Array.isArray(raw) ? raw[0] : raw;
+    return String(token || "").trim().length > 0 && returnWeekIndex != null && returnDayIndex != null;
+  }, [params?.returnToken, returnDayIndex, returnWeekIndex]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -298,6 +449,24 @@ export default function TrainHistoryDetail() {
   const [infoOpen, setInfoOpen] = useState(false);
   const stickyHeaderTop = Math.max(insets.top, 12) + 6;
   const stickyHeaderInset = stickyHeaderTop + 40;
+  const goBackToPreviousScreen = useCallback(() => {
+    if (hasExplicitTrainReturn) {
+      router.replace({
+        pathname: "/train",
+        params: {
+          returnWeekIndex: String(returnWeekIndex),
+          returnDayIndex: String(returnDayIndex),
+          returnToken: String(Date.now()),
+        },
+      });
+      return;
+    }
+    if (typeof router.canGoBack === "function" && router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace("/train/history");
+  }, [hasExplicitTrainReturn, returnDayIndex, returnWeekIndex, router]);
 
   const loadSession = useCallback(async () => {
     try {
@@ -348,12 +517,17 @@ export default function TrainHistoryDetail() {
   }, [loadSession]);
 
   const analysis = session?.analysis;
+  const descriptionText = useMemo(() => getSessionDescriptionText(session), [session]);
   const type = useMemo(() => sessionTypeLabel(session), [session]);
   const status = useMemo(() => formatStatus(session), [session]);
   const isStrengthSession = useMemo(() => {
     if (type === "Strength") return true;
     return Array.isArray(session?.strengthLog?.entries) && session.strengthLog.entries.length > 0;
   }, [session?.strengthLog?.entries, type]);
+  const descriptionInsights = useMemo(
+    () => buildDescriptionInsights(descriptionText, { isStrengthSession }),
+    [descriptionText, isStrengthSession]
+  );
 
   const summary = useMemo(() => {
     if (!session) return null;
@@ -574,6 +748,91 @@ export default function TrainHistoryDetail() {
     );
   }, [isStrengthSession, strengthSnapshot, summary]);
 
+  const keyStats = useMemo(() => {
+    if (!summary) return [];
+
+    const items = [];
+    const push = (label, value, sub = "") => {
+      const v = String(value || "").trim();
+      if (!v) return;
+      items.push({ label, value: v, sub: String(sub || "").trim() });
+    };
+
+    const plannedMin = Number(summary.plannedMinutes);
+    const actualMin = Number(summary.actualMinutes);
+    if (Number.isFinite(plannedMin) && plannedMin > 0 && Number.isFinite(actualMin) && actualMin > 0) {
+      const pct = Math.round((actualMin / plannedMin) * 100);
+      push("Duration vs plan", `${pct}%`, formatSignedDelta(actualMin - plannedMin, { suffix: "min" }));
+    } else if (Number.isFinite(actualMin) && actualMin > 0) {
+      push("Duration", formatMinutes(actualMin));
+    }
+
+    if (isStrengthSession && strengthSnapshot) {
+      const totalExercises = Number(strengthSnapshot.totalExercises || 0);
+      const loggedExercises = Number(strengthSnapshot.loggedExercises || 0);
+      if (totalExercises > 0 || loggedExercises > 0) {
+        push(
+          "Exercises logged",
+          `${loggedExercises}/${totalExercises || loggedExercises}`,
+          strengthSnapshot.setCount ? `${Math.round(strengthSnapshot.setCount)} sets` : ""
+        );
+      }
+      if (strengthSnapshot.totalReps) {
+        push(
+          "Strength reps",
+          String(Math.round(strengthSnapshot.totalReps)),
+          strengthSnapshot.totalVolumeKg
+            ? `${Number(strengthSnapshot.totalVolumeKg).toFixed(1)} kg volume`
+            : ""
+        );
+      } else if (summary.rpe != null) {
+        push("Session RPE", `RPE ${summary.rpe}`);
+      }
+      if (summary.avgHeartrate || summary.maxHeartrate) {
+        push(
+          "Heart rate",
+          formatBpm(summary.avgHeartrate) || "—",
+          summary.maxHeartrate ? `Max ${formatBpm(summary.maxHeartrate)}` : ""
+        );
+      }
+      return items.slice(0, 4);
+    }
+
+    const plannedKm = Number(summary.plannedKm);
+    const actualKm = Number(summary.actualKm);
+    if (Number.isFinite(plannedKm) && plannedKm > 0 && Number.isFinite(actualKm) && actualKm > 0) {
+      const pct = Math.round((actualKm / plannedKm) * 100);
+      push("Distance vs plan", `${pct}%`, formatSignedDelta(actualKm - plannedKm, { digits: 1, suffix: "km" }));
+    } else if (Number.isFinite(actualKm) && actualKm > 0) {
+      push("Distance", formatKm(actualKm));
+    }
+
+    const paceValue = formatPace(summary.avgPace) || formatPace(summary.movingPace);
+    if (paceValue) {
+      push(
+        "Pace",
+        paceValue,
+        summary.avgPace && summary.movingPace
+          ? `Moving ${formatPace(summary.movingPace)}`
+          : ""
+      );
+    }
+
+    if (summary.avgHeartrate || summary.maxHeartrate) {
+      push(
+        "Heart rate",
+        formatBpm(summary.avgHeartrate) || "—",
+        summary.maxHeartrate ? `Max ${formatBpm(summary.maxHeartrate)}` : ""
+      );
+    }
+
+    if (summary.rpe != null) {
+      push("Session RPE", `RPE ${summary.rpe}`);
+    }
+
+    return items.slice(0, 4);
+  }, [isStrengthSession, strengthSnapshot, summary]);
+
   const splits = useMemo(() => {
     return Array.isArray(session?.live?.splits) ? session.live.splits : [];
   }, [session]);
@@ -723,6 +982,59 @@ export default function TrainHistoryDetail() {
                 </View>
               )}
             </View>
+
+            {keyStats.length > 0 && (
+              <View style={st.sectionSpace}>
+                <Text style={[st.sectionTitle, { color: theme.text }]}>Key stats</Text>
+
+                <View style={st.keyStatsGrid}>
+                  {keyStats.map((item, idx) => (
+                    <KeyStatCard
+                      key={`key-stat-${item.label}-${idx}`}
+                      label={item.label}
+                      value={item.value}
+                      sub={item.sub}
+                      theme={theme}
+                    />
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {descriptionInsights && (
+              <View style={st.sectionSpace}>
+                <Text style={[st.sectionTitle, { color: theme.text }]}>
+                  Description analysis
+                </Text>
+
+                <View
+                  style={[
+                    st.detailCard,
+                    { backgroundColor: theme.card, borderColor: theme.border },
+                  ]}
+                >
+                  <Text style={[st.noteLabel, { color: theme.subtext }]}>
+                    Source
+                  </Text>
+                  <Text style={[st.descriptionSourceText, { color: theme.text }]}>
+                    {descriptionInsights.source}
+                  </Text>
+
+                  <View style={st.descriptionHeadlineRow}>
+                    <Feather name="zap" size={14} color={theme.primaryBg} />
+                    <Text style={[st.descriptionHeadline, { color: theme.text }]}>
+                      {descriptionInsights.headline}
+                    </Text>
+                  </View>
+
+                  {descriptionInsights.bullets.map((line, idx) => (
+                    <Text key={`desc-analysis-${idx}`} style={[st.descriptionBullet, { color: theme.text }]}>
+                      • {line}
+                    </Text>
+                  ))}
+                </View>
+              </View>
+            )}
 
             {isStrengthSession && strengthSections.length > 0 && (
               <View style={st.sectionSpace}>
@@ -1122,7 +1434,7 @@ export default function TrainHistoryDetail() {
 
         <View style={[st.stickyHeaderRow, { paddingTop: stickyHeaderTop }]}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={goBackToPreviousScreen}
             style={st.headerIconBtn}
             activeOpacity={0.85}
           >
@@ -1480,6 +1792,38 @@ const st = StyleSheet.create({
     marginTop: 12,
     gap: 6,
   },
+  keyStatsGrid: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  keyStatCard: {
+    flexBasis: "48%",
+    flexGrow: 1,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    minHeight: 74,
+  },
+  keyStatLabel: {
+    fontSize: 10,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  keyStatValue: {
+    marginTop: 4,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  keyStatSub: {
+    marginTop: 3,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "700",
+  },
 
   statCard: {
     minWidth: 80,
@@ -1664,6 +2008,28 @@ const st = StyleSheet.create({
   },
   exerciseNoteText: {
     marginTop: 4,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  descriptionSourceText: {
+    marginTop: 6,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  descriptionHeadlineRow: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 7,
+  },
+  descriptionHeadline: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "800",
+  },
+  descriptionBullet: {
+    marginTop: 8,
     fontSize: 12,
     lineHeight: 17,
   },

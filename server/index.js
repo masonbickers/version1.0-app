@@ -28,6 +28,7 @@ import workoutRoutes from "./routes/workout.js";
 const app = express();
 
 // ---------- Express setup ----------
+app.set("trust proxy", true);
 app.use(express.json({ limit: "10mb" }));
 app.use(cors({ origin: true }));
 

@@ -23,6 +23,7 @@ import {
   getDoc,
   getDocs,
   limit,
+  onSnapshot,
   orderBy,
   query,
   where,
@@ -39,6 +40,10 @@ const PRIMARY = "#E6FF3B";
 const SILVER_LIGHT = "#F3F4F6";
 const SILVER_MEDIUM = "#E1E3E8";
 const DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function buildSessionKey(planId, weekIndex, dayIndex, sessionIndex) {
+  return `${planId}_${weekIndex}_${dayIndex}_${sessionIndex}`;
+}
 
 /* ------------------------------------------------------------
    Generic helpers
@@ -136,6 +141,15 @@ function getDocSortMs(docData) {
   );
 }
 
+function resolveSessionLogStatus(log) {
+  if (!log || typeof log !== "object") return "";
+  const raw = String(log?.status || "").trim().toLowerCase();
+  if (raw === "completed" || raw === "skipped") return raw;
+  if (log?.skippedAt) return "skipped";
+  if (log?.completedAt || log?.lastTrainSessionId) return "completed";
+  return "";
+}
+
 function makeDocKey(docData) {
   if (Array.isArray(docData?.__path) && docData.__path.length) {
     return docData.__path.join("/");
@@ -229,7 +243,27 @@ function isRunPlanDoc(data) {
   });
 }
 
+function isHybridPlanDoc(data) {
+  const kind = String(data?.kind || data?.plan?.kind || "").toLowerCase();
+  const source = String(data?.source || data?.plan?.source || "").toLowerCase();
+  const primaryActivity = String(
+    data?.meta?.primaryActivity ||
+      data?.primaryActivity ||
+      data?.plan?.primaryActivity ||
+      ""
+  ).toLowerCase();
+  const goalType = String(data?.goalType || data?.plan?.goalType || "").toLowerCase();
+
+  if (kind === "hybrid") return true;
+  if (source.includes("hybrid")) return true;
+  if (primaryActivity.includes("hybrid")) return true;
+  if (goalType.includes("hybrid")) return true;
+
+  return isRunPlanDoc(data) && isStrengthPlanDoc(data);
+}
+
 function classifyPlanType(data) {
+  if (isHybridPlanDoc(data)) return "hybrid";
   if (isStrengthPlanDoc(data)) return "strength";
   if (isRunPlanDoc(data)) return "run";
   return null;
@@ -766,6 +800,128 @@ function countStrengthDaySessions(dayObj) {
   return Array.isArray(dayObj?.sessions) ? dayObj.sessions.length : 0;
 }
 
+function classifySessionDisplayType(session) {
+  const kind = String(
+    session?.type ||
+      session?.sessionType ||
+      session?.title ||
+      session?.name ||
+      session?.emphasis ||
+      ""
+  ).toLowerCase();
+
+  const hasStrengthBlocks = Array.isArray(session?.blocks) && session.blocks.length > 0;
+  const hasStrengthSignals =
+    hasStrengthBlocks ||
+    kind.includes("strength") ||
+    kind.includes("gym") ||
+    kind.includes("lift") ||
+    kind.includes("upper") ||
+    kind.includes("lower") ||
+    kind.includes("hypertrophy") ||
+    kind.includes("volume");
+
+  if (hasStrengthSignals) return "strength";
+
+  const hasRunSignals =
+    typeof safeKm(session) === "number" ||
+    (Array.isArray(session?.steps) && session.steps.length > 0) ||
+    (Array.isArray(session?.workout?.steps) && session.workout.steps.length > 0) ||
+    !!session?.targetPace ||
+    !!session?.targetHr ||
+    Number.isFinite(Number(session?.warmupMin)) ||
+    Number.isFinite(Number(session?.cooldownMin)) ||
+    String(session?.workout?.sport || "").toLowerCase().includes("run");
+
+  if (hasRunSignals) return "run";
+  return "run";
+}
+
+function normaliseHybridSession(raw, dayFallback) {
+  const displayType = classifySessionDisplayType(raw);
+  const base =
+    displayType === "strength"
+      ? normaliseStrengthSession(raw, dayFallback)
+      : normaliseRunSessionForView(raw, dayFallback);
+
+  return {
+    ...base,
+    __displayType: displayType,
+  };
+}
+
+function deriveHybridDaysFromSessions(sessions) {
+  const byDay = new Map();
+
+  for (const sRaw of sessions) {
+    const s = normaliseHybridSession(sRaw, sRaw?.day);
+    const d = s?.day;
+    if (!d || !DAY_ORDER.includes(d)) continue;
+    if (!byDay.has(d)) byDay.set(d, []);
+    byDay.get(d).push(s);
+  }
+
+  return DAY_ORDER.map((day) => ({
+    day,
+    sessions: byDay.get(day) || [],
+    recoveryGuidance: "",
+  }));
+}
+
+function normaliseHybridWeek(week, fallbackWeekNumber) {
+  const weekNumber =
+    typeof week?.weekNumber === "number"
+      ? week.weekNumber
+      : typeof week?.weekIndex === "number"
+      ? week.weekIndex + 1
+      : fallbackWeekNumber;
+
+  const sessionsRaw = Array.isArray(week?.sessions) ? week.sessions : [];
+  const daysRaw = Array.isArray(week?.days) ? week.days : [];
+
+  const daysBase =
+    daysRaw.length > 0
+      ? daysRaw.map((d) => ({
+          ...d,
+          day: normaliseDayLabel(d?.day, "Mon"),
+          recoveryGuidance: d?.recoveryGuidance || "",
+          sessions: Array.isArray(d?.sessions)
+            ? d.sessions.map((s) => normaliseHybridSession(s, d?.day))
+            : [],
+        }))
+      : deriveHybridDaysFromSessions(sessionsRaw);
+
+  const byDay = new Map();
+  for (const d of daysBase) {
+    const key = d?.day;
+    if (!key || !DAY_ORDER.includes(key)) continue;
+    const existing = byDay.get(key) || { day: key, sessions: [], recoveryGuidance: "" };
+    const incoming = Array.isArray(d?.sessions) ? d.sessions : [];
+    byDay.set(key, {
+      ...existing,
+      ...d,
+      day: key,
+      sessions: [...existing.sessions, ...incoming],
+    });
+  }
+
+  const days = DAY_ORDER.map(
+    (day) => byDay.get(day) || { day, sessions: [], recoveryGuidance: "" }
+  );
+  const sessions =
+    sessionsRaw.length > 0
+      ? sessionsRaw.map((s) => normaliseHybridSession(s, s?.day))
+      : days.flatMap((d) => d.sessions);
+
+  return {
+    ...week,
+    weekNumber,
+    phase: week?.phase || {},
+    sessions,
+    days,
+  };
+}
+
 /* ------------------------------------------------------------
    Compatibility layer
 ------------------------------------------------------------ */
@@ -931,6 +1087,7 @@ function pickLatestByType(docs) {
   const byType = {
     run: null,
     strength: null,
+    hybrid: null,
   };
 
   for (const docData of docs) {
@@ -993,10 +1150,11 @@ export default function ViewPlanPage() {
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [plansByType, setPlansByType] = useState({ run: null, strength: null });
+  const [plansByType, setPlansByType] = useState({ run: null, strength: null, hybrid: null });
   const [selectedType, setSelectedType] = useState(null);
   const [error, setError] = useState("");
   const [expandedWeek, setExpandedWeek] = useState(0);
+  const [sessionLogMap, setSessionLogMap] = useState({});
   const didInitialSelect = useRef(false);
 
   useEffect(() => {
@@ -1044,7 +1202,7 @@ export default function ViewPlanPage() {
 
       setPlansByType(picked);
 
-      const availableTypes = ["run", "strength"].filter((t) => !!picked[t]);
+      const availableTypes = ["hybrid", "run", "strength"].filter((t) => !!picked[t]);
 
       if (!availableTypes.length) {
         setSelectedType(null);
@@ -1073,7 +1231,7 @@ export default function ViewPlanPage() {
 
       setExpandedWeek(0);
     } catch (e) {
-      setPlansByType({ run: null, strength: null });
+      setPlansByType({ run: null, strength: null, hybrid: null });
       setSelectedType(null);
       setError(e?.message || "Failed to load plans.");
     }
@@ -1088,6 +1246,34 @@ export default function ViewPlanPage() {
     })();
   }, [user?.uid, loadPlans]);
 
+  useEffect(() => {
+    if (!user?.uid || !selectedPlanDoc?.id) {
+      setSessionLogMap({});
+      return;
+    }
+
+    const ref = collection(db, "users", user.uid, "sessionLogs");
+    const unsub = onSnapshot(
+      query(ref, where("planId", "==", String(selectedPlanDoc.id))),
+      (snap) => {
+        const nextMap = {};
+        snap.forEach((docSnap) => {
+          nextMap[docSnap.id] = docSnap.data() || {};
+        });
+        setSessionLogMap(nextMap);
+      },
+      () => {
+        setSessionLogMap({});
+      }
+    );
+
+    return () => {
+      try {
+        unsub?.();
+      } catch {}
+    };
+  }, [selectedPlanDoc?.id, user?.uid]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadPlans();
@@ -1096,14 +1282,15 @@ export default function ViewPlanPage() {
 
   const selectedPlanDoc = selectedType ? plansByType[selectedType] : null;
   const availableTypes = useMemo(
-    () => ["run", "strength"].filter((t) => !!plansByType[t]),
+    () => ["hybrid", "run", "strength"].filter((t) => !!plansByType[t]),
     [plansByType]
   );
 
   const handleDeletePlan = useCallback(async () => {
     if (!user?.uid || !selectedPlanDoc?.id || !selectedType) return;
 
-    const label = selectedType === "strength" ? "strength" : "run";
+    const label =
+      selectedType === "strength" ? "strength" : selectedType === "hybrid" ? "hybrid" : "run";
 
     const confirmed = await new Promise((resolve) => {
       Alert.alert(
@@ -1168,6 +1355,7 @@ export default function ViewPlanPage() {
 
   const isStrength = selectedType === "strength";
   const isRun = selectedType === "run";
+  const isHybrid = selectedType === "hybrid";
 
   const runAvailability = athleteProfile?.availability || {};
   const runDays = Array.isArray(runAvailability?.runDays) ? runAvailability.runDays : [];
@@ -1185,8 +1373,50 @@ export default function ViewPlanPage() {
       return arr.map((w, idx) => normaliseStrengthWeek(w, idx + 1));
     }
 
+    if (isHybrid) {
+      return arr.map((w, idx) => normaliseHybridWeek(w, idx + 1));
+    }
+
     return arr.map((w, idx) => normaliseRunWeek(w, idx + 1, runDays, longRunDay));
-  }, [plan, selectedPlanDoc, isStrength, runDays, longRunDay]);
+  }, [plan, selectedPlanDoc, isHybrid, isStrength, runDays, longRunDay]);
+
+  const decoratedWeeks = useMemo(() => {
+    const selectedPlanId = String(selectedPlanDoc?.id || "").trim();
+    if (!selectedPlanId) return weeks;
+
+    return (Array.isArray(weeks) ? weeks : []).map((weekObj, weekIdx) => {
+      const days = Array.isArray(weekObj?.days) ? weekObj.days : [];
+
+      return {
+        ...weekObj,
+        days: DAY_ORDER.map((dayLabel, dayIdx) => {
+          const sourceDay =
+            days.find((d) => normaliseDayLabel(d?.day, null) === dayLabel) ||
+            days[dayIdx] ||
+            { day: dayLabel, sessions: [] };
+
+          const sessions = Array.isArray(sourceDay?.sessions) ? sourceDay.sessions : [];
+          return {
+            ...sourceDay,
+            day: dayLabel,
+            sessions: sessions.map((sessionObj, sessionIdx) => {
+              const sessionKey = buildSessionKey(selectedPlanId, weekIdx, dayIdx, sessionIdx);
+              const log = sessionLogMap[sessionKey] || null;
+              const status = resolveSessionLogStatus(log);
+              const savedTrainSessionId = String(log?.lastTrainSessionId || "").trim() || null;
+
+              return {
+                ...sessionObj,
+                __sessionKey: sessionKey,
+                __status: status || "",
+                __savedTrainSessionId: savedTrainSessionId,
+              };
+            }),
+          };
+        }),
+      };
+    });
+  }, [selectedPlanDoc?.id, sessionLogMap, weeks]);
 
   const runDerived = useMemo(() => {
     if (!isRun) return null;
@@ -1346,7 +1576,101 @@ export default function ViewPlanPage() {
     };
   }, [isStrength, athleteProfile, selectedPlanDoc, plan, weeks.length, metaName]);
 
+  const hybridSummary = useMemo(() => {
+    if (!isHybrid) return null;
+
+    const runDaySet = new Set();
+    const sessionCounts = [];
+    const runCounts = [];
+    const strengthCounts = [];
+    const weeklyRunKm = [];
+    let maxLongKm = 0;
+    let inferredLongRunDay = "";
+
+    for (const week of Array.isArray(weeks) ? weeks : []) {
+      const days = Array.isArray(week?.days) ? week.days : [];
+      let weekSessionCount = 0;
+      let weekRunCount = 0;
+      let weekStrengthCount = 0;
+      let weekRunKm = 0;
+
+      for (const dayObj of days) {
+        const dayLabel = String(dayObj?.day || "");
+        const sessions = Array.isArray(dayObj?.sessions) ? dayObj.sessions : [];
+
+        for (const sess of sessions) {
+          const displayType = classifySessionDisplayType(sess);
+          weekSessionCount += 1;
+
+          if (displayType === "strength") {
+            weekStrengthCount += 1;
+            continue;
+          }
+
+          weekRunCount += 1;
+          if (dayLabel) runDaySet.add(dayLabel);
+
+          const km = safeKm(sess);
+          if (typeof km === "number" && km > 0) {
+            weekRunKm += km;
+            if (km > maxLongKm) {
+              maxLongKm = km;
+              inferredLongRunDay = dayLabel || inferredLongRunDay;
+            }
+          }
+        }
+      }
+
+      sessionCounts.push(weekSessionCount);
+      runCounts.push(weekRunCount);
+      strengthCounts.push(weekStrengthCount);
+      weeklyRunKm.push(Math.round(weekRunKm * 10) / 10);
+    }
+
+    const avgCount = (arr) =>
+      arr.length
+        ? Math.round(arr.reduce((sum, value) => sum + Number(value || 0), 0) / arr.length)
+        : null;
+
+    const sortedRunDays = DAY_ORDER.filter((d) => runDaySet.has(d));
+    const maxWeeklyRunKm = weeklyRunKm.length ? Math.max(...weeklyRunKm) : null;
+
+    return {
+      name: metaName,
+      goalType:
+        selectedPlanDoc?.goalType ||
+        plan?.goalType ||
+        selectedPlanDoc?.meta?.primaryFocus ||
+        "Hybrid",
+      primaryFocus:
+        selectedPlanDoc?.meta?.primaryFocus ||
+        plan?.meta?.primaryFocus ||
+        selectedPlanDoc?.primaryActivity ||
+        "Hybrid development",
+      planLengthWeeks:
+        Number(plan?.planLengthWeeks || selectedPlanDoc?.planLengthWeeks) || weeks.length,
+      sessionsPerWeek: avgCount(sessionCounts),
+      runSessionsPerWeek: avgCount(runCounts),
+      strengthSessionsPerWeek: avgCount(strengthCounts),
+      weeklyRunKmNow: weeklyRunKm.length ? weeklyRunKm[0] : null,
+      maxWeeklyRunKm: Number.isFinite(maxWeeklyRunKm) ? Math.round(maxWeeklyRunKm * 10) / 10 : null,
+      longRunDay: inferredLongRunDay || (sortedRunDays.length ? sortedRunDays[sortedRunDays.length - 1] : ""),
+      maxLongKm: maxLongKm > 0 ? Math.round(maxLongKm * 10) / 10 : null,
+      runDays: sortedRunDays,
+    };
+  }, [isHybrid, metaName, plan, selectedPlanDoc, weeks]);
+
   const heroStats = useMemo(() => {
+    if (isHybrid && hybridSummary) {
+      return [
+        { label: "Weeks", value: String(hybridSummary.planLengthWeeks || weeks.length) },
+        { label: "Sessions / week", value: String(hybridSummary.sessionsPerWeek || "—") },
+        {
+          label: "Split",
+          value: `${hybridSummary.runSessionsPerWeek || "—"} run / ${hybridSummary.strengthSessionsPerWeek || "—"} lift`,
+        },
+      ];
+    }
     if (isRun && runSummary) {
       return [
         { label: "Weeks", value: String(runSummary.planLengthWeeks || weeks.length) },
@@ -1362,7 +1686,7 @@ export default function ViewPlanPage() {
       ];
     }
     return [];
-  }, [isRun, isStrength, runSummary, strengthSummary, weeks.length]);
+  }, [hybridSummary, isHybrid, isRun, isStrength, runSummary, strengthSummary, weeks.length]);
 
   const showAddStrength = !!plansByType.run && !plansByType.strength;
   const showAddRun = !!plansByType.strength && !plansByType.run;
@@ -1439,45 +1763,37 @@ export default function ViewPlanPage() {
           <View style={styles.switcherWrap}>
             <Text style={styles.switcherTitle}>Plan type</Text>
             <View style={styles.planTypeToggle}>
-              <Pressable
-                onPress={() => {
-                  setSelectedType("run");
-                  setExpandedWeek(0);
-                }}
-                style={[
-                  styles.planTypeBtn,
-                  selectedType === "run" && styles.planTypeBtnActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.planTypeBtnText,
-                    selectedType === "run" && styles.planTypeBtnTextActive,
-                  ]}
-                >
-                  Run
-                </Text>
-              </Pressable>
+              {availableTypes.map((typeKey) => {
+                const label =
+                  typeKey === "hybrid"
+                    ? "Hybrid"
+                    : typeKey === "strength"
+                    ? "Strength"
+                    : "Run";
 
-              <Pressable
-                onPress={() => {
-                  setSelectedType("strength");
-                  setExpandedWeek(0);
-                }}
-                style={[
-                  styles.planTypeBtn,
-                  selectedType === "strength" && styles.planTypeBtnActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.planTypeBtnText,
-                    selectedType === "strength" && styles.planTypeBtnTextActive,
-                  ]}
-                >
-                  Strength
-                </Text>
-              </Pressable>
+                return (
+                  <Pressable
+                    key={`type-${typeKey}`}
+                    onPress={() => {
+                      setSelectedType(typeKey);
+                      setExpandedWeek(0);
+                    }}
+                    style={[
+                      styles.planTypeBtn,
+                      selectedType === typeKey && styles.planTypeBtnActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.planTypeBtnText,
+                        selectedType === typeKey && styles.planTypeBtnTextActive,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
           </View>
         )}
@@ -1485,10 +1801,12 @@ export default function ViewPlanPage() {
         <View style={styles.headerCard}>
           <Text style={styles.hKicker}>Active training block</Text>
           <Text style={styles.hTitle}>
-            {isStrength ? strengthSummary?.name : runSummary?.name}
+            {isHybrid ? hybridSummary?.name : isStrength ? strengthSummary?.name : runSummary?.name}
           </Text>
           <Text style={styles.hSub}>
-            {isStrength
+            {isHybrid
+              ? `${hybridSummary?.goalType || "Hybrid"} • ${weeks.length} weeks`
+              : isStrength
               ? `${strengthSummary?.goalType || "Strength"} • ${weeks.length} weeks`
               : `${runSummary?.distance || "Run"} • ${weeks.length} weeks`}
           </Text>
@@ -1608,6 +1926,51 @@ export default function ViewPlanPage() {
                     • Peak long run: <Text style={styles.boldText}>{runSummary.maxLongKm} km</Text>
                   </>
                 ) : null}
+              </Text>
+            )}
+          </View>
+        ) : null}
+
+        {isHybrid && hybridSummary ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Summary</Text>
+
+            <View style={styles.rowWrap}>
+              <InfoPill styles={styles} label="Goal" value={hybridSummary.goalType || "—"} />
+              <InfoPill styles={styles} label="Focus" value={hybridSummary.primaryFocus || "—"} />
+              <InfoPill styles={styles} label="Weeks" value={String(hybridSummary.planLengthWeeks || weeks.length)} />
+              <InfoPill styles={styles} label="Sessions/wk" value={String(hybridSummary.sessionsPerWeek || "—")} />
+              <InfoPill styles={styles} label="Run/wk" value={String(hybridSummary.runSessionsPerWeek || "—")} />
+              <InfoPill styles={styles} label="Lift/wk" value={String(hybridSummary.strengthSessionsPerWeek || "—")} />
+              <InfoPill styles={styles} label="Long run" value={hybridSummary.longRunDay || "—"} />
+            </View>
+
+            {!!hybridSummary.runDays?.length && (
+              <View style={{ marginTop: 10 }}>
+                <Text style={styles.mutedText}>
+                  Run days: <Text style={styles.boldText}>{hybridSummary.runDays.join(", ")}</Text>
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.divider} />
+
+            <Text style={styles.mutedText}>
+              Current run volume:{" "}
+              <Text style={styles.boldText}>
+                {hybridSummary.weeklyRunKmNow ? `${hybridSummary.weeklyRunKmNow} km/wk` : "—"}
+              </Text>
+              {!!hybridSummary.maxWeeklyRunKm ? (
+                <>
+                  {" "}
+                  • Peak run volume: <Text style={styles.boldText}>{hybridSummary.maxWeeklyRunKm} km/wk</Text>
+                </>
+              ) : null}
+            </Text>
+
+            {!!hybridSummary.maxLongKm && (
+              <Text style={[styles.mutedText, { marginTop: 6 }]}>
+                Peak long run: <Text style={styles.boldText}>{hybridSummary.maxLongKm} km</Text>
               </Text>
             )}
           </View>
@@ -1797,7 +2160,13 @@ export default function ViewPlanPage() {
           <Text style={styles.dangerBtnText}>
             {deleting
               ? "Deleting…"
-              : `Delete ${selectedType === "strength" ? "strength" : "run"} plan`}
+              : `Delete ${
+                  selectedType === "strength"
+                    ? "strength"
+                    : selectedType === "hybrid"
+                    ? "hybrid"
+                    : "run"
+                } plan`}
           </Text>
         </Pressable>
 
@@ -1813,7 +2182,13 @@ export default function ViewPlanPage() {
 
 function TopBar({ title, onBack, styles, typeLabel }) {
   const typeText =
-    typeLabel === "strength" ? "Strength" : typeLabel === "run" ? "Run" : null;
+    typeLabel === "strength"
+      ? "Strength"
+      : typeLabel === "run"
+      ? "Run"
+      : typeLabel === "hybrid"
+      ? "Hybrid"
+      : null;
 
   return (
     <View style={styles.topBar}>
@@ -1848,13 +2223,17 @@ function DayBlock({ dayObj, styles, type }) {
   const day = dayObj?.day || "";
   const sessions = Array.isArray(dayObj?.sessions) ? dayObj.sessions : [];
   const dayTitle = day || "Day";
+  const hybridRunKm = sumRunDayKm(dayObj);
 
   const dayMetric =
     type === "strength"
       ? `${countStrengthDaySessions(dayObj)} session${countStrengthDaySessions(dayObj) === 1 ? "" : "s"}`
+      : type === "hybrid"
+      ? `${sessions.length} session${sessions.length === 1 ? "" : "s"}${hybridRunKm > 0 ? ` • ${hybridRunKm} km` : ""}`
       : `${sumRunDayKm(dayObj)} km`;
 
-  const badgeText = sessions.length > 0 ? (type === "strength" ? "LIFT" : "RUN") : "REST";
+  const badgeText =
+    sessions.length > 0 ? (type === "strength" ? "LIFT" : type === "hybrid" ? "HYBRID" : "RUN") : "REST";
 
   return (
     <View style={styles.dayCard}>
@@ -1877,6 +2256,8 @@ function DayBlock({ dayObj, styles, type }) {
         <Text style={styles.mutedText}>
           {type === "strength"
             ? dayObj?.recoveryGuidance || "Recovery / no structured lifting session"
+            : type === "hybrid"
+            ? dayObj?.recoveryGuidance || "Recovery / no structured session"
             : "Rest / no structured session"}
         </Text>
       ) : type === "strength" ? (
@@ -1887,6 +2268,19 @@ function DayBlock({ dayObj, styles, type }) {
             styles={styles}
           />
         ))
+      ) : type === "hybrid" ? (
+        sessions.map((s, idx) => {
+          const displayType = String(s?.__displayType || classifySessionDisplayType(s));
+          return displayType === "strength" ? (
+            <StrengthSessionBlock
+              key={`${dayTitle}-hybrid-strength-${idx}`}
+              session={s}
+              styles={styles}
+            />
+          ) : (
+            <RunSessionBlock key={`${dayTitle}-hybrid-run-${idx}`} session={s} styles={styles} />
+          );
+        })
       ) : (
         sessions.map((s, idx) => (
           <RunSessionBlock key={`${dayTitle}-run-${idx}`} session={s} styles={styles} />

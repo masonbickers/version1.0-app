@@ -1,6 +1,6 @@
 // app/(protected)/train/index.jsx
 import { LinearGradient } from "expo-linear-gradient";
-import { useFocusEffect, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   addDoc,
   collection,
@@ -8,6 +8,7 @@ import {
   getDoc,
   getDocs,
   limit,
+  onSnapshot,
   orderBy,
   query,
   serverTimestamp,
@@ -19,6 +20,7 @@ import {
   ActivityIndicator,
   Animated,
   Alert,
+  Dimensions,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -29,9 +31,10 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Feather from "../../components/LucideFeather";
 
 import { API_URL } from "../../../config/api";
@@ -48,6 +51,21 @@ const WEEK_CAROUSEL_FALLBACK_WIDTH = 320;
 
 const PRIMARY = "#E6FF3B";
 const JS_DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const TRAIN_INDEX_SCREEN_CACHE = {
+  uid: "",
+  hydrated: false,
+  plan: null,
+  companionPlan: null,
+  calendarNow: null,
+  currentWeekIndex: 0,
+  selectedDayIndex: 0,
+  sessionLogMap: {},
+  sessionLogsReady: false,
+  sessionLogsReadyKey: "",
+  weekStripWidth: 0,
+  coachPlans: [],
+  coachPlansLoaded: false,
+};
 
 const SAMPLE_WORKOUTS = [
   {
@@ -351,6 +369,13 @@ function inferPlanKindFromDoc(planDoc) {
   return kind || "training";
 }
 
+function getTodayPlanDayIndex(dateLike = new Date()) {
+  const date = dateLike instanceof Date ? dateLike : new Date(dateLike);
+  const label = JS_DAY_LABELS[date.getDay()];
+  const idx = DAYS.indexOf(label);
+  return idx >= 0 ? idx : 0;
+}
+
 function sessionSportKind(sess) {
   const raw = String(
     sess?.workout?.sport || sess?.sessionType || sess?.type || ""
@@ -462,7 +487,10 @@ function addDays(d, n) {
 }
 function toISODate(d) {
   const dd = new Date(d);
-  return dd.toISOString().split("T")[0];
+  const yyyy = dd.getFullYear();
+  const mm = String(dd.getMonth() + 1).padStart(2, "0");
+  const day = String(dd.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${day}`;
 }
 function fmtDayDate(d) {
   return new Date(d).toLocaleDateString("en-GB", {
@@ -473,6 +501,132 @@ function fmtDayDate(d) {
 }
 
 const normaliseStr = (s) => String(s || "").trim();
+
+function parseDateLike(value) {
+  if (!value) return null;
+
+  try {
+    if (typeof value?.toDate === "function") {
+      const fromTimestamp = value.toDate();
+      if (fromTimestamp instanceof Date && !Number.isNaN(fromTimestamp.getTime())) {
+        fromTimestamp.setHours(0, 0, 0, 0);
+        return fromTimestamp;
+      }
+    }
+  } catch {}
+
+  const raw =
+    typeof value === "string" || typeof value === "number" ? value : value instanceof Date ? value : null;
+
+  if (!raw) return null;
+
+  if (raw instanceof Date) {
+    const out = new Date(raw);
+    out.setHours(0, 0, 0, 0);
+    return Number.isNaN(out.getTime()) ? null : out;
+  }
+
+  const ymdMatch = String(raw).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymdMatch) {
+    const yyyy = Number(ymdMatch[1]);
+    const mm = Number(ymdMatch[2]);
+    const dd = Number(ymdMatch[3]);
+    const out = new Date(yyyy, mm - 1, dd);
+    out.setHours(0, 0, 0, 0);
+    return Number.isNaN(out.getTime()) ? null : out;
+  }
+
+  const out = new Date(raw);
+  if (Number.isNaN(out.getTime())) return null;
+  out.setHours(0, 0, 0, 0);
+  return out;
+}
+
+function resolvePlanWeekZeroStart(planDoc, sessionLogMap = null) {
+  if (!planDoc) return null;
+
+  const planId = String(planDoc?.id || "").trim();
+  if (planId && sessionLogMap && typeof sessionLogMap === "object") {
+    const anchorVotes = new Map();
+    Object.values(sessionLogMap).forEach((log) => {
+      if (String(log?.planId || "").trim() !== planId) return;
+      const weekIndex = Number(log?.weekIndex);
+      const dayIndex = Number(log?.dayIndex);
+      if (!Number.isFinite(weekIndex) || !Number.isFinite(dayIndex)) return;
+
+      const logDate =
+        parseDateLike(log?.date) ||
+        parseDateLike(log?.statusAt) ||
+        parseDateLike(log?.completedAt) ||
+        parseDateLike(log?.updatedAt) ||
+        parseDateLike(log?.createdAt);
+      if (!logDate) return;
+
+      const anchor = addDays(logDate, -(Math.round(weekIndex) * 7 + Math.round(dayIndex)));
+      anchor.setHours(0, 0, 0, 0);
+      const key = toISODate(anchor);
+      const prev = anchorVotes.get(key) || 0;
+      anchorVotes.set(key, prev + 1);
+    });
+
+    if (anchorVotes.size) {
+      const sorted = [...anchorVotes.entries()].sort((a, b) => {
+        if (b[1] !== a[1]) return b[1] - a[1];
+        return String(a[0]).localeCompare(String(b[0]));
+      });
+      const top = sorted[0]?.[0];
+      const parsed = parseDateLike(top);
+      if (parsed) return startOfISOWeek(parsed);
+    }
+  }
+
+  const weeks = Array.isArray(planDoc?.weeks) ? planDoc.weeks : [];
+  for (let idx = 0; idx < weeks.length; idx += 1) {
+    const week = weeks[idx];
+    const weekIndex0 = Number.isFinite(Number(week?.weekIndex0)) ? Number(week.weekIndex0) : idx;
+    const explicitWeekStart = parseDateLike(week?.weekStartDate || week?.startDate);
+    if (explicitWeekStart) {
+      return startOfISOWeek(addDays(explicitWeekStart, -(weekIndex0 * 7)));
+    }
+
+    const days = Array.isArray(week?.days) ? week.days : [];
+    for (let dayIdx = 0; dayIdx < days.length; dayIdx += 1) {
+      const explicitDayDate = parseDateLike(days[dayIdx]?.date || days[dayIdx]?.isoDate);
+      if (explicitDayDate) {
+        return startOfISOWeek(addDays(explicitDayDate, -(weekIndex0 * 7 + dayIdx)));
+      }
+    }
+  }
+
+  const fallbackStart = parseDateLike(
+    planDoc?.startDate ||
+      planDoc?.plan?.startDate ||
+      planDoc?.meta?.startDate ||
+      planDoc?.weekStartDate ||
+      planDoc?.plan?.weekStartDate ||
+      planDoc?.createdAt ||
+      planDoc?.updatedAt
+  );
+  return fallbackStart ? startOfISOWeek(fallbackStart) : null;
+}
+
+function deriveCurrentPlanWeekIndex(plans, today = new Date(), totalWeeks = 0, sessionLogMap = null) {
+  const anchors = (Array.isArray(plans) ? plans : [])
+    .map((planDoc) => resolvePlanWeekZeroStart(planDoc, sessionLogMap))
+    .filter(Boolean)
+    .sort((a, b) => a.getTime() - b.getTime());
+
+  if (!anchors.length) return 0;
+
+  const baseWeekStart = anchors[0];
+  const todayWeekStart = startOfISOWeek(today);
+  const diffDays = Math.floor((todayWeekStart.getTime() - baseWeekStart.getTime()) / 86400000);
+  const rawWeekIndex = Math.floor(diffDays / 7);
+  const clamped = Math.max(0, rawWeekIndex);
+
+  if (totalWeeks > 0) return Math.min(clamped, totalWeeks - 1);
+  return clamped;
+}
 
 function buildSessionKey(planId, weekIndex, dayIndex, sessionIndex) {
   return `${planId}_${weekIndex}_${dayIndex}_${sessionIndex}`;
@@ -970,7 +1124,12 @@ const normaliseWeeksForClient = (weeks) =>
       title: w?.title || `Week ${wi + 1}`,
       weekIndex0: typeof w?.weekIndex0 === "number" ? w.weekIndex0 : wi,
       weekNumber: typeof w?.weekNumber === "number" ? w.weekNumber : wi + 1,
-      days,
+      weekStartDate: w?.weekStartDate || w?.startDate || null,
+      weekEndDate: w?.weekEndDate || w?.endDate || null,
+      days: days.map((day, dayIdx) => ({
+        ...day,
+        date: rawDays?.[dayIdx]?.date || dayMap.get(day.day)?.date || null,
+      })),
     };
   });
 
@@ -1252,14 +1411,47 @@ function ActionRowButton({ icon, label, theme, onPress, primary = false }) {
 export default function TrainIndex() {
   const theme = useScreenTheme();
   const router = useRouter();
+  const {
+    returnWeekIndex: returnWeekIndexParam,
+    returnDayIndex: returnDayIndexParam,
+    returnToken: returnTokenParam,
+  } = useLocalSearchParams();
+  const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const currentUid = String(auth.currentUser?.uid || "");
+  const hasWarmCache =
+    !!currentUid &&
+    TRAIN_INDEX_SCREEN_CACHE.hydrated &&
+    TRAIN_INDEX_SCREEN_CACHE.uid === currentUid;
+  const estimatedInitialWeekStripWidth = Math.max(
+    Math.round(
+      (Number(windowWidth || 0) || Dimensions.get("window").width || 0) - 36
+    ),
+    WEEK_CAROUSEL_FALLBACK_WIDTH
+  );
 
-  const [loading, setLoading] = useState(true);
-  const [plan, setPlan] = useState(null);
-  const [companionPlan, setCompanionPlan] = useState(null);
-  const [currentWeekIndex, setCurrentWeekIndex] = useState(0);
+  const [loading, setLoading] = useState(() => !hasWarmCache);
+  const [plan, setPlan] = useState(() =>
+    hasWarmCache ? TRAIN_INDEX_SCREEN_CACHE.plan : null
+  );
+  const [companionPlan, setCompanionPlan] = useState(() =>
+    hasWarmCache ? TRAIN_INDEX_SCREEN_CACHE.companionPlan : null
+  );
+  const [calendarNow, setCalendarNow] = useState(() =>
+    hasWarmCache && TRAIN_INDEX_SCREEN_CACHE.calendarNow
+      ? new Date(TRAIN_INDEX_SCREEN_CACHE.calendarNow)
+      : new Date()
+  );
+  const [currentWeekIndex, setCurrentWeekIndex] = useState(() =>
+    hasWarmCache ? Number(TRAIN_INDEX_SCREEN_CACHE.currentWeekIndex || 0) : 0
+  );
   const [selectedDayIndex, setSelectedDayIndex] = useState(() => {
-    const idx = DAYS.indexOf(JS_DAY_LABELS[new Date().getDay()]);
-    return idx >= 0 ? idx : 0;
+    if (hasWarmCache) {
+      return Number.isFinite(Number(TRAIN_INDEX_SCREEN_CACHE.selectedDayIndex))
+        ? Number(TRAIN_INDEX_SCREEN_CACHE.selectedDayIndex)
+        : getTodayPlanDayIndex(new Date());
+    }
+    return getTodayPlanDayIndex(new Date());
   });
 
   const [daySheetOpen, setDaySheetOpen] = useState(false);
@@ -1279,25 +1471,93 @@ export default function TrainIndex() {
   const [savingQuick, setSavingQuick] = useState(false);
   const [sendingToWatch, setSendingToWatch] = useState(false);
   const [coachPlansLoading, setCoachPlansLoading] = useState(false);
-  const [coachPlans, setCoachPlans] = useState([]);
+  const [coachPlans, setCoachPlans] = useState(() =>
+    hasWarmCache && Array.isArray(TRAIN_INDEX_SCREEN_CACHE.coachPlans)
+      ? TRAIN_INDEX_SCREEN_CACHE.coachPlans
+      : []
+  );
   const [usingCoachPlanId, setUsingCoachPlanId] = useState("");
-  const [sessionLogMap, setSessionLogMap] = useState({});
+  const [sessionLogMap, setSessionLogMap] = useState(() =>
+    hasWarmCache && TRAIN_INDEX_SCREEN_CACHE.sessionLogMap
+      ? TRAIN_INDEX_SCREEN_CACHE.sessionLogMap
+      : {}
+  );
+  const [sessionLogsReady, setSessionLogsReady] = useState(() =>
+    hasWarmCache ? !!TRAIN_INDEX_SCREEN_CACHE.sessionLogsReady : false
+  );
+  const [sessionLogsReadyKey, setSessionLogsReadyKey] = useState(() =>
+    hasWarmCache ? String(TRAIN_INDEX_SCREEN_CACHE.sessionLogsReadyKey || "") : ""
+  );
   const [sampleCategory, setSampleCategory] = useState("all");
   const [tipsOpen, setTipsOpen] = useState(false);
   const [tipTopicKey, setTipTopicKey] = useState("gut-training");
-  const [weekStripWidth, setWeekStripWidth] = useState(0);
+  const [weekStripWidth, setWeekStripWidth] = useState(() => {
+    const cachedWidth = Number(TRAIN_INDEX_SCREEN_CACHE.weekStripWidth || 0);
+    if (cachedWidth > 0) return cachedWidth;
+    return estimatedInitialWeekStripWidth;
+  });
   const weekCarouselTranslateX = useRef(
-    new Animated.Value(-WEEK_CAROUSEL_FALLBACK_WIDTH)
+    new Animated.Value(
+      -Math.max(
+        Number(TRAIN_INDEX_SCREEN_CACHE.weekStripWidth || 0),
+        estimatedInitialWeekStripWidth
+      )
+    )
   ).current;
   const weekCarouselAnimatingRef = useRef(false);
   const weekCarouselGestureRef = useRef(false);
+  const latestPlanLoadRef = useRef(0);
+  const appliedReturnTokenRef = useRef("");
+  const hasExplicitTrainReturn = useMemo(() => {
+    const token = String(
+      Array.isArray(returnTokenParam) ? returnTokenParam[0] : returnTokenParam || ""
+    ).trim();
+    const weekValue = Number(
+      Array.isArray(returnWeekIndexParam) ? returnWeekIndexParam[0] : returnWeekIndexParam
+    );
+    const dayValue = Number(
+      Array.isArray(returnDayIndexParam) ? returnDayIndexParam[0] : returnDayIndexParam
+    );
+
+    return (
+      !!token &&
+      Number.isFinite(weekValue) &&
+      Number.isFinite(dayValue) &&
+      dayValue >= 0 &&
+      dayValue < DAYS.length
+    );
+  }, [returnDayIndexParam, returnTokenParam, returnWeekIndexParam]);
 
   const goToSession = useCallback(
     (key) => {
       if (!key) return;
-      router.push(`/train/session/${encodeURIComponent(key)}`);
+      router.push({
+        pathname: "/train/session/[sessionKey]",
+        params: {
+          sessionKey: key,
+          returnWeekIndex: String(currentWeekIndex),
+          returnDayIndex: String(selectedDayIndex),
+          returnToken: String(Date.now()),
+        },
+      });
     },
-    [router]
+    [currentWeekIndex, router, selectedDayIndex]
+  );
+
+  const openHistorySessionFromTrain = useCallback(
+    (sessionId) => {
+      if (!sessionId) return;
+      router.push({
+        pathname: "/train/history/[sessionId]",
+        params: {
+          sessionId: String(sessionId),
+          returnWeekIndex: String(currentWeekIndex),
+          returnDayIndex: String(selectedDayIndex),
+          returnToken: String(Date.now()),
+        },
+      });
+    },
+    [currentWeekIndex, router, selectedDayIndex]
   );
 
   const hasPlan = !!(plan || companionPlan);
@@ -1339,21 +1599,37 @@ export default function TrainIndex() {
   }, []);
 
   const loadLatestPlan = useCallback(async () => {
+    const loadId = ++latestPlanLoadRef.current;
+    const isStale = () => loadId !== latestPlanLoadRef.current;
+
     try {
+      const now = new Date();
+      if (isStale()) return;
+      setCalendarNow(now);
+      const todayDayIndex = getTodayPlanDayIndex(now);
       const uid = auth.currentUser?.uid;
       if (!uid) {
+        if (isStale()) return;
         setPlan(null);
         setCompanionPlan(null);
+        if (!hasExplicitTrainReturn) {
+          setSelectedDayIndex(todayDayIndex);
+        }
         setLoading(false);
         return;
       }
 
       const ref = collection(db, "users", uid, "plans");
       const snap = await getDocs(query(ref, orderBy("updatedAt", "desc"), limit(30)));
+      if (isStale()) return;
 
       if (snap.empty) {
+        if (isStale()) return;
         setPlan(null);
         setCompanionPlan(null);
+        if (!hasExplicitTrainReturn) {
+          setSelectedDayIndex(todayDayIndex);
+        }
       } else {
         const docs = snap.docs.map(normalisePlanDoc).filter((d) => d?.id);
 
@@ -1381,13 +1657,26 @@ export default function TrainIndex() {
 
         const resolvedCompanion =
           companion && primary && companion.id !== primary.id ? companion : null;
+        const weeksCount = Math.max(
+          primary?.weeks?.length || 0,
+          resolvedCompanion?.weeks?.length || 0,
+          1
+        );
+        const resolvedActiveWeekIndex = deriveCurrentPlanWeekIndex(
+          [primary, resolvedCompanion],
+          now,
+          weeksCount
+        );
 
+        if (isStale()) return;
         setPlan(primary);
         setCompanionPlan(resolvedCompanion);
 
+        let appliedMoveState = false;
         try {
           const uiRef = doc(db, "users", uid, "uiState", "train");
           const uiSnap = await getDoc(uiRef);
+          if (isStale()) return;
           const moveState = uiSnap.exists() ? uiSnap.data()?.lastSessionMove : null;
 
           if (moveState && typeof moveState === "object") {
@@ -1398,16 +1687,12 @@ export default function TrainIndex() {
             const matchesActivePlan = movePlanId && activePlanIds.includes(movePlanId);
 
             if (matchesActivePlan) {
+              appliedMoveState = true;
               const requestedWeekIndex = Number(
                 moveState?.toWeekIndex ?? moveState?.weekIndex ?? 0
               );
               const requestedDayIndex = Number(
                 moveState?.toDayIndex ?? moveState?.dayIndex ?? 0
-              );
-              const weeksCount = Math.max(
-                primary?.weeks?.length || 0,
-                resolvedCompanion?.weeks?.length || 0,
-                1
               );
 
               if (Number.isFinite(requestedWeekIndex)) {
@@ -1434,18 +1719,33 @@ export default function TrainIndex() {
                 },
                 { merge: true }
               );
+              if (isStale()) return;
             }
           }
         } catch (moveStateErr) {
           console.log("[train] apply move state error:", moveStateErr);
         }
+
+        if (!appliedMoveState) {
+          // Do not force a provisional week index here.
+          // The week auto-sync effect applies the final resolved index once
+          // logs/anchors are ready, which avoids Week 1 -> current week flicker.
+          void resolvedActiveWeekIndex;
+        }
+
+        if (isStale()) return;
+        if (!hasExplicitTrainReturn && !appliedMoveState) {
+          setSelectedDayIndex(todayDayIndex);
+        }
       }
     } catch (e) {
+      if (isStale()) return;
       console.log("[train] load plan error:", e);
     } finally {
+      if (isStale()) return;
       setLoading(false);
     }
-  }, [normalisePlanDoc]);
+  }, [hasExplicitTrainReturn, normalisePlanDoc]);
 
   const loadCoachPlans = useCallback(async () => {
     const uid = auth.currentUser?.uid;
@@ -1620,38 +1920,19 @@ export default function TrainIndex() {
     [router]
   );
 
-  const loadPlanSessionLogs = useCallback(async () => {
-    const uid = auth.currentUser?.uid;
-    const planIds = [...new Set([plan?.id, companionPlan?.id].filter(Boolean).map(String))];
-
-    if (!uid || !planIds.length) {
-      setSessionLogMap({});
-      return;
-    }
-
-    try {
-      const ref = collection(db, "users", uid, "sessionLogs");
-      const chunks = [];
-      for (let idx = 0; idx < planIds.length; idx += 10) {
-        chunks.push(planIds.slice(idx, idx + 10));
-      }
-
-      const snapshots = await Promise.all(
-        chunks.map((ids) => getDocs(query(ref, where("planId", "in", ids))))
-      );
-
-      const nextMap = {};
-      snapshots.forEach((snap) => {
-        snap.forEach((docSnap) => {
-          nextMap[docSnap.id] = docSnap.data() || {};
-        });
-      });
-
-      setSessionLogMap(nextMap);
-    } catch (e) {
-      console.log("[train] load session logs error:", e);
-    }
-  }, [companionPlan?.id, plan?.id]);
+  const activePlanIds = useMemo(
+    () => [...new Set([plan?.id, companionPlan?.id].filter(Boolean).map(String))],
+    [companionPlan?.id, plan?.id]
+  );
+  const activePlanKey = useMemo(() => activePlanIds.join("|"), [activePlanIds]);
+  const showResolvedPlanState =
+    hasPlan &&
+    !loading &&
+    !!activePlanKey &&
+    sessionLogsReady &&
+    sessionLogsReadyKey === activePlanKey;
+  const isResolvingActivePlan = loading || (hasPlan && !showResolvedPlanState);
+  const showEmptyPlanState = !loading && !hasPlan;
 
   useEffect(() => {
     (async () => {
@@ -1659,23 +1940,123 @@ export default function TrainIndex() {
     })();
   }, [loadLatestPlan, loadCoachPlans]);
 
-  useFocusEffect(
-    useCallback(() => {
-      (async () => {
-        await Promise.all([loadLatestPlan(), loadCoachPlans()]);
-      })();
-    }, [loadLatestPlan, loadCoachPlans])
-  );
+  useEffect(() => {
+    if (!currentUid) {
+      Object.assign(TRAIN_INDEX_SCREEN_CACHE, {
+        uid: "",
+        hydrated: false,
+        plan: null,
+        companionPlan: null,
+        calendarNow: null,
+        currentWeekIndex: 0,
+        selectedDayIndex: 0,
+        sessionLogMap: {},
+        sessionLogsReady: false,
+        sessionLogsReadyKey: "",
+        weekStripWidth: 0,
+        coachPlans: [],
+        coachPlansLoaded: false,
+      });
+      return;
+    }
+
+    if (loading) return;
+
+    Object.assign(TRAIN_INDEX_SCREEN_CACHE, {
+      uid: currentUid,
+      hydrated: true,
+      plan,
+      companionPlan,
+      calendarNow: calendarNow instanceof Date ? calendarNow.toISOString() : null,
+      currentWeekIndex,
+      selectedDayIndex,
+      sessionLogMap,
+      sessionLogsReady,
+      sessionLogsReadyKey,
+      weekStripWidth,
+      coachPlans,
+      coachPlansLoaded: true,
+    });
+  }, [
+    calendarNow,
+    coachPlans,
+    companionPlan,
+    currentUid,
+    currentWeekIndex,
+    loading,
+    plan,
+    selectedDayIndex,
+    sessionLogMap,
+    sessionLogsReady,
+    sessionLogsReadyKey,
+    weekStripWidth,
+  ]);
 
   useEffect(() => {
-    loadPlanSessionLogs();
-  }, [loadPlanSessionLogs]);
+    const uid = auth.currentUser?.uid;
+    const currentPlanKey = activePlanKey;
 
-  useFocusEffect(
-    useCallback(() => {
-      loadPlanSessionLogs();
-    }, [loadPlanSessionLogs])
-  );
+    if (!uid || !activePlanIds.length) {
+      setSessionLogMap({});
+      setSessionLogsReady(true);
+      setSessionLogsReadyKey("");
+      return;
+    }
+
+    if (sessionLogsReadyKey !== currentPlanKey) {
+      setSessionLogsReady(false);
+      setSessionLogsReadyKey("");
+    }
+    const ref = collection(db, "users", uid, "sessionLogs");
+    const chunks = [];
+    for (let idx = 0; idx < activePlanIds.length; idx += 10) {
+      chunks.push(activePlanIds.slice(idx, idx + 10));
+    }
+
+    const partialMaps = {};
+    let closed = false;
+
+    const syncMergedMap = () => {
+      if (closed) return;
+      const merged = {};
+      Object.values(partialMaps).forEach((chunkMap) => {
+        Object.assign(merged, chunkMap || {});
+      });
+      setSessionLogMap(merged);
+      if (Object.keys(partialMaps).length >= chunks.length) {
+        setSessionLogsReady(true);
+        setSessionLogsReadyKey(currentPlanKey);
+      }
+    };
+
+    const unsubs = chunks.map((ids, chunkIdx) =>
+      onSnapshot(
+        query(ref, where("planId", "in", ids)),
+        (snap) => {
+          const nextMap = {};
+          snap.forEach((docSnap) => {
+            nextMap[docSnap.id] = docSnap.data() || {};
+          });
+          partialMaps[chunkIdx] = nextMap;
+          syncMergedMap();
+        },
+        (e) => {
+          console.log("[train] session logs snapshot error:", e);
+          partialMaps[chunkIdx] = {};
+          syncMergedMap();
+        }
+      )
+    );
+
+    return () => {
+      closed = true;
+      unsubs.forEach((unsub) => {
+        try {
+          unsub?.();
+        } catch {}
+      });
+    };
+  }, [activePlanIds, activePlanKey, sessionLogsReadyKey]);
 
   const visibleWeeksCount = useMemo(() => {
     if (!hasPlan) return 0;
@@ -1694,14 +2075,48 @@ export default function TrainIndex() {
   }, [hasPlan, visibleWeeksCount]);
 
   const weekPanelWidth = useMemo(
-    () => Math.max(Number(weekStripWidth || 0), WEEK_CAROUSEL_FALLBACK_WIDTH),
-    [weekStripWidth]
+    () =>
+      Math.max(
+        Number(weekStripWidth || 0),
+        Number(estimatedInitialWeekStripWidth || 0),
+        WEEK_CAROUSEL_FALLBACK_WIDTH
+      ),
+    [estimatedInitialWeekStripWidth, weekStripWidth]
   );
 
   const clampWeekIndex = useCallback(
     (idx) => Math.min(Math.max(Number(idx || 0), 0), maxWeekIndex),
     [maxWeekIndex]
   );
+
+  useEffect(() => {
+    const token = String(Array.isArray(returnTokenParam) ? returnTokenParam[0] : returnTokenParam || "");
+    if (!token || appliedReturnTokenRef.current === token) return;
+    if (loading) return;
+
+    const parsedWeekIndex = Number(
+      Array.isArray(returnWeekIndexParam) ? returnWeekIndexParam[0] : returnWeekIndexParam
+    );
+    const parsedDayIndex = Number(
+      Array.isArray(returnDayIndexParam) ? returnDayIndexParam[0] : returnDayIndexParam
+    );
+
+    if (Number.isFinite(parsedWeekIndex)) {
+      setCurrentWeekIndex(clampWeekIndex(parsedWeekIndex));
+    }
+
+    if (Number.isFinite(parsedDayIndex) && parsedDayIndex >= 0 && parsedDayIndex < DAYS.length) {
+      setSelectedDayIndex(Math.round(parsedDayIndex));
+    }
+
+    appliedReturnTokenRef.current = token;
+  }, [
+    clampWeekIndex,
+    loading,
+    returnDayIndexParam,
+    returnTokenParam,
+    returnWeekIndexParam,
+  ]);
 
   useEffect(() => {
     if (!hasPlan) {
@@ -1882,15 +2297,40 @@ export default function TrainIndex() {
     [mergeWeekAtIndex, currentWeekIndex]
   );
 
-  const todayIso = useMemo(() => toISODate(new Date()), []);
-  const isoWeekStart = useMemo(() => startOfISOWeek(new Date()), []);
+  const activePlanWeekIndex = useMemo(
+    () =>
+      deriveCurrentPlanWeekIndex(
+        [plan, companionPlan],
+        calendarNow,
+        visibleWeeksCount,
+        sessionLogMap
+      ),
+    [calendarNow, companionPlan, plan, sessionLogMap, visibleWeeksCount]
+  );
+
+  const planWeekZeroStart = useMemo(
+    () => {
+      const anchors = [plan, companionPlan]
+        .map((planDoc) => resolvePlanWeekZeroStart(planDoc, sessionLogMap))
+        .filter(Boolean)
+        .sort((a, b) => a.getTime() - b.getTime());
+
+      return anchors[0] || startOfISOWeek(calendarNow);
+    },
+    [calendarNow, companionPlan, plan, sessionLogMap]
+  );
+
+  const todayIso = useMemo(() => toISODate(calendarNow), [calendarNow]);
 
   const buildWeekGrid = useCallback((weekData, sourceWeekIndex) => {
+    const safeWeekIndex = Number.isFinite(Number(sourceWeekIndex))
+      ? Math.round(Number(sourceWeekIndex))
+      : 0;
+    const derivedWeekStart = addDays(planWeekZeroStart, safeWeekIndex * 7);
+
     return (Array.isArray(weekData?.days) ? weekData.days : []).map((d, dayIdx) => {
-      const weekOffset = Number.isFinite(Number(sourceWeekIndex))
-        ? Math.round(Number(sourceWeekIndex)) * 7
-        : 0;
-      const date = addDays(isoWeekStart, weekOffset + dayIdx);
+      const explicitDate = parseDateLike(d?.date || d?.isoDate);
+      const date = explicitDate || addDays(derivedWeekStart, dayIdx);
       const isoDate = toISODate(date);
       const isToday = isoDate === todayIso;
       const sessions = Array.isArray(d.sessions) ? d.sessions : [];
@@ -1950,12 +2390,56 @@ export default function TrainIndex() {
         sessionSummary,
       };
     });
-  }, [isoWeekStart, plan?.id, sessionLogMap, todayIso]);
+  }, [plan?.id, planWeekZeroStart, sessionLogMap, todayIso]);
 
   const weekGrid = useMemo(
     () => buildWeekGrid(week, currentWeekIndex),
     [buildWeekGrid, week, currentWeekIndex]
   );
+
+  const activeWeekAutoSyncRef = useRef("");
+  useEffect(() => {
+    if (!hasPlan || loading) return;
+    if (!visibleWeeksCount) return;
+    if (!sessionLogsReady) return;
+
+    if (!activePlanKey) return;
+    if (sessionLogsReadyKey !== activePlanKey) return;
+
+    const targetIndex = Math.max(
+      0,
+      Math.min(Number(activePlanWeekIndex || 0), Math.max(visibleWeeksCount - 1, 0))
+    );
+    const weekAnchor = toISODate(startOfISOWeek(calendarNow));
+    const baseSyncKey = `${activePlanKey}:${weekAnchor}`;
+    const syncKey = `${activePlanKey}:${weekAnchor}:${targetIndex}`;
+
+    const alreadySyncedThisWeekForPlan = activeWeekAutoSyncRef.current.startsWith(
+      `${baseSyncKey}:`
+    );
+    if (
+      alreadySyncedThisWeekForPlan &&
+      Number.isFinite(Number(currentWeekIndex)) &&
+      targetIndex < Number(currentWeekIndex)
+    ) {
+      return;
+    }
+
+    if (activeWeekAutoSyncRef.current === syncKey) return;
+
+    setCurrentWeekIndex(targetIndex);
+    activeWeekAutoSyncRef.current = syncKey;
+  }, [
+    activePlanWeekIndex,
+    calendarNow,
+    activePlanKey,
+    currentWeekIndex,
+    hasPlan,
+    loading,
+    sessionLogsReady,
+    sessionLogsReadyKey,
+    visibleWeeksCount,
+  ]);
 
   const weekCarouselPanels = useMemo(() => {
     const prevWeekIndex = clampWeekIndex(currentWeekIndex - 1);
@@ -2137,8 +2621,8 @@ export default function TrainIndex() {
   ]);
 
   const dynamicSubtitle = useMemo(() => {
-    if (loading) return "Loading your training";
-    if (!hasPlan) return "No active plan yet";
+    if (isResolvingActivePlan) return "Loading your training";
+    if (showEmptyPlanState) return "No active plan yet";
     if (todayHero?.status === "completed") {
       return `${todayHero.dayLabel || "Selected day"} is complete · ${weekTotals.resolved}/${weekTotals.sessions} sessions marked this week`;
     }
@@ -2153,6 +2637,8 @@ export default function TrainIndex() {
     hasPlan,
     loading,
     nextSession,
+    isResolvingActivePlan,
+    showEmptyPlanState,
     todayFirst,
     todayHero?.dayLabel,
     todayHero?.status,
@@ -2161,22 +2647,22 @@ export default function TrainIndex() {
   ]);
 
   const headerContextChip = useMemo(() => {
-    if (loading) return "Loading";
-    if (!hasPlan) return "No active plan";
+    if (isResolvingActivePlan) return "Loading";
+    if (showEmptyPlanState) return "No active plan";
     if (hasRunPlan && hasStrengthPlan) return "2 plans running";
     return "Active plan";
-  }, [loading, hasPlan, hasRunPlan, hasStrengthPlan]);
+  }, [isResolvingActivePlan, showEmptyPlanState, hasRunPlan, hasStrengthPlan]);
 
   const headerContextMeta = useMemo(() => {
-    const nowLabel = new Date().toLocaleDateString("en-GB", {
+    const nowLabel = new Date(calendarNow).toLocaleDateString("en-GB", {
       weekday: "short",
       day: "numeric",
       month: "short",
     });
-    const selectedDate = focusedDay?.dateLabel || nowLabel;
-    if (!hasPlan) return selectedDate;
+    const selectedDate = showResolvedPlanState ? focusedDay?.dateLabel || nowLabel : nowLabel;
+    if (!showResolvedPlanState) return selectedDate;
     return `${selectedDate} · Week ${currentWeekIndex + 1} of ${visibleWeeksCount || 1}`;
-  }, [hasPlan, currentWeekIndex, visibleWeeksCount, focusedDay?.dateLabel]);
+  }, [calendarNow, currentWeekIndex, visibleWeeksCount, focusedDay?.dateLabel, showResolvedPlanState]);
 
   const todayHeroSupport = useMemo(() => {
     if (todayHero?.status === "completed") {
@@ -2495,8 +2981,8 @@ export default function TrainIndex() {
   const activeDay = useMemo(() => weekGrid?.[daySheetIndex] || null, [weekGrid, daySheetIndex]);
   const openPlannedCard = useCallback(
     (card, fallbackDayIdx = null) => {
-      if (card?.savedTrainSessionId && isResolvedSessionStatus(card?.status)) {
-        router.push(`/train/history/${card.savedTrainSessionId}`);
+      if (card?.savedTrainSessionId && card?.status === "completed") {
+        openHistorySessionFromTrain(card.savedTrainSessionId);
         return;
       }
       if (card?.key) {
@@ -2507,17 +2993,18 @@ export default function TrainIndex() {
         openDaySheet(fallbackDayIdx);
       }
     },
-    [goToSession, openDaySheet, router]
+    [goToSession, openDaySheet, openHistorySessionFromTrain]
   );
 
   const todayHeroPrimaryLabel = useMemo(() => {
-    if (todayHero?.status && todayHero?.savedTrainSessionId) return "View session";
+    if (todayHero?.status === "completed" && todayHero?.savedTrainSessionId) return "View session";
+    if (todayHero?.status === "skipped") return "Open session";
     if (todayHero?.key) return "Start session";
     return "Log session";
   }, [todayHero?.key, todayHero?.savedTrainSessionId, todayHero?.status]);
 
   return (
-    <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: theme.bg }}>
+    <View style={{ flex: 1, backgroundColor: theme.bg, paddingTop: insets.top }}>
       <LinearGradient
         colors={[topFadeStart, theme.bg]}
         start={{ x: 0, y: 0 }}
@@ -2525,7 +3012,13 @@ export default function TrainIndex() {
         style={s.topBackgroundFade}
         pointerEvents="none"
       />
-      <ScrollView contentContainerStyle={s.pageContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentInsetAdjustmentBehavior="never"
+        automaticallyAdjustContentInsets={false}
+        contentContainerStyle={s.pageContent}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Header */}
         <View style={s.header}>
           <View style={s.headerTopRow}>
@@ -2540,7 +3033,7 @@ export default function TrainIndex() {
             <Text style={[s.headerMetaText, { color: theme.subtext }]}>{headerContextMeta}</Text>
           </View>
 
-          {hasPlan ? (
+          {showResolvedPlanState ? (
             <View style={s.headerWeekRow}>
               <Text style={[s.headerWeekLabel, { color: theme.subtext }]}>
                 Week {currentWeekIndex + 1} of {visibleWeeksCount || 1}
@@ -2592,67 +3085,67 @@ export default function TrainIndex() {
             </View>
           ) : null}
 
-          <View
-            style={[s.noPlanWeekStrip, hasPlan ? s.activePlanWeekStrip : null]}
-            onLayout={(e) => {
-              const w = Number(e?.nativeEvent?.layout?.width || 0);
-              if (w > 0 && Math.abs(w - weekStripWidth) > 1) {
-                setWeekStripWidth(w);
-              }
-            }}
-            {...(hasPlan ? weekSwipeResponder.panHandlers : {})}
-          >
-            <Animated.View
-              style={[
-                s.weekCarouselTrack,
-                {
-                  width: weekPanelWidth * 3,
-                  transform: [{ translateX: weekCarouselTranslateX }],
-                },
-              ]}
+          {showResolvedPlanState ? (
+            <View
+              style={[s.noPlanWeekStrip, s.activePlanWeekStrip]}
+              onLayout={(e) => {
+                const w = Number(e?.nativeEvent?.layout?.width || 0);
+                if (w > 0 && Math.abs(w - weekStripWidth) > 1) {
+                  setWeekStripWidth(w);
+                }
+              }}
+              {...weekSwipeResponder.panHandlers}
             >
-              {weekCarouselPanels.map((panel) => (
-                <View
-                  key={`${panel.id}-${panel.weekIndex}`}
-                  style={[s.weekCarouselPanel, { width: weekPanelWidth }]}
-                >
-                  {panel.grid.map((item) => {
-                    const dayNum = new Date(item.date).getDate();
-                    const sessionCount = Array.isArray(item.cards) ? item.cards.length : 0;
-                    const hasSessions = sessionCount > 0;
-                    const isToday = !!item.isToday;
-                    const isSelected = item.dayIdx === selectedDayIndex;
-                    const visibleDots = hasSessions ? Math.min(sessionCount, 3) : 0;
-                    const sessionSummary = item.sessionSummary || summariseCardStatuses(item.cards);
-                    const allResolved = hasSessions && sessionSummary.pending === 0;
-                    return (
-                      <TouchableOpacity
-                        key={`${panel.id}-${item.isoDate}`}
-                        style={s.noPlanWeekDay}
-                        onPress={() => handleHeaderDayPress(item)}
-                        activeOpacity={0.8}
-                      >
-                        <Text
-                          style={[
-                            s.noPlanWeekDow,
-                            {
-                              color: isSelected || isToday ? theme.text : theme.subtext,
-                              opacity: hasPlan && !isSelected && !isToday && !hasSessions ? 0.7 : 1,
-                            },
-                          ]}
+              <Animated.View
+                style={[
+                  s.weekCarouselTrack,
+                  {
+                    width: weekPanelWidth * 3,
+                    transform: [{ translateX: weekCarouselTranslateX }],
+                  },
+                ]}
+              >
+                {weekCarouselPanels.map((panel) => (
+                  <View
+                    key={`${panel.id}-${panel.weekIndex}`}
+                    style={[s.weekCarouselPanel, { width: weekPanelWidth }]}
+                  >
+                    {panel.grid.map((item) => {
+                      const dayNum = new Date(item.date).getDate();
+                      const sessionCount = Array.isArray(item.cards) ? item.cards.length : 0;
+                      const hasSessions = sessionCount > 0;
+                      const isToday = !!item.isToday;
+                      const isSelected = item.dayIdx === selectedDayIndex;
+                      const visibleDots = hasSessions ? Math.min(sessionCount, 3) : 0;
+                      const sessionSummary = item.sessionSummary || summariseCardStatuses(item.cards);
+                      const allResolved = hasSessions && sessionSummary.pending === 0;
+                      return (
+                        <TouchableOpacity
+                          key={`${panel.id}-${item.isoDate}`}
+                          style={s.noPlanWeekDay}
+                          onPress={() => handleHeaderDayPress(item)}
+                          activeOpacity={0.8}
                         >
-                          {String(item.dayLabel || "").toUpperCase()}
-                        </Text>
-                        <View
-                          style={[
-                            s.noPlanWeekDateWrap,
-                            isSelected
-                              ? {
-                                  backgroundColor: hasPlan ? theme.primaryBg : theme.text,
-                                  borderColor: hasPlan ? theme.primaryBg : theme.text,
-                                }
-                              : hasPlan
+                          <Text
+                            style={[
+                              s.noPlanWeekDow,
+                              {
+                                color: isSelected || isToday ? theme.text : theme.subtext,
+                                opacity: !isSelected && !isToday && !hasSessions ? 0.7 : 1,
+                              },
+                            ]}
+                          >
+                            {String(item.dayLabel || "").toUpperCase()}
+                          </Text>
+                          <View
+                            style={[
+                              s.noPlanWeekDateWrap,
+                              isSelected
                                 ? {
+                                    backgroundColor: theme.primaryBg,
+                                    borderColor: theme.primaryBg,
+                                  }
+                                : {
                                     backgroundColor: allResolved
                                       ? withHexAlpha(theme.primaryBg, theme.isDark ? "1A" : "26")
                                       : hasSessions
@@ -2663,67 +3156,78 @@ export default function TrainIndex() {
                                       : hasSessions || isToday
                                       ? theme.border
                                       : "transparent",
-                                  }
-                                : { backgroundColor: "transparent", borderColor: "transparent" },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              s.noPlanWeekDate,
-                              {
-                                color: isSelected
-                                  ? hasPlan
-                                    ? theme.primaryText
-                                    : theme.bg
-                                  : hasPlan && !hasSessions
-                                    ? theme.subtext
-                                    : theme.text,
-                              },
+                                  },
                             ]}
                           >
-                            {dayNum}
-                          </Text>
-                        </View>
-                        <View style={s.noPlanWeekSessionMarkerRow}>
-                          {hasSessions
-                            ? item.cards.slice(0, visibleDots).map((card, dotIdx) => {
-                                const status = String(card?.status || "").toLowerCase();
-                                const dotColor =
-                                  status === "completed"
-                                    ? theme.primaryBg
-                                    : status === "skipped"
-                                    ? "#F87171"
-                                    : isSelected || isToday
-                                    ? theme.primaryBg
-                                    : theme.text;
-
-                                return (
-                                  <View
-                                    key={`${panel.id}-${item.isoDate}-dot-${dotIdx}`}
-                                    style={[
-                                      s.noPlanWeekSessionDot,
-                                      {
-                                        backgroundColor: dotColor,
-                                        opacity: isSelected ? 1 : isToday ? 0.95 : 0.82,
-                                      },
-                                    ]}
-                                  />
-                                );
-                              })
-                            : null}
-                          {sessionCount > 3 ? (
-                            <Text style={[s.noPlanWeekSessionMoreText, { color: theme.subtext }]}>
-                              +{sessionCount - 3}
+                            <Text
+                              style={[
+                                s.noPlanWeekDate,
+                                {
+                                  color: isSelected
+                                    ? theme.primaryText
+                                    : !hasSessions
+                                    ? theme.subtext
+                                    : theme.text,
+                                },
+                              ]}
+                            >
+                              {dayNum}
                             </Text>
-                          ) : null}
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              ))}
-            </Animated.View>
-          </View>
+                          </View>
+                          <View style={s.noPlanWeekSessionMarkerRow}>
+                            {hasSessions
+                              ? item.cards.slice(0, visibleDots).map((card, dotIdx) => {
+                                  const status = String(card?.status || "").toLowerCase();
+                                  const dotColor =
+                                    status === "completed"
+                                      ? theme.primaryBg
+                                      : status === "skipped"
+                                      ? "#F87171"
+                                      : isSelected || isToday
+                                      ? theme.primaryBg
+                                      : theme.text;
+
+                                  return (
+                                    <View
+                                      key={`${panel.id}-${item.isoDate}-dot-${dotIdx}`}
+                                      style={[
+                                        s.noPlanWeekSessionDot,
+                                        {
+                                          backgroundColor: dotColor,
+                                          opacity: isSelected ? 1 : isToday ? 0.95 : 0.82,
+                                        },
+                                      ]}
+                                    />
+                                  );
+                                })
+                              : null}
+                            {sessionCount > 3 ? (
+                              <Text style={[s.noPlanWeekSessionMoreText, { color: theme.subtext }]}>
+                                +{sessionCount - 3}
+                              </Text>
+                            ) : null}
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ))}
+              </Animated.View>
+            </View>
+          ) : isResolvingActivePlan ? (
+            <View
+              style={[
+                s.noPlanWeekStrip,
+                s.activePlanWeekStrip,
+                { alignItems: "center", justifyContent: "center", minHeight: 88 },
+              ]}
+            >
+              <ActivityIndicator size="small" color={theme.primaryBg} />
+              <Text style={[s.headerMetaText, { color: theme.subtext, marginTop: 10 }]}>
+                Syncing current week
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         {/* Today hero */}
@@ -2734,11 +3238,11 @@ export default function TrainIndex() {
             end={{ x: 1, y: 1 }}
             style={[
               s.hero,
-              hasPlan ? s.heroNoBg : s.heroNoBlock,
+              showEmptyPlanState ? s.heroNoBlock : s.heroNoBg,
               { borderColor: "transparent" },
             ]}
           >
-            {hasPlan ? (
+            {showResolvedPlanState ? (
               <>
                 <View style={s.heroStatusRow}>
                   <Text style={[s.heroDate, { color: theme.subtext }]}>
@@ -2793,8 +3297,8 @@ export default function TrainIndex() {
                 <View style={[s.heroActions, s.heroActionsTight]}>
                   <TouchableOpacity
                     onPress={() => {
-                      if (todayHero?.status && todayHero?.savedTrainSessionId) {
-                        router.push(`/train/history/${todayHero.savedTrainSessionId}`);
+                      if (todayHero?.status === "completed" && todayHero?.savedTrainSessionId) {
+                        openHistorySessionFromTrain(todayHero.savedTrainSessionId);
                         return;
                       }
                       if (todayHero?.key) return goToSession(todayHero.key);
@@ -2805,7 +3309,7 @@ export default function TrainIndex() {
                   >
                     <Feather
                       name={
-                        todayHero?.status && todayHero?.savedTrainSessionId
+                        todayHero?.status === "completed" && todayHero?.savedTrainSessionId
                           ? "arrow-up-right"
                           : todayHero?.key
                           ? "play"
@@ -2840,9 +3344,42 @@ export default function TrainIndex() {
                           key={`hero-extra-session-${card.key || card.title}-${idx}`}
                           style={[s.heroExtraSessionBlock, { borderTopColor: theme.border }]}
                         >
-                          <Text style={[s.heroDate, { color: theme.subtext }]}>
-                            {todayHero?.dateLabel || headerContextMeta}
-                          </Text>
+                          <View style={s.heroExtraSessionTopRow}>
+                            <Text style={[s.heroDate, { color: theme.subtext }]}>
+                              {todayHero?.dateLabel || headerContextMeta}
+                            </Text>
+
+                            {card?.status ? (
+                              <View
+                                style={[
+                                  s.sheetSessionStatusChip,
+                                  {
+                                    backgroundColor:
+                                      card.status === "completed"
+                                        ? withHexAlpha(theme.primaryBg, theme.isDark ? "20" : "2B")
+                                        : "rgba(248,113,113,0.16)",
+                                    borderColor:
+                                      card.status === "completed"
+                                        ? withHexAlpha(theme.primaryBg, theme.isDark ? "7A" : "A3")
+                                        : "rgba(248,113,113,0.45)",
+                                  },
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    s.sheetSessionStatusChipText,
+                                    {
+                                      color:
+                                        card.status === "completed" ? theme.primaryBg : "#F87171",
+                                    },
+                                  ]}
+                                >
+                                  {card.status === "completed" ? "Completed" : "Skipped"}
+                                </Text>
+                              </View>
+                            ) : null}
+                          </View>
+
                           <Text style={[s.heroExtraSessionTitle, { color: theme.text }]} numberOfLines={2}>
                             {card?.title || "Session"}
                           </Text>
@@ -2860,7 +3397,7 @@ export default function TrainIndex() {
                             >
                               <Feather
                                 name={
-                                  card?.savedTrainSessionId && isResolvedSessionStatus(card?.status)
+                                  card?.savedTrainSessionId && card?.status === "completed"
                                     ? "arrow-up-right"
                                     : "play"
                                 }
@@ -2868,8 +3405,10 @@ export default function TrainIndex() {
                                 color={theme.primaryText}
                               />
                               <Text style={[s.primaryBtnText, { color: theme.primaryText }]}>
-                                {card?.savedTrainSessionId && isResolvedSessionStatus(card?.status)
+                                {card?.savedTrainSessionId && card?.status === "completed"
                                   ? "View session"
+                                  : card?.status === "skipped"
+                                  ? "Open session"
                                   : "Start session"}
                               </Text>
                             </TouchableOpacity>
@@ -2893,6 +3432,14 @@ export default function TrainIndex() {
                     ) : null}
                   </View>
                 ) : null}
+              </>
+            ) : isResolvingActivePlan ? (
+              <>
+                <Text style={[s.heroDate, { color: theme.subtext }]}>{headerContextMeta}</Text>
+                <Text style={[s.heroTitle, { color: theme.text }]}>Loading your active plan</Text>
+                <Text style={[s.heroSupport, { color: theme.subtext }]}>
+                  Checking your current block and today&apos;s sessions.
+                </Text>
               </>
             ) : (
               <>
@@ -2926,7 +3473,7 @@ export default function TrainIndex() {
           </LinearGradient>
         </View>
 
-        {hasPlan ? (
+        {showResolvedPlanState ? (
           <>
             {/* Up next */}
             <View style={s.section}>
@@ -3049,7 +3596,7 @@ export default function TrainIndex() {
               </View>
             </View>
           </>
-        ) : (
+        ) : showEmptyPlanState ? (
           <>
             {/* Sample workouts */}
             <View style={s.section}>
@@ -3152,6 +3699,15 @@ export default function TrainIndex() {
               </View>
             </View>
           </>
+        ) : (
+          <View style={s.section}>
+            <View style={[s.restCard, { borderColor: theme.border, backgroundColor: theme.card2 }]}>
+              <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>Loading active plan</Text>
+              <Text style={{ color: theme.subtext, marginTop: 4, fontSize: 12 }}>
+                Pulling your latest schedule so the correct sessions show straight away.
+              </Text>
+            </View>
+          </View>
         )}
 
         {/* Explore */}
@@ -3918,7 +4474,7 @@ export default function TrainIndex() {
           </KeyboardAvoidingView>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -4103,6 +4659,12 @@ const s = StyleSheet.create({
     marginTop: 8,
     paddingTop: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  heroExtraSessionTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
   },
   heroExtraSessionTitle: {
     marginTop: 4,

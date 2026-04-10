@@ -2,7 +2,11 @@
 import { Stack } from "expo-router";
 import React from "react";
 import { Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaProvider,
+  SafeAreaView,
+  initialWindowMetrics,
+} from "react-native-safe-area-context";
 
 import { AuthProvider } from "../providers/AuthProvider";
 import { LiveActivityProvider } from "../providers/LiveActivityProvider";
@@ -53,14 +57,16 @@ class RootErrorBoundary extends React.Component {
 
 export default function RootLayout() {
   return (
-    <RootErrorBoundary>
-      <ThemeProvider>
-        <AuthProvider>
-          <LiveActivityProvider>
-            <Stack screenOptions={{ headerShown: false }} />
-          </LiveActivityProvider>
-        </AuthProvider>
-      </ThemeProvider>
-    </RootErrorBoundary>
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <RootErrorBoundary>
+        <ThemeProvider>
+          <AuthProvider>
+            <LiveActivityProvider>
+              <Stack screenOptions={{ headerShown: false }} />
+            </LiveActivityProvider>
+          </AuthProvider>
+        </ThemeProvider>
+      </RootErrorBoundary>
+    </SafeAreaProvider>
   );
 }

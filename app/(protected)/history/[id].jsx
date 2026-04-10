@@ -19,7 +19,6 @@ import {
 import Svg, {
   Line as SvgLine,
   Path as SvgPath,
-  Rect as SvgRect,
 } from "react-native-svg";
 // ❌ REMOVE this line:
 // import MapView, { Polyline } from "react-native-maps";
@@ -178,6 +177,7 @@ export default function ActivityDetailPage() {
   const [planLinkError, setPlanLinkError] = useState("");
   const [linkingPlan, setLinkingPlan] = useState(false);
   const [linkedPlanSession, setLinkedPlanSession] = useState(null);
+  const [targetPlanSessionOption, setTargetPlanSessionOption] = useState(null);
   const [targetTrainSession, setTargetTrainSession] = useState(null);
   const [targetTrainSessionError, setTargetTrainSessionError] = useState("");
   const [linkingTrainSession, setLinkingTrainSession] = useState(false);
@@ -188,6 +188,20 @@ export default function ActivityDetailPage() {
     const value = String(raw || "").trim();
     return value || null;
   }, [params?.linkTrainSessionId]);
+  const targetPlanSessionKey = useMemo(() => {
+    const raw = Array.isArray(params?.linkSessionKey)
+      ? params.linkSessionKey[0]
+      : params?.linkSessionKey;
+    const value = String(raw || "").trim();
+    return value || null;
+  }, [params?.linkSessionKey]);
+  const targetPlanSessionTitleParam = useMemo(() => {
+    const raw = Array.isArray(params?.linkSessionTitle)
+      ? params.linkSessionTitle[0]
+      : params?.linkSessionTitle;
+    const value = String(raw || "").trim();
+    return value || null;
+  }, [params?.linkSessionTitle]);
 
   useEffect(() => {
     const loadActivity = async () => {
@@ -1174,6 +1188,7 @@ export default function ActivityDetailPage() {
       if (!uid || !activity?.id) {
         setPlanOptions([]);
         setLinkedPlanSession(null);
+        setTargetPlanSessionOption(null);
         return;
       }
 
@@ -1262,12 +1277,34 @@ export default function ActivityDetailPage() {
         } else {
           setLinkedPlanSession(null);
         }
+
+        if (targetPlanSessionKey) {
+          const matchedOption = options.find(
+            (entry) => String(entry?.sessionKey || "").trim() === targetPlanSessionKey
+          );
+
+          setTargetPlanSessionOption(
+            matchedOption || {
+              sessionKey: targetPlanSessionKey,
+              title: targetPlanSessionTitleParam || "Planned session",
+              planName: "",
+              weekLabel: "",
+              dayLabel: "",
+              status: "",
+              savedTrainSessionId: null,
+              session: { title: targetPlanSessionTitleParam || "Planned session" },
+            }
+          );
+        } else {
+          setTargetPlanSessionOption(null);
+        }
       } catch (e) {
         console.error("Plan options load error", e);
         if (!cancelled) {
           setPlanLinkError("Couldn't load planned sessions.");
           setPlanOptions([]);
           setLinkedPlanSession(null);
+          setTargetPlanSessionOption(null);
         }
       } finally {
         if (!cancelled) {
@@ -1281,7 +1318,7 @@ export default function ActivityDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [activity?.id, activityMode]);
+  }, [activity?.id, activityMode, targetPlanSessionKey, targetPlanSessionTitleParam]);
 
   const paceConsistency = useMemo(() => {
     const values = splitRows
@@ -1516,6 +1553,38 @@ export default function ActivityDetailPage() {
     return title || "training session";
   }, [targetTrainSession]);
 
+  const targetPlanSessionTitle = useMemo(() => {
+    const title = String(
+      targetPlanSessionOption?.session?.title ||
+        targetPlanSessionOption?.session?.name ||
+        targetPlanSessionOption?.title ||
+        targetPlanSessionTitleParam ||
+        "planned session"
+    ).trim();
+    return title || "planned session";
+  }, [targetPlanSessionOption, targetPlanSessionTitleParam]);
+
+  const isLinkedToTargetPlanSession = useMemo(() => {
+    if (!targetPlanSessionKey) return false;
+    return (
+      String(linkedPlanSession?.sessionKey || "").trim() ===
+      String(targetPlanSessionKey || "").trim()
+    );
+  }, [linkedPlanSession?.sessionKey, targetPlanSessionKey]);
+
+  const targetPlanSavedTrainSessionId = useMemo(() => {
+    const fromTarget = String(targetPlanSessionOption?.savedTrainSessionId || "").trim();
+    if (fromTarget) return fromTarget;
+
+    if (!isLinkedToTargetPlanSession) return null;
+    const fromLinked = String(linkedPlanSession?.savedTrainSessionId || "").trim();
+    return fromLinked || null;
+  }, [
+    isLinkedToTargetPlanSession,
+    linkedPlanSession?.savedTrainSessionId,
+    targetPlanSessionOption?.savedTrainSessionId,
+  ]);
+
   const isLinkedToTargetSession = useMemo(() => {
     const ref = String(targetTrainSession?.linkedActivity?.reference || "").trim();
     return !!ref && ref === String(activity?.id || "");
@@ -1609,6 +1678,23 @@ export default function ActivityDetailPage() {
     } finally {
       setLinkingPlan(false);
     }
+  };
+
+  const handleLinkTargetPlanSession = async () => {
+    if (!targetPlanSessionKey) return;
+
+    if (isLinkedToTargetPlanSession && targetPlanSavedTrainSessionId) {
+      router.replace(`/train/history/${targetPlanSavedTrainSessionId}`);
+      return;
+    }
+
+    await handleLinkPlanSession(
+      targetPlanSessionOption || {
+        sessionKey: targetPlanSessionKey,
+        title: targetPlanSessionTitle,
+        session: { title: targetPlanSessionTitle },
+      }
+    );
   };
 
   const handleLinkTrainSession = async () => {
@@ -1998,96 +2084,146 @@ export default function ActivityDetailPage() {
             </View>
           ) : null}
 
-          <View style={s.linkPlanCard}>
-            <View style={s.linkPlanHeader}>
-              <Text style={s.linkPlanEyebrow}>Plan Link</Text>
-              {linkedPlanSession?.status ? (
-                <View
-                  style={[
-                    s.linkPlanStatusChip,
-                    linkedPlanSession.status === "completed"
-                      ? s.linkPlanStatusChipDone
-                      : s.linkPlanStatusChipSkipped,
-                  ]}
-                >
-                  <Text
+          {targetPlanSessionKey ? (
+            <View style={s.linkPlanCard}>
+              <View style={s.linkPlanHeader}>
+                <Text style={s.linkPlanEyebrow}>Planned Session</Text>
+                {isLinkedToTargetPlanSession ? (
+                  <View style={[s.linkPlanStatusChip, s.linkPlanStatusChipDone]}>
+                    <Text style={[s.linkPlanStatusText, s.linkPlanStatusTextDone]}>Linked</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <Text style={s.linkPlanTitle}>{targetPlanSessionTitle}</Text>
+              <Text style={s.linkPlanMeta}>
+                {isLinkedToTargetPlanSession
+                  ? "This Strava activity is already attached to that planned session."
+                  : "Use this activity as the completed Strava record for the planned session you opened."}
+              </Text>
+
+              <TouchableOpacity
+                style={[s.linkPlanButton, linkingPlan && s.linkPlanButtonDisabled]}
+                activeOpacity={0.85}
+                disabled={linkingPlan}
+                onPress={handleLinkTargetPlanSession}
+              >
+                {linkingPlan ? (
+                  <ActivityIndicator size="small" color={accentText} />
+                ) : (
+                  <>
+                    <Feather
+                      name={
+                        isLinkedToTargetPlanSession && targetPlanSavedTrainSessionId
+                          ? "arrow-up-right"
+                          : "link"
+                      }
+                      size={15}
+                      color={accentText}
+                    />
+                    <Text style={s.linkPlanButtonText}>
+                      {isLinkedToTargetPlanSession && targetPlanSavedTrainSessionId
+                        ? "View linked session"
+                        : "Link to this session"}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
+          {!targetPlanSessionKey ? (
+            <View style={s.linkPlanCard}>
+              <View style={s.linkPlanHeader}>
+                <Text style={s.linkPlanEyebrow}>Plan Link</Text>
+                {linkedPlanSession?.status ? (
+                  <View
                     style={[
-                      s.linkPlanStatusText,
+                      s.linkPlanStatusChip,
                       linkedPlanSession.status === "completed"
-                        ? s.linkPlanStatusTextDone
-                        : s.linkPlanStatusTextSkipped,
+                        ? s.linkPlanStatusChipDone
+                        : s.linkPlanStatusChipSkipped,
                     ]}
                   >
-                    {linkedPlanSession.status === "completed" ? "Completed" : "Skipped"}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
+                    <Text
+                      style={[
+                        s.linkPlanStatusText,
+                        linkedPlanSession.status === "completed"
+                          ? s.linkPlanStatusTextDone
+                          : s.linkPlanStatusTextSkipped,
+                      ]}
+                    >
+                      {linkedPlanSession.status === "completed" ? "Completed" : "Skipped"}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
 
-            {linkedPlanSession ? (
-              <>
-                <Text style={s.linkPlanTitle}>
-                  {linkedPlanSession.session?.title ||
-                    linkedPlanSession.session?.name ||
-                    linkedPlanSession.title ||
-                    "Planned session"}
-                </Text>
-                <Text style={s.linkPlanMeta}>
-                  {[
-                    linkedPlanSession.planName,
-                    linkedPlanSession.weekLabel,
-                    linkedPlanSession.dayLabel,
-                  ]
-                    .filter(Boolean)
-                    .join(" • ")}
-                </Text>
-                <TouchableOpacity
-                  style={s.linkPlanButton}
-                  activeOpacity={0.85}
-                  onPress={() => {
-                    if (linkedPlanSession.savedTrainSessionId) {
-                      router.push(`/train/history/${linkedPlanSession.savedTrainSessionId}`);
-                    }
-                  }}
-                >
-                  <Feather name="arrow-up-right" size={15} color={accentText} />
-                  <Text style={s.linkPlanButtonText}>View linked session</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={s.linkPlanTitle}>Link this activity to a planned session</Text>
-                <Text style={s.linkPlanMeta}>
-                  {activityMode === "strength"
-                    ? "Only strength sessions from your plan are shown."
-                    : activityMode === "run"
-                    ? "Only run sessions from your plan are shown."
-                    : "Choose a programmed session to mark it complete from this activity."}
-                </Text>
-                {planLinkError ? <Text style={s.errorText}>{planLinkError}</Text> : null}
-                <TouchableOpacity
-                  style={[
-                    s.linkPlanButton,
-                    (planOptionsLoading || !planOptions.length) && s.linkPlanButtonDisabled,
-                  ]}
-                  activeOpacity={0.85}
-                  disabled={planOptionsLoading || !planOptions.length}
-                  onPress={() => setPlanPickerOpen(true)}
-                >
-                  {planOptionsLoading ? (
-                    <ActivityIndicator size="small" color={accentText} />
-                  ) : (
-                    <>
-                      <Feather name="link" size={15} color={accentText} />
-                      <Text style={s.linkPlanButtonText}>
-                        {planOptions.length ? "Link to planned session" : "No matching sessions"}
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
+              {linkedPlanSession ? (
+                <>
+                  <Text style={s.linkPlanTitle}>
+                    {linkedPlanSession.session?.title ||
+                      linkedPlanSession.session?.name ||
+                      linkedPlanSession.title ||
+                      "Planned session"}
+                  </Text>
+                  <Text style={s.linkPlanMeta}>
+                    {[
+                      linkedPlanSession.planName,
+                      linkedPlanSession.weekLabel,
+                      linkedPlanSession.dayLabel,
+                    ]
+                      .filter(Boolean)
+                      .join(" • ")}
+                  </Text>
+                  <TouchableOpacity
+                    style={s.linkPlanButton}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      if (linkedPlanSession.savedTrainSessionId) {
+                        router.push(`/train/history/${linkedPlanSession.savedTrainSessionId}`);
+                      }
+                    }}
+                  >
+                    <Feather name="arrow-up-right" size={15} color={accentText} />
+                    <Text style={s.linkPlanButtonText}>View linked session</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <Text style={s.linkPlanTitle}>Link this activity to a planned session</Text>
+                  <Text style={s.linkPlanMeta}>
+                    {activityMode === "strength"
+                      ? "Only strength sessions from your plan are shown."
+                      : activityMode === "run"
+                      ? "Only run sessions from your plan are shown."
+                      : "Choose a programmed session to mark it complete from this activity."}
+                  </Text>
+                  {planLinkError ? <Text style={s.errorText}>{planLinkError}</Text> : null}
+                  <TouchableOpacity
+                    style={[
+                      s.linkPlanButton,
+                      (planOptionsLoading || !planOptions.length) && s.linkPlanButtonDisabled,
+                    ]}
+                    activeOpacity={0.85}
+                    disabled={planOptionsLoading || !planOptions.length}
+                    onPress={() => setPlanPickerOpen(true)}
+                  >
+                    {planOptionsLoading ? (
+                      <ActivityIndicator size="small" color={accentText} />
+                    ) : (
+                      <>
+                        <Feather name="link" size={15} color={accentText} />
+                        <Text style={s.linkPlanButtonText}>
+                          {planOptions.length ? "Link to planned session" : "No matching sessions"}
+                        </Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          ) : null}
 
           {isStrengthActivity ? (
             <>

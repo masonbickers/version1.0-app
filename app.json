@@ -45,7 +45,22 @@
       ],
       "expo-apple-authentication",
       "expo-asset",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to use your camera for meal scan.",
+          "photosPermission": "Allow $(PRODUCT_NAME) to access photos for nutrition logging."
+        }
+      ],
+      [
+        "@react-native-voice/voice",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone for voice meal logging.",
+          "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to convert your speech into meal logs."
+        }
+      ],
+      "expo-widgets"
     ],
     "experiments": {
       "typedRoutes": true,

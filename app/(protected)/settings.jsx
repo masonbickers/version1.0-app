@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -19,6 +18,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { API_URL } from "../../config/api";
 import { auth } from "../../firebaseConfig";
@@ -73,6 +73,7 @@ const GARMIN_RETURN_URL = Linking.createURL("garmin-linked");
 export default function SettingsPage() {
   const router = useRouter();
   const { theme, setTheme, colors, isDark } = useTheme();
+  const insets = useSafeAreaInsets();
 
   const accentFill =
     colors.accentBg || colors.sapPrimary || colors.primary || "#E6FF3B";
@@ -137,7 +138,7 @@ export default function SettingsPage() {
     try {
       await auth.signOut();
       router.replace("/(auth)/login");
-    } catch (e) {}
+    } catch {}
   };
 
   /* ───────────────────────────────
@@ -434,28 +435,33 @@ export default function SettingsPage() {
   };
 
   return (
-    <SafeAreaView style={s.safe}>
-      <ScrollView style={s.page} contentContainerStyle={s.content}>
+    <View style={s.safe}>
+      <ScrollView
+        style={s.page}
+        contentContainerStyle={[
+          s.content,
+          { paddingTop: Math.max(14, insets.top + 4), paddingBottom: Math.max(28, insets.bottom + 14) },
+        ]}
+      >
         <View style={s.header}>
-          <View>
-            <Text style={s.headerTitle}>Settings</Text>
-            <Text style={s.headerSubtitle}>Theme, connections & account</Text>
-            <Text style={s.debugTiny}>
-              API: {API_BASE.replace("http://", "")}
-            </Text>
-            <Text style={s.debugTiny}>Scheme: {APP_SCHEME}</Text>
-            <Text style={s.debugTiny}>Garmin return: {GARMIN_RETURN_URL}</Text>
-          </View>
           <TouchableOpacity
             onPress={handleClose}
             activeOpacity={0.85}
-            style={s.headerBtn}
+            style={s.backBtn}
           >
-            <Feather name="x" size={18} color={colors.text} />
+            <Feather name="chevron-left" size={19} color={colors.text} />
           </TouchableOpacity>
+          <View style={s.headerTextWrap}>
+            <Text style={s.headerKicker}>General</Text>
+            <Text style={s.headerTitle}>Settings</Text>
+            <Text style={s.headerSubtitle}>Theme, connections and account</Text>
+          </View>
         </View>
 
-        <Text style={s.sectionTitle}>Appearance</Text>
+        <View style={s.sectionHeader}>
+          <Text style={s.sectionTitle}>Appearance</Text>
+          <View style={s.sectionLine} />
+        </View>
         <View style={s.card}>
           <Text style={s.label}>Theme</Text>
           <View style={s.themeRow}>
@@ -469,7 +475,10 @@ export default function SettingsPage() {
           </Text>
         </View>
 
-        <Text style={s.sectionTitle}>Preferences</Text>
+        <View style={s.sectionHeader}>
+          <Text style={s.sectionTitle}>Preferences</Text>
+          <View style={s.sectionLine} />
+        </View>
         <View style={s.card}>
           <Row
             icon="bell"
@@ -486,6 +495,8 @@ export default function SettingsPage() {
               />
             }
             colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
           />
           <Divider colors={colors} />
           <Row
@@ -503,10 +514,15 @@ export default function SettingsPage() {
               />
             }
             colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
           />
         </View>
 
-        <Text style={s.sectionTitle}>Connections</Text>
+        <View style={s.sectionHeader}>
+          <Text style={s.sectionTitle}>Connections</Text>
+          <View style={s.sectionLine} />
+        </View>
         <View style={s.card}>
           <Row
             icon="zap"
@@ -528,6 +544,8 @@ export default function SettingsPage() {
               )
             }
             colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
           />
 
           {stravaConnected && (
@@ -539,6 +557,8 @@ export default function SettingsPage() {
                 onPress={handleDisconnectStrava}
                 danger
                 colors={colors}
+                isDark={isDark}
+                accentFill={accentFill}
                 right={null}
               />
             </>
@@ -566,6 +586,8 @@ export default function SettingsPage() {
               )
             }
             colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
           />
 
           {garminConnected && (
@@ -577,19 +599,26 @@ export default function SettingsPage() {
                 onPress={handleDisconnectGarmin}
                 danger
                 colors={colors}
+                isDark={isDark}
+                accentFill={accentFill}
                 right={null}
               />
             </>
           )}
         </View>
 
-        <Text style={s.sectionTitle}>Account</Text>
+        <View style={s.sectionHeader}>
+          <Text style={s.sectionTitle}>Account</Text>
+          <View style={s.sectionLine} />
+        </View>
         <View style={s.card}>
           <Row
             icon="user"
             label="Edit profile"
             onPress={() => router.push("/profile/edit")}
             colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
           />
           <Divider colors={colors} />
           <Row
@@ -597,6 +626,8 @@ export default function SettingsPage() {
             label="Plans & Billing"
             onPress={() => router.push("/plans")}
             colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
           />
           <Divider colors={colors} />
           <Row
@@ -604,6 +635,8 @@ export default function SettingsPage() {
             label="Colours"
             onPress={() => router.push("/colours")}
             colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
           />
           <Divider colors={colors} />
           <Row
@@ -611,6 +644,8 @@ export default function SettingsPage() {
             label="Fonts"
             onPress={() => router.push("/fonts")}
             colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
           />
           <Divider colors={colors} />
           <Row
@@ -619,35 +654,56 @@ export default function SettingsPage() {
             danger
             onPress={onSignOut}
             colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
           />
         </View>
 
-        <Text style={s.footerNote}>BE App - Beta Preview 0.01</Text>
+        <Text style={s.footerNote}>BE App · Beta Preview</Text>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 /* ---------- small components ---------- */
 
-function Row({ icon, label, right, onPress, danger, colors }) {
+function Row({ icon, label, right, onPress, danger, colors, isDark, accentFill }) {
   const dangerColor = colors.danger || "#EF4444";
+  const iconBg = danger
+    ? "rgba(239,68,68,0.16)"
+    : isDark
+    ? "rgba(230,255,59,0.12)"
+    : "rgba(17,17,17,0.06)";
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={onPress ? 0.8 : 1}
-      style={{ flexDirection: "row", alignItems: "center", paddingVertical: 14 }}
+      style={{ flexDirection: "row", alignItems: "center", paddingVertical: 13 }}
     >
-      <Feather
-        name={icon}
-        size={18}
-        color={danger ? dangerColor : colors.text}
-      />
+      <View
+        style={{
+          width: 28,
+          height: 28,
+          borderRadius: 14,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: iconBg,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: danger ? "rgba(239,68,68,0.35)" : isDark ? "rgba(230,255,59,0.30)" : "rgba(15,23,42,0.15)",
+        }}
+      >
+        <Feather
+          name={icon}
+          size={15}
+          color={danger ? dangerColor : isDark ? accentFill : colors.text}
+        />
+      </View>
       <Text
         style={{
-          marginLeft: 12,
+          marginLeft: 11,
           flex: 1,
           fontWeight: "800",
+          fontSize: 14,
           color: danger ? dangerColor : colors.text,
         }}
       >
@@ -674,75 +730,92 @@ function Divider({ colors }) {
 /* ---------- styles ---------- */
 
 function makeStyles(colors, isDark, accentFill, accentInk) {
-  const cardBg = colors.sapSilverLight || colors.card;
-  const cardBorder = colors.sapSilverMedium || colors.border;
+  const cardBg = isDark
+    ? "rgba(17,19,24,0.92)"
+    : colors.sapSilverLight || colors.card;
+  const cardBorder = isDark
+    ? "rgba(255,255,255,0.10)"
+    : colors.sapSilverMedium || colors.border;
 
   const optionBg = isDark ? "#0E0F14" : colors.surfaceAlt || colors.bg;
   const optionBorder = isDark ? "#1B1C22" : colors.borderStrong || cardBorder;
 
   return StyleSheet.create({
-    safe: { flex: 1, backgroundColor: colors.bg },
+    safe: { flex: 1, backgroundColor: isDark ? "#050506" : colors.bg },
     page: { flex: 1, backgroundColor: colors.bg },
-    content: { paddingHorizontal: 18, paddingBottom: 40, paddingTop: 6 },
+    content: { paddingHorizontal: 16 },
 
     header: {
       flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      marginBottom: 10,
+      alignItems: "flex-start",
+      gap: 10,
+      marginBottom: 16,
+    },
+    headerTextWrap: { flex: 1 },
+    headerKicker: {
+      fontSize: 11,
+      fontWeight: "900",
+      color: colors.subtext,
+      textTransform: "uppercase",
+      letterSpacing: 1.1,
+      marginBottom: 2,
     },
     headerTitle: {
-      fontSize: 32,
+      fontSize: 28,
       fontWeight: "900",
       color: colors.text,
-      marginBottom: 2,
-      letterSpacing: -0.3,
+      letterSpacing: -0.5,
     },
     headerSubtitle: {
-      fontSize: 14,
+      fontSize: 13,
       color: colors.subtext,
+      marginTop: 2,
     },
-    debugTiny: {
-      marginTop: 6,
-      fontSize: 11,
-      color: colors.subtext,
-      opacity: 0.7,
-    },
-    headerBtn: {
+    backBtn: {
       width: 34,
       height: 34,
       borderRadius: 17,
-      backgroundColor: isDark ? "#00000040" : "#FFFFFF",
+      backgroundColor: isDark ? "#1A1B21" : "#FFFFFF",
       alignItems: "center",
       justifyContent: "center",
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: cardBorder,
     },
 
+    sectionHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      marginTop: 8,
+      marginBottom: 8,
+    },
     sectionTitle: {
-      fontSize: 14,
+      fontSize: 12,
       fontWeight: "900",
       color: colors.text,
-      marginTop: 12,
-      marginBottom: 10,
       textTransform: "uppercase",
-      letterSpacing: 0.7,
+      letterSpacing: 1.0,
+    },
+    sectionLine: {
+      flex: 1,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: isDark ? "rgba(230,255,59,0.45)" : cardBorder,
     },
 
     card: {
       backgroundColor: cardBg,
-      borderRadius: 18,
+      borderRadius: 16,
       paddingHorizontal: 14,
-      paddingVertical: 10,
+      paddingVertical: 9,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: cardBorder,
-      marginBottom: 16,
+      marginBottom: 12,
       ...Platform.select({
         ios: {
           shadowColor: "#000",
-          shadowOpacity: isDark ? 0.22 : 0.06,
-          shadowRadius: 12,
-          shadowOffset: { width: 0, height: 6 },
+          shadowOpacity: isDark ? 0.18 : 0.06,
+          shadowRadius: 10,
+          shadowOffset: { width: 0, height: 5 },
         },
         android: { elevation: isDark ? 0 : 2 },
       }),
@@ -764,9 +837,9 @@ function makeStyles(colors, isDark, accentFill, accentInk) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: optionBorder,
       backgroundColor: optionBg,
-      paddingVertical: 12,
-      paddingHorizontal: 10,
-      borderRadius: 14,
+      paddingVertical: 10,
+      paddingHorizontal: 9,
+      borderRadius: 12,
       flexDirection: "row",
       alignItems: "center",
       gap: 8,
@@ -794,7 +867,7 @@ function makeStyles(colors, isDark, accentFill, accentInk) {
       backgroundColor: accentFill,
     },
 
-    optionText: { color: colors.subtext, fontWeight: "800", fontSize: 13 },
+    optionText: { color: colors.subtext, fontWeight: "800", fontSize: 12 },
     optionTextActive: { color: colors.text },
 
     hint: { marginTop: 8, color: colors.subtext, fontSize: 12, lineHeight: 16 },
@@ -802,9 +875,9 @@ function makeStyles(colors, isDark, accentFill, accentInk) {
     footerNote: {
       textAlign: "center",
       color: colors.subtext,
-      marginTop: 4,
-      marginBottom: 8,
-      fontSize: 12,
+      marginTop: 10,
+      fontSize: 11,
+      letterSpacing: 0.2,
     },
   });
 }

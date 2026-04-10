@@ -279,7 +279,7 @@ export default function NutritionTodayPage() {
   const openAddMeal = (mealType) => {
     const dateISO = startOfDay(currentDate).toISOString();
     router.push({
-      pathname: "/nutrition/add-food",
+      pathname: "/nutrition/add",
       params: mealType ? { date: dateISO, mealType } : { date: dateISO },
     });
   };

@@ -1,1 +1,1 @@
-export { default } from "./add-food";
+export { default } from "./add";

@@ -22,6 +22,9 @@ export default function ActivityHistoryPage() {
   const linkTrainSessionId = Array.isArray(params?.linkTrainSessionId)
     ? params.linkTrainSessionId[0]
     : params?.linkTrainSessionId;
+  const linkSessionKey = Array.isArray(params?.linkSessionKey)
+    ? params.linkSessionKey[0]
+    : params?.linkSessionKey;
   const linkSessionTitle = Array.isArray(params?.linkSessionTitle)
     ? params.linkSessionTitle[0]
     : params?.linkSessionTitle;
@@ -128,7 +131,7 @@ export default function ActivityHistoryPage() {
       <ScrollView contentContainerStyle={s.content}>
         <Text style={s.title}>All Activity</Text>
 
-        {linkTrainSessionId ? (
+        {linkTrainSessionId || linkSessionKey ? (
           <View style={s.banner}>
             <Text style={s.bannerTitle}>Link Strava activity</Text>
             <Text style={s.bannerText}>
@@ -159,6 +162,7 @@ export default function ActivityHistoryPage() {
                   params: {
                     id: a.id,
                     ...(linkTrainSessionId ? { linkTrainSessionId: String(linkTrainSessionId) } : {}),
+                    ...(linkSessionKey ? { linkSessionKey: String(linkSessionKey) } : {}),
                     ...(linkSessionTitle ? { linkSessionTitle: String(linkSessionTitle) } : {}),
                   },
                 })

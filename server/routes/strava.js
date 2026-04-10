@@ -43,8 +43,36 @@ function pickBestReturnUrl(preferred) {
   return defaultDeepLink();
 }
 
+function isPrivateOrLocalHost(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  if (!host) return false;
+  if (host === "localhost" || host === "0.0.0.0") return true;
+  if (host === "127.0.0.1" || host.startsWith("127.")) return true;
+  if (host.startsWith("10.")) return true;
+  if (host.startsWith("192.168.")) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return true;
+  return false;
+}
+
+function isValidStravaClientId(value) {
+  return /^\d+$/.test(String(value || "").trim());
+}
+
+function getRequestProto(req) {
+  const forwarded = String(req.get("x-forwarded-proto") || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  if (forwarded === "https" || forwarded === "http") return forwarded;
+  return String(req.protocol || "http").toLowerCase();
+}
+
 function resolveRedirectUri(req) {
-  const derived = `${req.protocol}://${req.get("host")}/strava/callback`;
+  const host = String(req.get("host") || "").trim();
+  const hostname = host.split(":")[0];
+  const requestProto = getRequestProto(req);
+  const derivedProto = !isPrivateOrLocalHost(hostname) ? "https" : requestProto || "http";
+  const derived = `${derivedProto}://${host}/strava/callback`;
   const explicit = process.env.STRAVA_REDIRECT_URI;
   if (!explicit) return derived;
 
@@ -53,7 +81,17 @@ function resolveRedirectUri(req) {
 
   try {
     const reqHost = String(req.get("host") || "").split(":")[0];
-    const explicitHost = new URL(explicitValue).hostname;
+    const explicitUrl = new URL(explicitValue);
+    const explicitHost = explicitUrl.hostname;
+
+    // In production, if an explicit public/HTTPS callback is configured,
+    // trust it instead of rewriting to the incoming Render host.
+    const shouldTrustExplicit =
+      explicitUrl.protocol === "https:" || !isPrivateOrLocalHost(explicitHost);
+    if (shouldTrustExplicit) {
+      return explicitValue;
+    }
+
     if (reqHost && explicitHost && reqHost !== explicitHost) {
       console.warn(
         "[strava] STRAVA_REDIRECT_URI host mismatch, using derived host:",
@@ -176,9 +214,13 @@ router.get("/start", async (req, res) => {
       return res.status(400).send("Missing uid");
     }
 
-    const clientId = process.env.STRAVA_CLIENT_ID;
+    const clientId = String(process.env.STRAVA_CLIENT_ID || "").trim();
     if (!clientId) {
       return res.status(500).send("Missing STRAVA_CLIENT_ID");
+    }
+    if (!isValidStravaClientId(clientId)) {
+      console.error("[strava/start] Invalid STRAVA_CLIENT_ID format");
+      return res.status(500).send("Invalid STRAVA_CLIENT_ID");
     }
 
     const redirectUri = resolveRedirectUri(req);
@@ -207,7 +249,8 @@ router.get("/start", async (req, res) => {
     if (String(req.query?.debug || "").trim() === "1") {
       return res.json({
         ok: true,
-        clientId: String(clientId),
+        clientIdLooksValid: isValidStravaClientId(clientId),
+        clientIdPreview: isValidStravaClientId(clientId) ? String(clientId) : "invalid",
         redirectUri,
         returnUrl,
         authUrl,
@@ -272,11 +315,11 @@ router.get("/callback", async (req, res) => {
       );
     }
 
-    const clientId = process.env.STRAVA_CLIENT_ID;
-    const clientSecret = process.env.STRAVA_CLIENT_SECRET;
+    const clientId = String(process.env.STRAVA_CLIENT_ID || "").trim();
+    const clientSecret = String(process.env.STRAVA_CLIENT_SECRET || "").trim();
     const redirectUri = stateData.redirectUri || resolveRedirectUri(req);
 
-    if (!clientId || !clientSecret) {
+    if (!clientId || !clientSecret || !isValidStravaClientId(clientId)) {
       if (stateRef) await deleteState(stateRef);
       return res.redirect(
         withQuery(appReturnUrl, {
@@ -370,13 +413,19 @@ router.post("/exchange", async (req, res) => {
   }
 
   try {
+    const clientId = String(process.env.STRAVA_CLIENT_ID || "").trim();
+    const clientSecret = String(process.env.STRAVA_CLIENT_SECRET || "").trim();
+    if (!clientId || !clientSecret || !isValidStravaClientId(clientId)) {
+      return res.status(500).json({ error: "Strava server configuration is invalid" });
+    }
+
     const response = await axios.post(
       "https://www.strava.com/api/v3/oauth/token",
       null,
       {
         params: {
-          client_id: process.env.STRAVA_CLIENT_ID,
-          client_secret: process.env.STRAVA_CLIENT_SECRET,
+          client_id: clientId,
+          client_secret: clientSecret,
           code,
           grant_type: "authorization_code",
         },

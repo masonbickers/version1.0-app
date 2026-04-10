@@ -26,7 +26,7 @@ const TRAINING_WORKOUT_BASE =
   "https://apis.garmin.com/training-api/workout";
 const TRAINING_WORKOUT_CREATE_URL =
   process.env.GARMIN_WORKOUT_CREATE_URL ||
-  `${String(TRAINING_WORKOUT_BASE).replace(/\/+$/, "")}/workout`;
+  `${String(TRAINING_WORKOUT_BASE).replace(/\/+$/, "")}`;
 
 function mapDuration(step = {}) {
   const rawType = String(
