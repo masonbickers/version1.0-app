@@ -1,7 +1,6 @@
 import express from "express";
 
 import admin from "../admin.js";
-import { generateFitWorkout } from "../garmin/fitGenerator.js";
 import { requireUser } from "../utils/requireUser.js";
 
 const router = express.Router();
@@ -18,6 +17,16 @@ function firstNonEmptyString(values, fallback = "") {
   }
   return fallback;
 }
+
+const TOKEN_ENDPOINT =
+  process.env.GARMIN_TOKEN_ENDPOINT ||
+  "https://diauth.garmin.com/di-oauth2-service/oauth/token";
+const TRAINING_WORKOUT_BASE =
+  process.env.GARMIN_WORKOUT_API_BASE ||
+  "https://apis.garmin.com/training-api/workout";
+const TRAINING_WORKOUT_CREATE_URL =
+  process.env.GARMIN_WORKOUT_CREATE_URL ||
+  `${String(TRAINING_WORKOUT_BASE).replace(/\/+$/, "")}/workout`;
 
 function mapDuration(step = {}) {
   const rawType = String(
@@ -145,16 +154,428 @@ function buildFitSession(workout = {}) {
   };
 }
 
+function normaliseSport(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "RUNNING";
+  if (raw.includes("run")) return "RUNNING";
+  if (raw.includes("cycl")) return "CYCLING";
+  if (raw.includes("swim")) return "SWIMMING";
+  if (raw.includes("walk")) return "WALKING";
+  if (raw.includes("row")) return "ROWING";
+  if (raw.includes("strength")) return "STRENGTH_TRAINING";
+  return raw.toUpperCase();
+}
+
+function normaliseApiStep(step = {}) {
+  if (!step || typeof step !== "object") return null;
+
+  const innerSteps = Array.isArray(step?.steps)
+    ? step.steps.map((item) => normaliseApiStep(item)).filter(Boolean)
+    : [];
+
+  const repeatCountRaw =
+    toNum(step?.repeatCount) ??
+    toNum(step?.repeatReps) ??
+    toNum(step?.repeat) ??
+    toNum(step?.reps) ??
+    toNum(step?.garmin?.repeatCount) ??
+    toNum(step?.garmin?.reps) ??
+    0;
+
+  const stepType = String(step?.stepType || step?.type || "").trim().toLowerCase();
+  const isRepeat =
+    Boolean(step?.isRepeat) ||
+    stepType === "repeat" ||
+    (innerSteps.length > 0 && repeatCountRaw > 1);
+
+  if (isRepeat && innerSteps.length > 0) {
+    return {
+      stepType: "repeat",
+      repeatCount: Math.max(2, Math.round(repeatCountRaw || 2)),
+      steps: innerSteps,
+      notes: firstNonEmptyString([step?.notes, step?.description], ""),
+    };
+  }
+
+  return {
+    ...step,
+    steps: innerSteps,
+  };
+}
+
+function isRepeatApiStep(step = {}) {
+  if (!step || typeof step !== "object") return false;
+  if (String(step?.stepType || step?.type || "").trim().toLowerCase() === "repeat") return true;
+  return Array.isArray(step?.steps) && step.steps.length > 0 && Number(step?.repeatCount || 0) > 1;
+}
+
+function mapTrainingDuration(step = {}) {
+  const duration = step?.duration && typeof step.duration === "object" ? step.duration : null;
+  const durationTypeRaw = String(
+    step?.durationType || step?.garmin?.durationType || duration?.type || ""
+  )
+    .trim()
+    .toLowerCase();
+  const durationUnit = String(
+    step?.durationUnit || step?.garmin?.durationUnit || duration?.unit || ""
+  )
+    .trim()
+    .toLowerCase();
+  const rawValue =
+    toNum(step?.durationValue) ??
+    toNum(step?.garmin?.durationValue) ??
+    toNum(duration?.seconds) ??
+    toNum(duration?.meters) ??
+    toNum(step?.durationSec) ??
+    toNum(step?.durationMin) ??
+    toNum(step?.distanceKm) ??
+    null;
+
+  if (
+    durationTypeRaw === "time" ||
+    durationTypeRaw === "time (min)" ||
+    durationTypeRaw.includes("sec") ||
+    durationUnit.includes("sec")
+  ) {
+    const sec =
+      durationTypeRaw === "time (min)" || durationUnit === "min"
+        ? Math.round((rawValue || 0) * 60)
+        : Math.round(rawValue || 0);
+    if (sec > 0) return { durationType: "TIME", durationValue: sec };
+  }
+
+  if (
+    durationTypeRaw === "distance" ||
+    durationTypeRaw === "distance (km)" ||
+    durationTypeRaw.includes("meter") ||
+    durationUnit === "m" ||
+    durationUnit === "km"
+  ) {
+    const meters =
+      durationTypeRaw === "distance (km)" || durationUnit === "km"
+        ? Math.round((rawValue || 0) * 1000)
+        : Math.round(rawValue || 0);
+    if (meters > 0) return { durationType: "DISTANCE", durationValue: meters };
+  }
+
+  if (Number.isFinite(Number(step?.restSec)) && Number(step.restSec) > 0) {
+    return { durationType: "TIME", durationValue: Math.round(Number(step.restSec)) };
+  }
+
+  return { durationType: "OPEN" };
+}
+
+function paceTextFromSecPerKm(sec) {
+  const n = Number(sec);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const mins = Math.floor(n / 60);
+  const secs = Math.round(n % 60);
+  return `${mins}:${String(secs).padStart(2, "0")}/km`;
+}
+
+function paceRangeSummary(step = {}) {
+  const min = toNum(step?.targetValue?.minSecPerKm);
+  const max = toNum(step?.targetValue?.maxSecPerKm);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= 0) return null;
+  const fast = paceTextFromSecPerKm(min);
+  const slow = paceTextFromSecPerKm(max);
+  if (!fast || !slow) return null;
+  return fast === slow ? `Pace ${fast}` : `Pace ${fast}-${slow}`;
+}
+
+function hrRangeSummary(step = {}) {
+  const min = toNum(step?.targetValue?.minBpm ?? step?.targetValue?.min);
+  const max = toNum(step?.targetValue?.maxBpm ?? step?.targetValue?.max);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max <= 0) return null;
+  return `HR ${Math.round(min)}-${Math.round(max)} bpm`;
+}
+
+function buildTrainingTarget(step = {}) {
+  const targetType = String(step?.targetType || "").trim().toLowerCase();
+  const hrMin = toNum(step?.targetValue?.minBpm ?? step?.targetValue?.min);
+  const hrMax = toNum(step?.targetValue?.maxBpm ?? step?.targetValue?.max);
+  if (
+    (targetType.includes("hr") || (hrMin != null && hrMax != null)) &&
+    Number.isFinite(hrMin) &&
+    Number.isFinite(hrMax) &&
+    hrMin > 0 &&
+    hrMax > 0
+  ) {
+    return {
+      targetType: "HEART_RATE",
+      targetValueLow: Math.round(hrMin),
+      targetValueHigh: Math.round(hrMax),
+    };
+  }
+
+  const minSec = toNum(step?.targetValue?.minSecPerKm);
+  const maxSec = toNum(step?.targetValue?.maxSecPerKm);
+  if (
+    targetType === "pace_range" &&
+    Number.isFinite(minSec) &&
+    Number.isFinite(maxSec) &&
+    minSec > 0 &&
+    maxSec > 0
+  ) {
+    const slowSpeed = 1000 / maxSec;
+    const fastSpeed = 1000 / minSec;
+    return {
+      targetType: "SPEED",
+      targetValueLow: Number(slowSpeed.toFixed(3)),
+      targetValueHigh: Number(fastSpeed.toFixed(3)),
+    };
+  }
+
+  return { targetType: "OPEN" };
+}
+
+function mapTrainingIntensity(step = {}) {
+  const stepType = String(step?.stepType || step?.type || "").trim().toLowerCase();
+  if (stepType.includes("warm")) return "WARMUP";
+  if (stepType.includes("cool")) return "COOLDOWN";
+  if (stepType.includes("recover") || stepType.includes("rest")) return "RECOVERY";
+  return "ACTIVE";
+}
+
+function buildTrainingDescription(step = {}) {
+  const summaryParts = [
+    firstNonEmptyString(
+      [step?.description, step?.notes, step?.title, step?.name, step?.type, step?.label],
+      ""
+    ),
+    paceRangeSummary(step),
+    hrRangeSummary(step),
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  return firstNonEmptyString([summaryParts.join(" · ")], "").slice(0, 240);
+}
+
+function buildTrainingLeafStep(step = {}, stepOrder = 1) {
+  const duration = mapTrainingDuration(step);
+  const target = buildTrainingTarget(step);
+  const payload = {
+    type: "WorkoutStep",
+    stepOrder,
+    intensity: mapTrainingIntensity(step),
+    targetType: target.targetType,
+  };
+
+  if (duration.durationType && duration.durationType !== "OPEN") {
+    payload.durationType = duration.durationType;
+    payload.durationValue = duration.durationValue;
+  } else {
+    payload.durationType = "OPEN";
+  }
+
+  if (target.targetType !== "OPEN") {
+    if (target.targetValueLow != null) payload.targetValueLow = target.targetValueLow;
+    if (target.targetValueHigh != null) payload.targetValueHigh = target.targetValueHigh;
+  }
+
+  const description = buildTrainingDescription(step);
+  if (description) payload.description = description;
+
+  return payload;
+}
+
+function expandTrainingSteps(steps = [], repeatsMultiplier = 1, out = []) {
+  const list = Array.isArray(steps) ? steps : [];
+  const multiplier = Math.max(1, Math.round(Number(repeatsMultiplier || 1)));
+
+  for (const step of list) {
+    const current = normaliseApiStep(step);
+    if (!current) continue;
+
+    if (isRepeatApiStep(current)) {
+      const repeatCount = Math.max(1, Math.round(Number(current.repeatCount || 1)));
+      expandTrainingSteps(current.steps, multiplier * repeatCount, out);
+      continue;
+    }
+
+    for (let i = 0; i < multiplier; i += 1) {
+      out.push(current);
+    }
+  }
+
+  return out;
+}
+
+function computeTrainingStepTotals(steps = []) {
+  const totals = { durationSec: 0, distanceMeters: 0 };
+  for (const step of steps) {
+    const duration = mapTrainingDuration(step);
+    if (duration.durationType === "TIME" && Number.isFinite(duration.durationValue)) {
+      totals.durationSec += Math.max(0, Math.round(duration.durationValue));
+    }
+    if (duration.durationType === "DISTANCE" && Number.isFinite(duration.durationValue)) {
+      totals.distanceMeters += Math.max(0, Math.round(duration.durationValue));
+    }
+  }
+  return totals;
+}
+
+function buildTrainingApiWorkoutPayload(workout = {}, { title = "Workout", sessionKey = "", scheduledDate = "" } = {}) {
+  const normalizedSport = normaliseSport(workout?.sport || workout?.sessionType || "running");
+  const baseSteps = Array.isArray(workout?.steps)
+    ? workout.steps.map((step) => normaliseApiStep(step)).filter(Boolean)
+    : [];
+  const flattenedSteps = expandTrainingSteps(baseSteps);
+
+  let leafSteps = flattenedSteps;
+  if (!leafSteps.length) {
+    const fallbackDurationSec = toNum(workout?.totalDurationSec) ?? toNum(workout?.estimatedDurationInSecs) ?? 0;
+    const fallbackDistanceMeters =
+      toNum(workout?.estimatedDistanceMeters) ??
+      (toNum(workout?.totalDistanceKm) != null ? Math.round(Number(workout.totalDistanceKm) * 1000) : 0);
+
+    if (fallbackDistanceMeters > 0 || fallbackDurationSec > 0) {
+      leafSteps = [
+        {
+          type: title || "Run",
+          stepType: "run",
+          durationType: fallbackDistanceMeters > 0 ? "distance" : "time",
+          durationValue: fallbackDistanceMeters > 0 ? fallbackDistanceMeters : fallbackDurationSec,
+          durationUnit: fallbackDistanceMeters > 0 ? "m" : "sec",
+          notes: firstNonEmptyString([workout?.description, workout?.notes], ""),
+        },
+      ];
+    }
+  }
+
+  const stepPayloads = leafSteps.map((step, index) => buildTrainingLeafStep(step, index + 1));
+  const derivedTotals = computeTrainingStepTotals(leafSteps);
+
+  const estimatedDurationInSecs =
+    toNum(workout?.totalDurationSec) ??
+    toNum(workout?.estimatedDurationInSecs) ??
+    (derivedTotals.durationSec > 0 ? derivedTotals.durationSec : null);
+  const estimatedDistanceInMeters =
+    toNum(workout?.estimatedDistanceMeters) ??
+    (toNum(workout?.totalDistanceKm) != null ? Math.round(Number(workout.totalDistanceKm) * 1000) : null) ??
+    (derivedTotals.distanceMeters > 0 ? derivedTotals.distanceMeters : null);
+
+  const description = firstNonEmptyString([workout?.description, workout?.notes], "");
+  const sourceId = firstNonEmptyString([sessionKey, workout?.workoutSourceId], `trainr_${Date.now()}`);
+
+  const segment = {
+    segmentOrder: 1,
+    sport: normalizedSport,
+    steps: stepPayloads,
+  };
+  if (estimatedDurationInSecs != null && estimatedDurationInSecs > 0) {
+    segment.estimatedDurationInSecs = Math.round(estimatedDurationInSecs);
+  }
+  if (estimatedDistanceInMeters != null && estimatedDistanceInMeters > 0) {
+    segment.estimatedDistanceInMeters = Math.round(estimatedDistanceInMeters);
+  }
+
+  const payload = {
+    workoutName: title,
+    sport: normalizedSport,
+    workoutProvider: "Train-r",
+    workoutSourceId: String(sourceId).slice(0, 120),
+    isSessionTransitionEnabled: true,
+    segments: [segment],
+  };
+
+  if (description) payload.description = description.slice(0, 240);
+  if (estimatedDurationInSecs != null && estimatedDurationInSecs > 0) {
+    payload.estimatedDurationInSecs = Math.round(estimatedDurationInSecs);
+  }
+  if (estimatedDistanceInMeters != null && estimatedDistanceInMeters > 0) {
+    payload.estimatedDistanceInMeters = Math.round(estimatedDistanceInMeters);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(scheduledDate || "").trim())) {
+    payload.scheduledDate = String(scheduledDate).trim();
+  }
+
+  return payload;
+}
+
 async function loadGarminIntegration(uid) {
   const snap = await admin.firestore().collection("users").doc(String(uid)).get();
   if (!snap.exists) return null;
   return snap.data()?.integrations?.garmin || null;
 }
 
+async function saveGarminIntegration(uid, integration) {
+  await admin.firestore().collection("users").doc(String(uid)).set(
+    {
+      integrations: { garmin: integration },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
 function safeSnippet(text, max = 400) {
   const raw = String(text || "").trim();
   if (!raw) return "";
   return raw.slice(0, max);
+}
+
+async function refreshAccessTokenIfNeeded(uid, garmin) {
+  if (!garmin) return { ok: false, error: "No Garmin integration" };
+
+  const accessToken = String(garmin.accessToken || "").trim();
+  const refreshToken = String(garmin.refreshToken || "").trim();
+  const expiresAtMs = Number(garmin.expiresAtMs || 0);
+
+  if (!accessToken) return { ok: false, error: "Missing Garmin access token" };
+
+  const now = Date.now();
+  const isExpired = expiresAtMs && now > expiresAtMs;
+  if (!isExpired) return { ok: true, accessToken };
+
+  if (!refreshToken) {
+    return { ok: false, error: "Garmin access token expired and no refresh token is stored" };
+  }
+
+  const clientId = String(process.env.GARMIN_CLIENT_ID || "").trim();
+  const clientSecret = String(process.env.GARMIN_CLIENT_SECRET || "").trim();
+  if (!clientId || !clientSecret) {
+    return { ok: false, error: "Missing GARMIN_CLIENT_ID or GARMIN_CLIENT_SECRET" };
+  }
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshToken,
+  }).toString();
+
+  const resp = await fetch(TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  const tokenJson = await resp.json().catch(() => ({}));
+  if (!resp.ok || !tokenJson?.access_token) {
+    return {
+      ok: false,
+      error: "Garmin token refresh failed",
+      status: resp.status,
+      details: tokenJson,
+    };
+  }
+
+  const expiresInSec = Number(tokenJson.expires_in || 0);
+  const updated = {
+    ...garmin,
+    accessToken: tokenJson.access_token,
+    refreshToken: tokenJson.refresh_token || refreshToken,
+    tokenType: tokenJson.token_type || garmin.tokenType || "bearer",
+    scope: tokenJson.scope || garmin.scope || null,
+    expiresAtMs: now + Math.max(0, expiresInSec - 600) * 1000,
+    refreshedAtMs: now,
+    tokenEndpoint: TOKEN_ENDPOINT,
+  };
+
+  await saveGarminIntegration(uid, updated);
+  return { ok: true, accessToken: updated.accessToken, refreshed: true };
 }
 
 router.post("/send-workout", requireUser, async (req, res) => {
@@ -181,6 +602,10 @@ router.post("/send-workout", requireUser, async (req, res) => {
       "Workout"
     );
     const sessionKey = firstNonEmptyString([req.body?.sessionKey], "");
+    const scheduledDate = firstNonEmptyString(
+      [req.body?.scheduledDate, req.body?.date, req.body?.workout?.scheduledDate],
+      ""
+    );
 
     const garmin = await loadGarminIntegration(uid);
     if (!garmin?.connected || !garmin?.accessToken) {
@@ -190,38 +615,59 @@ router.post("/send-workout", requireUser, async (req, res) => {
       });
     }
 
-    const fitSession = buildFitSession(workout);
-    const rawFit = generateFitWorkout(fitSession, title);
-    const fitBuffer = Buffer.isBuffer(rawFit) ? rawFit : Buffer.from(rawFit);
-
-    const uploadUrl = String(process.env.GARMIN_WORKOUT_UPLOAD_URL || "").trim();
-    if (!uploadUrl) {
-      return res.json({
-        ok: true,
-        synced: false,
-        reason: "upload_not_configured",
-        message:
-          "Workout FIT generated, but GARMIN_WORKOUT_UPLOAD_URL is not configured on the server.",
+    const tokenResult = await refreshAccessTokenIfNeeded(uid, garmin);
+    if (!tokenResult.ok) {
+      return res.status(401).json({
+        ok: false,
+        error: tokenResult.error,
+        status: tokenResult.status || 401,
+        details: tokenResult.details || null,
       });
     }
 
-    const uploadResp = await fetch(uploadUrl, {
+    const createUrl = String(TRAINING_WORKOUT_CREATE_URL || "").trim();
+    if (!createUrl) {
+      return res.status(500).json({
+        ok: false,
+        error: "Garmin workout create URL is not configured",
+      });
+    }
+
+    const garminWorkout = buildTrainingApiWorkoutPayload(workout, {
+      title,
+      sessionKey,
+      scheduledDate,
+    });
+    if (!Array.isArray(garminWorkout?.segments) || !garminWorkout.segments.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "Garmin workout payload is empty",
+      });
+    }
+
+    const uploadResp = await fetch(createUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${garmin.accessToken}`,
-        "Content-Type": "application/x-garmin-fit",
-        "X-Workout-Name": title,
+        Authorization: `Bearer ${tokenResult.accessToken}`,
+        "Content-Type": "application/json",
       },
-      body: fitBuffer,
+      body: JSON.stringify(garminWorkout),
     });
 
     const uploadText = await uploadResp.text().catch(() => "");
+    let uploadJson = null;
+    if (uploadText) {
+      try {
+        uploadJson = JSON.parse(uploadText);
+      } catch {}
+    }
+
     if (!uploadResp.ok) {
       return res.status(502).json({
         ok: false,
-        error: "Garmin workout upload failed",
+        error: "Garmin workout create failed",
         status: uploadResp.status,
-        details: safeSnippet(uploadText),
+        details: safeSnippet(uploadText || JSON.stringify(uploadJson || {})),
       });
     }
 
@@ -235,17 +681,32 @@ router.post("/send-workout", requireUser, async (req, res) => {
         title,
         uploadedAtMs: Date.now(),
         uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
-        uploadUrl,
+        uploadUrl: createUrl,
+        refreshedToken: !!tokenResult.refreshed,
         responseStatus: uploadResp.status,
-        responseSnippet: safeSnippet(uploadText),
+        responseSnippet: safeSnippet(uploadText || JSON.stringify(uploadJson || {})),
+        garminWorkoutId:
+          uploadJson?.workoutId ??
+          uploadJson?.id ??
+          uploadJson?.workout?.workoutId ??
+          null,
       });
 
-    return res.json({ ok: true, synced: true });
+    return res.json({
+      ok: true,
+      synced: true,
+      createdWorkoutId:
+        uploadJson?.workoutId ??
+        uploadJson?.id ??
+        uploadJson?.workout?.workoutId ??
+        null,
+    });
   } catch (error) {
     console.error("[garmin/send-workout] error:", error?.message || error);
     return res.status(500).json({
       ok: false,
       error: "Failed to send workout to Garmin",
+      details: error?.message || String(error),
     });
   }
 });
@@ -268,6 +729,7 @@ router.post("/export-fit", requireUser, async (req, res) => {
       [req.body?.title, req.body?.workout?.name, req.body?.sessionKey],
       "Workout"
     );
+    const { generateFitWorkout } = await import("../garmin/fitGenerator.js");
     const fitSession = buildFitSession(workout);
     const rawFit = generateFitWorkout(fitSession, title);
     const fitBuffer = Buffer.isBuffer(rawFit) ? rawFit : Buffer.from(rawFit);
