@@ -459,25 +459,13 @@ function buildTrainingApiWorkoutPayload(workout = {}, { title = "Workout", sessi
   const description = firstNonEmptyString([workout?.description, workout?.notes], "");
   const sourceId = firstNonEmptyString([sessionKey, workout?.workoutSourceId], `trainr_${Date.now()}`);
 
-  const segment = {
-    segmentOrder: 1,
-    sport: normalizedSport,
-    steps: stepPayloads,
-  };
-  if (estimatedDurationInSecs != null && estimatedDurationInSecs > 0) {
-    segment.estimatedDurationInSecs = Math.round(estimatedDurationInSecs);
-  }
-  if (estimatedDistanceInMeters != null && estimatedDistanceInMeters > 0) {
-    segment.estimatedDistanceInMeters = Math.round(estimatedDistanceInMeters);
-  }
-
   const payload = {
     workoutName: title,
     sport: normalizedSport,
     workoutProvider: "Train-r",
     workoutSourceId: String(sourceId).slice(0, 120),
     isSessionTransitionEnabled: true,
-    segments: [segment],
+    steps: stepPayloads,
   };
 
   if (description) payload.description = description.slice(0, 240);
