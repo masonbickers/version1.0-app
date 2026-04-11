@@ -347,7 +347,7 @@ function mapTrainingStepType(step = {}) {
   if (stepType.includes("warm")) return "Warmup";
   if (stepType.includes("cool")) return "Cooldown";
   if (stepType.includes("recover") || stepType.includes("rest")) return "Recovery";
-  return "Run";
+  return "Main Set";
 }
 
 function buildTrainingDescription(step = {}) {
@@ -484,27 +484,14 @@ function buildTrainingApiWorkoutPayload(workout = {}, { title = "Workout", sessi
     (derivedTotals.distanceMeters > 0 ? derivedTotals.distanceMeters : null);
 
   const description = firstNonEmptyString([workout?.description, workout?.notes], "");
-  const sourceId = firstNonEmptyString([sessionKey, workout?.workoutSourceId], `trainr_${Date.now()}`);
 
   const payload = {
     workoutName: title,
     sport: normalizedSport,
-    workoutProvider: "Train-r",
-    workoutSourceId: String(sourceId).slice(0, 120),
-    isSessionTransitionEnabled: true,
     steps: builtSteps,
   };
 
   if (description) payload.description = description.slice(0, 240);
-  if (estimatedDurationInSecs != null && estimatedDurationInSecs > 0) {
-    payload.estimatedDurationInSecs = Math.round(estimatedDurationInSecs);
-  }
-  if (estimatedDistanceInMeters != null && estimatedDistanceInMeters > 0) {
-    payload.estimatedDistanceInMeters = Math.round(estimatedDistanceInMeters);
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(String(scheduledDate || "").trim())) {
-    payload.scheduledDate = String(scheduledDate).trim();
-  }
 
   return payload;
 }
@@ -667,6 +654,13 @@ router.post("/send-workout", requireUser, async (req, res) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(garminWorkout),
+    });
+
+    console.log("[garmin/send-workout] create payload summary:", {
+      title,
+      sport: garminWorkout?.sport,
+      stepCount: Array.isArray(garminWorkout?.steps) ? garminWorkout.steps.length : 0,
+      firstStep: garminWorkout?.steps?.[0] || null,
     });
 
     const uploadText = await uploadResp.text().catch(() => "");
