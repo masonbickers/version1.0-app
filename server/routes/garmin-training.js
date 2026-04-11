@@ -301,10 +301,15 @@ function buildTrainingTarget(step = {}) {
     hrMin > 0 &&
     hrMax > 0
   ) {
+    const stepType = String(step?.stepType || step?.type || "").trim().toLowerCase();
+    const inferredZone =
+      stepType.includes("warm") || stepType.includes("cool") || stepType.includes("recover")
+        ? 1
+        : 2;
     return {
       targetType: "HEART_RATE",
-      targetValueLow: Math.round(hrMin),
-      targetValueHigh: Math.round(hrMax),
+      targetZone: inferredZone,
+      targetValue: Math.round((hrMin + hrMax) / 2),
     };
   }
 
@@ -319,10 +324,10 @@ function buildTrainingTarget(step = {}) {
   ) {
     const slowSpeed = 1000 / maxSec;
     const fastSpeed = 1000 / minSec;
+    const targetValue = (slowSpeed + fastSpeed) / 2;
     return {
       targetType: "SPEED",
-      targetValueLow: Number(slowSpeed.toFixed(3)),
-      targetValueHigh: Number(fastSpeed.toFixed(3)),
+      targetValue: Number(targetValue.toFixed(3)),
     };
   }
 
@@ -335,6 +340,14 @@ function mapTrainingIntensity(step = {}) {
   if (stepType.includes("cool")) return "COOLDOWN";
   if (stepType.includes("recover") || stepType.includes("rest")) return "RECOVERY";
   return "ACTIVE";
+}
+
+function mapTrainingStepType(step = {}) {
+  const stepType = String(step?.stepType || step?.type || "").trim().toLowerCase();
+  if (stepType.includes("warm")) return "Warmup";
+  if (stepType.includes("cool")) return "Cooldown";
+  if (stepType.includes("recover") || stepType.includes("rest")) return "Recovery";
+  return "Run";
 }
 
 function buildTrainingDescription(step = {}) {
@@ -358,6 +371,7 @@ function buildTrainingLeafStep(step = {}, stepOrder = 1) {
   const payload = {
     type: "WorkoutStep",
     stepOrder,
+    stepType: mapTrainingStepType(step),
     intensity: mapTrainingIntensity(step),
     targetType: target.targetType,
   };
@@ -370,8 +384,8 @@ function buildTrainingLeafStep(step = {}, stepOrder = 1) {
   }
 
   if (target.targetType !== "OPEN") {
-    if (target.targetValueLow != null) payload.targetValueLow = target.targetValueLow;
-    if (target.targetValueHigh != null) payload.targetValueHigh = target.targetValueHigh;
+    if (target.targetValue != null) payload.targetValue = target.targetValue;
+    if (target.targetZone != null) payload.targetZone = target.targetZone;
   }
 
   const description = buildTrainingDescription(step);
@@ -380,21 +394,7 @@ function buildTrainingLeafStep(step = {}, stepOrder = 1) {
   return payload;
 }
 
-function buildTrainingRepeatStep(step = {}, stepOrder = 1) {
-  const innerRaw = Array.isArray(step?.steps) ? step.steps : [];
-  const innerSteps = buildTrainingSteps(innerRaw, { nested: true });
-  const repeatCount = Math.max(1, Math.round(Number(step?.repeatCount || 1)));
-
-  return {
-    type: "WorkoutRepeatStep",
-    stepOrder,
-    repeatType: "REPEAT_UNTIL_STEPS_CMPLT",
-    repeatValue: repeatCount,
-    steps: innerSteps,
-  };
-}
-
-function buildTrainingSteps(steps = [], options = {}) {
+function buildTrainingSteps(steps = []) {
   const list = Array.isArray(steps) ? steps : [];
   const built = [];
 
@@ -403,18 +403,20 @@ function buildTrainingSteps(steps = [], options = {}) {
     if (!step) continue;
 
     if (isRepeatApiStep(step)) {
-      const repeatStep = buildTrainingRepeatStep(step, built.length + 1);
-      if (Array.isArray(repeatStep.steps) && repeatStep.steps.length) {
-        built.push(repeatStep);
+      const repeatCount = Math.max(1, Math.round(Number(step?.repeatCount || 1)));
+      const innerRaw = Array.isArray(step?.steps) ? step.steps : [];
+      const innerSteps = buildTrainingSteps(innerRaw);
+      if (innerSteps.length) {
+        for (let i = 0; i < repeatCount; i += 1) {
+          for (const innerStep of innerSteps) {
+            built.push({ ...innerStep, stepOrder: built.length + 1 });
+          }
+        }
       }
       continue;
     }
 
     built.push(buildTrainingLeafStep(step, built.length + 1));
-  }
-
-  if (options?.nested) {
-    return built.map((step, index) => ({ ...step, stepOrder: index + 1 }));
   }
 
   return built;
@@ -490,19 +492,7 @@ function buildTrainingApiWorkoutPayload(workout = {}, { title = "Workout", sessi
     workoutProvider: "Train-r",
     workoutSourceId: String(sourceId).slice(0, 120),
     isSessionTransitionEnabled: true,
-    segments: [
-      {
-        segmentOrder: 1,
-        sport: normalizedSport,
-        ...(estimatedDurationInSecs != null && estimatedDurationInSecs > 0
-          ? { estimatedDurationInSecs: Math.round(estimatedDurationInSecs) }
-          : {}),
-        ...(estimatedDistanceInMeters != null && estimatedDistanceInMeters > 0
-          ? { estimatedDistanceInMeters: Math.round(estimatedDistanceInMeters) }
-          : {}),
-        steps: builtSteps,
-      },
-    ],
+    steps: builtSteps,
   };
 
   if (description) payload.description = description.slice(0, 240);
@@ -663,11 +653,7 @@ router.post("/send-workout", requireUser, async (req, res) => {
       sessionKey,
       scheduledDate,
     });
-    const hasNestedSteps = Array.isArray(garminWorkout?.segments)
-      && garminWorkout.segments.some(
-        (segment) => Array.isArray(segment?.steps) && segment.steps.length > 0
-      );
-    if (!hasNestedSteps) {
+    if (!Array.isArray(garminWorkout?.steps) || !garminWorkout.steps.length) {
       return res.status(400).json({
         ok: false,
         error: "Garmin workout payload is empty",
