@@ -18,6 +18,12 @@ function firstNonEmptyString(values, fallback = "") {
   return fallback;
 }
 
+function formatGarminWorkoutTitle(title = "") {
+  const base = String(title || "").trim() || "Workout";
+  if (/\bwith\s+be\b/i.test(base) || /^be\b/i.test(base)) return base;
+  return `${base} with BE`.slice(0, 120);
+}
+
 const TOKEN_ENDPOINT =
   process.env.GARMIN_TOKEN_ENDPOINT ||
   "https://diauth.garmin.com/di-oauth2-service/oauth/token";
@@ -599,15 +605,47 @@ router.post("/send-workout", requireUser, async (req, res) => {
       return res.status(400).json({ ok: false, error: "Missing workout payload" });
     }
 
-    const title = firstNonEmptyString(
+    const sessionTitle = firstNonEmptyString(
       [req.body?.title, req.body?.workout?.name, req.body?.sessionKey],
       "Workout"
     );
+    const title = formatGarminWorkoutTitle(sessionTitle);
     const sessionKey = firstNonEmptyString([req.body?.sessionKey], "");
     const scheduledDate = firstNonEmptyString(
       [req.body?.scheduledDate, req.body?.date, req.body?.workout?.scheduledDate],
       ""
     );
+    let existingSessionLog = null;
+    if (sessionKey) {
+      const existingSessionLogSnap = await admin
+        .firestore()
+        .collection("users")
+        .doc(uid)
+        .collection("sessionLogs")
+        .doc(sessionKey)
+        .get();
+      existingSessionLog = existingSessionLogSnap.exists()
+        ? existingSessionLogSnap.data() || {}
+        : null;
+    }
+
+    const existingWorkoutId = firstNonEmptyString(
+      [req.body?.garminWorkoutId, existingSessionLog?.garminSync?.workoutId],
+      ""
+    );
+    const existingGarminStatus = String(existingSessionLog?.garminSync?.status || "")
+      .trim()
+      .toLowerCase();
+
+    if (existingWorkoutId && existingGarminStatus === "sent") {
+      return res.json({
+        ok: true,
+        synced: true,
+        alreadySynced: true,
+        createdWorkoutId: existingWorkoutId,
+        message: "Workout already sent to your watch.",
+      });
+    }
 
     const garmin = await loadGarminIntegration(uid);
     if (!garmin?.connected || !garmin?.accessToken) {
@@ -680,6 +718,74 @@ router.post("/send-workout", requireUser, async (req, res) => {
       });
     }
 
+    const createdWorkoutId =
+      uploadJson?.workoutId ??
+      uploadJson?.id ??
+      uploadJson?.workout?.workoutId ??
+      null;
+
+    const garminSyncPayload = {
+      provider: "garmin",
+      source: "training_api",
+      status: "sent",
+      title,
+      workoutId: createdWorkoutId,
+      syncedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    const resolvedTrainSessionId = firstNonEmptyString(
+      [req.body?.trainSessionId, existingSessionLog?.lastTrainSessionId],
+      ""
+    );
+    if (sessionKey || resolvedTrainSessionId) {
+      const userRef = admin.firestore().collection("users").doc(uid);
+      const batch = admin.firestore().batch();
+
+      let linkedTrainSessionId = resolvedTrainSessionId || "";
+
+      if (sessionKey) {
+        const sessionLogRef = userRef.collection("sessionLogs").doc(sessionKey);
+        const existingSessionLogSnap = existingSessionLog
+          ? { exists: true }
+          : await sessionLogRef.get();
+        const existingSessionLogData = existingSessionLog
+          ? existingSessionLog
+          : existingSessionLogSnap.exists
+          ? existingSessionLogSnap.data() || {}
+          : {};
+
+        linkedTrainSessionId =
+          linkedTrainSessionId ||
+          firstNonEmptyString([existingSessionLogData?.lastTrainSessionId], "");
+
+        const sessionLogPatch = {
+          sessionKey,
+          garminSync: garminSyncPayload,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        if (!existingSessionLogSnap.exists()) {
+          sessionLogPatch.createdAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+
+        batch.set(sessionLogRef, sessionLogPatch, { merge: true });
+      }
+
+      if (linkedTrainSessionId) {
+        batch.set(
+          userRef.collection("trainSessions").doc(linkedTrainSessionId),
+          {
+            garminSync: garminSyncPayload,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
+      await batch.commit();
+    }
+
     await admin
       .firestore()
       .collection("users")
@@ -694,21 +800,13 @@ router.post("/send-workout", requireUser, async (req, res) => {
         refreshedToken: !!tokenResult.refreshed,
         responseStatus: uploadResp.status,
         responseSnippet: safeSnippet(uploadText || JSON.stringify(uploadJson || {})),
-        garminWorkoutId:
-          uploadJson?.workoutId ??
-          uploadJson?.id ??
-          uploadJson?.workout?.workoutId ??
-          null,
+        garminWorkoutId: createdWorkoutId,
       });
 
     return res.json({
       ok: true,
       synced: true,
-      createdWorkoutId:
-        uploadJson?.workoutId ??
-        uploadJson?.id ??
-        uploadJson?.workout?.workoutId ??
-        null,
+      createdWorkoutId,
     });
   } catch (error) {
     console.error("[garmin/send-workout] error:", error?.message || error);

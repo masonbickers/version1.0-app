@@ -1541,7 +1541,9 @@ function buildStrengthOverview(session, meta, weekFocus) {
 /*  HERO                                                              */
 /* ------------------------------------------------------------------ */
 
-function RunHero({ session, dayLabel, weekIndex, totalWeeks, logBadge, theme }) {
+function RunHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, theme }) {
+  const badges = Array.isArray(statusBadges) ? statusBadges.filter(Boolean) : [];
+
   return (
     <View style={{ height: 360 }}>
       <ImageBackground
@@ -1570,16 +1572,21 @@ function RunHero({ session, dayLabel, weekIndex, totalWeeks, logBadge, theme }) 
                 {session?.title || session?.type || "Session"}
               </Text>
 
-              {!!logBadge && (
+              {badges.map((badge) => (
                 <View
+                  key={`${badge.label}-${badge.tone || "good"}`}
                   style={[
                     st.statusPill,
-                    logBadge.tone === "good" ? st.statusGood : st.statusBad,
+                    badge.tone === "bad"
+                      ? st.statusBad
+                      : badge.tone === "info"
+                      ? st.statusInfo
+                      : st.statusGood,
                   ]}
                 >
-                  <Text style={st.statusPillText}>{logBadge.label}</Text>
+                  <Text style={st.statusPillText}>{badge.label}</Text>
                 </View>
-              )}
+              ))}
             </View>
 
             {(session?.sessionType || session?.type) && (
@@ -1602,7 +1609,9 @@ function RunHero({ session, dayLabel, weekIndex, totalWeeks, logBadge, theme }) 
   );
 }
 
-function StrengthHero({ session, dayLabel, weekIndex, totalWeeks, logBadge, theme }) {
+function StrengthHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, theme }) {
+  const badges = Array.isArray(statusBadges) ? statusBadges.filter(Boolean) : [];
+
   return (
     <View style={{ height: 320, backgroundColor: "#000000" }}>
       <LinearGradient
@@ -1627,16 +1636,21 @@ function StrengthHero({ session, dayLabel, weekIndex, totalWeeks, logBadge, them
                 {session?.title || session?.type || "Strength session"}
               </Text>
 
-              {!!logBadge && (
+              {badges.map((badge) => (
                 <View
+                  key={`${badge.label}-${badge.tone || "good"}`}
                   style={[
                     st.statusPill,
-                    logBadge.tone === "good" ? st.statusGood : st.statusBad,
+                    badge.tone === "bad"
+                      ? st.statusBad
+                      : badge.tone === "info"
+                      ? st.statusInfo
+                      : st.statusGood,
                   ]}
                 >
-                  <Text style={st.statusPillText}>{logBadge.label}</Text>
+                  <Text style={st.statusPillText}>{badge.label}</Text>
                 </View>
-              )}
+              ))}
             </View>
 
             <Text style={st.heroSubtitleText}>
@@ -2180,6 +2194,41 @@ export default function TrainSessionDetail() {
     return null;
   }, [sessionLog]);
 
+  const garminSync = useMemo(
+    () =>
+      sessionLog?.garminSync && typeof sessionLog.garminSync === "object"
+        ? sessionLog.garminSync
+        : null,
+    [sessionLog?.garminSync]
+  );
+  const garminSyncStatus = useMemo(
+    () => String(garminSync?.status || "").trim().toLowerCase(),
+    [garminSync?.status]
+  );
+  const isGarminSynced = garminSyncStatus === "sent";
+  const garminWorkoutId = useMemo(() => {
+    const value = String(garminSync?.workoutId || "").trim();
+    return value || null;
+  }, [garminSync?.workoutId]);
+  const heroBadges = useMemo(() => {
+    const out = [];
+    if (logBadge) out.push(logBadge);
+    if (isRunSession && isGarminSynced) {
+      out.push({ label: "SENT TO WATCH", tone: "info" });
+    }
+    return out;
+  }, [isGarminSynced, isRunSession, logBadge]);
+  const garminSyncSummary = useMemo(() => {
+    if (!isRunSession || !isGarminSynced) return null;
+
+    return {
+      title: "Sent to watch",
+      body:
+        "This workout is linked to this planned session and is ready inside Garmin Connect for device sync.",
+      meta: garminWorkoutId ? `Workout ID ${garminWorkoutId}` : null,
+    };
+  }, [garminWorkoutId, isGarminSynced, isRunSession]);
+
   const sessionStatus = useMemo(
     () => String(sessionLog?.status || "").trim().toLowerCase(),
     [sessionLog?.status]
@@ -2403,6 +2452,8 @@ export default function TrainSessionDetail() {
       const payload = {
         userId: uid,
         sessionKey: encodedKey,
+        trainSessionId: savedTrainSessionId || null,
+        garminWorkoutId: garminWorkoutId || null,
         title: String(session?.title || session?.name || "Workout").trim(),
         workout,
       };
@@ -2432,7 +2483,29 @@ export default function TrainSessionDetail() {
       }
 
       if (result?.synced) {
-        Alert.alert("Sent", "Workout sent to your watch.");
+        setSessionLog((prev) => ({
+          ...(prev || {}),
+          sessionKey: encodedKey,
+          garminSync: {
+            ...(prev?.garminSync || {}),
+            provider: "garmin",
+            source: "training_api",
+            status: "sent",
+            workoutId:
+              result?.createdWorkoutId != null
+                ? result.createdWorkoutId
+                : prev?.garminSync?.workoutId || null,
+            syncedAt: new Date().toISOString(),
+          },
+        }));
+        await loadSessionLog();
+        Alert.alert(
+          result?.alreadySynced ? "Already sent" : "Sent",
+          result?.message ||
+            (result?.alreadySynced
+              ? "Workout already sent to your watch."
+              : "Workout sent to your watch.")
+        );
       } else {
         Alert.alert(
           "Garmin connected",
@@ -2448,7 +2521,10 @@ export default function TrainSessionDetail() {
   }, [
     encodedKey,
     garminConnected,
+    garminWorkoutId,
     isRunSession,
+    loadSessionLog,
+    savedTrainSessionId,
     session?.name,
     session?.title,
     sendableRunWorkout,
@@ -2608,10 +2684,16 @@ export default function TrainSessionDetail() {
     return [
       {
         key: garminConnected ? "watch" : "about",
-        icon: garminConnected ? "watch" : "activity",
+        icon: garminConnected
+          ? isGarminSynced && !sendingToWatch
+            ? "check-circle"
+            : "watch"
+          : "activity",
         label: garminConnected
           ? sendingToWatch
             ? "SENDING\nWATCH"
+            : isGarminSynced
+            ? "SENT\nWATCH"
             : "SEND\nWATCH"
           : "SESSION\nOVERVIEW",
         onPress: garminConnected ? handleSendToWatch : () => setActiveTab("about"),
@@ -2653,6 +2735,7 @@ export default function TrainSessionDetail() {
     handleMarkSessionSkipped,
     handleSendToWatch,
     handleUndoSkip,
+    isGarminSynced,
     isStrengthSession,
     isSkippedSession,
     openMoveSessionSheet,
@@ -2930,7 +3013,7 @@ export default function TrainSessionDetail() {
             dayLabel={dayLabel}
             weekIndex={weekIndex}
             totalWeeks={totalWeeks}
-            logBadge={!logLoading ? logBadge : null}
+            statusBadges={!logLoading ? heroBadges : null}
             theme={theme}
           />
         ) : (
@@ -2939,7 +3022,7 @@ export default function TrainSessionDetail() {
             dayLabel={dayLabel}
             weekIndex={weekIndex}
             totalWeeks={totalWeeks}
-            logBadge={!logLoading ? logBadge : null}
+            statusBadges={!logLoading ? heroBadges : null}
             theme={theme}
           />
         )}
@@ -3099,6 +3182,44 @@ export default function TrainSessionDetail() {
                     <Feather name="calendar" size={14} color={theme.text} />
                   </TouchableOpacity>
                 ) : null}
+              </View>
+            </View>
+          ) : null}
+
+          {!logLoading && garminSyncSummary ? (
+            <View
+              style={[
+                st.garminSyncCard,
+                {
+                  backgroundColor: withHexAlpha(theme.primaryBg, theme.isDark ? "16" : "1F"),
+                  borderColor: withHexAlpha(theme.primaryBg, theme.isDark ? "4A" : "59"),
+                },
+              ]}
+            >
+              <View style={st.garminSyncTopRow}>
+                <View
+                  style={[
+                    st.garminSyncIconWrap,
+                    { backgroundColor: withHexAlpha(theme.primaryBg, theme.isDark ? "24" : "2E") },
+                  ]}
+                >
+                  <Feather name="watch" size={17} color={theme.primaryBg} />
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={[st.garminSyncEyebrow, { color: theme.subtext }]}>Garmin</Text>
+                  <Text style={[st.garminSyncTitle, { color: theme.text }]}>
+                    {garminSyncSummary.title}
+                  </Text>
+                  <Text style={[st.garminSyncBody, { color: theme.subtext }]}>
+                    {garminSyncSummary.body}
+                  </Text>
+                  {garminSyncSummary.meta ? (
+                    <Text style={[st.garminSyncMeta, { color: theme.text }]}>
+                      {garminSyncSummary.meta}
+                    </Text>
+                  ) : null}
+                </View>
               </View>
             </View>
           ) : null}
@@ -4275,6 +4396,11 @@ const st = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(248,113,113,0.42)",
   },
+  statusInfo: {
+    backgroundColor: "rgba(217,255,59,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(217,255,59,0.44)",
+  },
   statusPillText: {
     color: "#FFFFFF",
     fontSize: 11,
@@ -4624,6 +4750,47 @@ const st = StyleSheet.create({
   statusSummaryActionText: {
     fontSize: 12,
     fontWeight: "800",
+  },
+  garminSyncCard: {
+    marginTop: 10,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  garminSyncTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  garminSyncIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  garminSyncEyebrow: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+  },
+  garminSyncTitle: {
+    marginTop: 2,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  garminSyncBody: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "500",
+  },
+  garminSyncMeta: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: "700",
   },
 
   moveModalBackdrop: {
