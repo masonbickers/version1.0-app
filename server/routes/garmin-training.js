@@ -380,32 +380,60 @@ function buildTrainingLeafStep(step = {}, stepOrder = 1) {
   return payload;
 }
 
-function expandTrainingSteps(steps = [], repeatsMultiplier = 1, out = []) {
+function buildTrainingRepeatStep(step = {}, stepOrder = 1) {
+  const innerRaw = Array.isArray(step?.steps) ? step.steps : [];
+  const innerSteps = buildTrainingSteps(innerRaw, { nested: true });
+  const repeatCount = Math.max(1, Math.round(Number(step?.repeatCount || 1)));
+
+  return {
+    type: "WorkoutRepeatStep",
+    stepOrder,
+    repeatType: "REPEAT_UNTIL_STEPS_CMPLT",
+    repeatValue: repeatCount,
+    steps: innerSteps,
+  };
+}
+
+function buildTrainingSteps(steps = [], options = {}) {
   const list = Array.isArray(steps) ? steps : [];
-  const multiplier = Math.max(1, Math.round(Number(repeatsMultiplier || 1)));
+  const built = [];
 
-  for (const step of list) {
-    const current = normaliseApiStep(step);
-    if (!current) continue;
+  for (const rawStep of list) {
+    const step = normaliseApiStep(rawStep);
+    if (!step) continue;
 
-    if (isRepeatApiStep(current)) {
-      const repeatCount = Math.max(1, Math.round(Number(current.repeatCount || 1)));
-      expandTrainingSteps(current.steps, multiplier * repeatCount, out);
+    if (isRepeatApiStep(step)) {
+      const repeatStep = buildTrainingRepeatStep(step, built.length + 1);
+      if (Array.isArray(repeatStep.steps) && repeatStep.steps.length) {
+        built.push(repeatStep);
+      }
       continue;
     }
 
-    for (let i = 0; i < multiplier; i += 1) {
-      out.push(current);
-    }
+    built.push(buildTrainingLeafStep(step, built.length + 1));
   }
 
-  return out;
+  if (options?.nested) {
+    return built.map((step, index) => ({ ...step, stepOrder: index + 1 }));
+  }
+
+  return built;
 }
 
 function computeTrainingStepTotals(steps = []) {
   const totals = { durationSec: 0, distanceMeters: 0 };
   for (const step of steps) {
-    const duration = mapTrainingDuration(step);
+    const current = normaliseApiStep(step);
+    if (!current) continue;
+    if (isRepeatApiStep(current)) {
+      const repeatCount = Math.max(1, Math.round(Number(current.repeatCount || 1)));
+      const nestedTotals = computeTrainingStepTotals(current.steps || []);
+      totals.durationSec += nestedTotals.durationSec * repeatCount;
+      totals.distanceMeters += nestedTotals.distanceMeters * repeatCount;
+      continue;
+    }
+
+    const duration = mapTrainingDuration(current);
     if (duration.durationType === "TIME" && Number.isFinite(duration.durationValue)) {
       totals.durationSec += Math.max(0, Math.round(duration.durationValue));
     }
@@ -421,17 +449,16 @@ function buildTrainingApiWorkoutPayload(workout = {}, { title = "Workout", sessi
   const baseSteps = Array.isArray(workout?.steps)
     ? workout.steps.map((step) => normaliseApiStep(step)).filter(Boolean)
     : [];
-  const flattenedSteps = expandTrainingSteps(baseSteps);
+  let builtSteps = buildTrainingSteps(baseSteps);
 
-  let leafSteps = flattenedSteps;
-  if (!leafSteps.length) {
+  if (!builtSteps.length) {
     const fallbackDurationSec = toNum(workout?.totalDurationSec) ?? toNum(workout?.estimatedDurationInSecs) ?? 0;
     const fallbackDistanceMeters =
       toNum(workout?.estimatedDistanceMeters) ??
       (toNum(workout?.totalDistanceKm) != null ? Math.round(Number(workout.totalDistanceKm) * 1000) : 0);
 
     if (fallbackDistanceMeters > 0 || fallbackDurationSec > 0) {
-      leafSteps = [
+      builtSteps = buildTrainingSteps([
         {
           type: title || "Run",
           stepType: "run",
@@ -440,12 +467,10 @@ function buildTrainingApiWorkoutPayload(workout = {}, { title = "Workout", sessi
           durationUnit: fallbackDistanceMeters > 0 ? "m" : "sec",
           notes: firstNonEmptyString([workout?.description, workout?.notes], ""),
         },
-      ];
+      ]);
     }
   }
-
-  const stepPayloads = leafSteps.map((step, index) => buildTrainingLeafStep(step, index + 1));
-  const derivedTotals = computeTrainingStepTotals(leafSteps);
+  const derivedTotals = computeTrainingStepTotals(baseSteps);
 
   const estimatedDurationInSecs =
     toNum(workout?.totalDurationSec) ??
@@ -465,7 +490,19 @@ function buildTrainingApiWorkoutPayload(workout = {}, { title = "Workout", sessi
     workoutProvider: "Train-r",
     workoutSourceId: String(sourceId).slice(0, 120),
     isSessionTransitionEnabled: true,
-    steps: stepPayloads,
+    segments: [
+      {
+        segmentOrder: 1,
+        sport: normalizedSport,
+        ...(estimatedDurationInSecs != null && estimatedDurationInSecs > 0
+          ? { estimatedDurationInSecs: Math.round(estimatedDurationInSecs) }
+          : {}),
+        ...(estimatedDistanceInMeters != null && estimatedDistanceInMeters > 0
+          ? { estimatedDistanceInMeters: Math.round(estimatedDistanceInMeters) }
+          : {}),
+        steps: builtSteps,
+      },
+    ],
   };
 
   if (description) payload.description = description.slice(0, 240);
@@ -626,7 +663,11 @@ router.post("/send-workout", requireUser, async (req, res) => {
       sessionKey,
       scheduledDate,
     });
-    if (!Array.isArray(garminWorkout?.steps) || !garminWorkout.steps.length) {
+    const hasNestedSteps = Array.isArray(garminWorkout?.segments)
+      && garminWorkout.segments.some(
+        (segment) => Array.isArray(segment?.steps) && segment.steps.length > 0
+      );
+    if (!hasNestedSteps) {
       return res.status(400).json({
         ok: false,
         error: "Garmin workout payload is empty",
