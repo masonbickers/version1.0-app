@@ -626,7 +626,7 @@ router.post("/send-workout", requireUser, async (req, res) => {
       sessionKey,
       scheduledDate,
     });
-    if (!Array.isArray(garminWorkout?.segments) || !garminWorkout.segments.length) {
+    if (!Array.isArray(garminWorkout?.steps) || !garminWorkout.steps.length) {
       return res.status(400).json({
         ok: false,
         error: "Garmin workout payload is empty",
