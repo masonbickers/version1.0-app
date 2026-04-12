@@ -24,8 +24,6 @@ export default function ProtectedLayout() {
   const [needsWelcome, setNeedsWelcome] = useState(false);
   const [welcomeLoading, setWelcomeLoading] = useState(true);
 
-  if (!nav?.key) return null;
-
   useEffect(() => {
     const t = setTimeout(() => setDeadman(true), 6000);
     return () => clearTimeout(t);
@@ -70,7 +68,9 @@ export default function ProtectedLayout() {
   const isTrainCreateFlow =
     segments?.[0] === "(protected)" &&
     ((segments?.[1] === "train" &&
-      (segments?.[2] === "create-home" || segments?.[2] === "create")) ||
+      (segments?.[2] === "create-home" ||
+        segments?.[2] === "create" ||
+        segments?.[2] === "create-workout")) ||
       (segments?.[1] === "training" && segments?.[2] === "create"));
 
   // ✅ decide which routes should NOT show the footer
@@ -153,6 +153,8 @@ export default function ProtectedLayout() {
       isTrainCreateFlow
     );
   }, [segments, isTrainCreateFlow]);
+
+  if (!nav?.key) return null;
 
   if (loading || welcomeLoading) {
     return (

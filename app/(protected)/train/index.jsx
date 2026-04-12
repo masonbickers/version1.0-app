@@ -142,6 +142,51 @@ const SAMPLE_WORKOUTS = [
   },
 ];
 
+const QUICK_CREATE_TILES = [
+  {
+    sampleKey: "run_easy_35",
+    label: "Easy Run",
+    kicker: "Aerobic",
+    icon: "activity",
+    colors: ["#A4D53A", "#6E9722"],
+  },
+  {
+    sampleKey: "run_intervals_intro",
+    label: "Intervals",
+    kicker: "Quality",
+    icon: "zap",
+    colors: ["#F3BE37", "#D66A1E"],
+  },
+  {
+    sampleKey: "strength_40",
+    label: "Strength",
+    kicker: "Gym",
+    icon: "bar-chart-2",
+    colors: ["#6F8E54", "#435A33"],
+  },
+  {
+    sampleKey: "bodyweight_20",
+    label: "Bodyweight",
+    kicker: "No kit",
+    icon: "user",
+    colors: ["#4C86D7", "#365BA6"],
+  },
+  {
+    sampleKey: "hybrid_engine_30",
+    label: "Hybrid",
+    kicker: "Run + work",
+    icon: "shuffle",
+    colors: ["#31A68D", "#1E6D66"],
+  },
+  {
+    sampleKey: "recovery_flow_25",
+    label: "Recovery",
+    kicker: "Reset",
+    icon: "moon",
+    colors: ["#8B909B", "#555B67"],
+  },
+];
+
 const NO_PLAN_NOTE =
   "Start with one sample workout or quick log today. Build your full plan once your weekly rhythm is clearer.";
 const TIP_CARD_IMAGE_A = require("../../../assets/images/run.jpeg");
@@ -411,14 +456,6 @@ function sortMergedSessions(sessions) {
   };
   arr.sort((a, b) => rank(a) - rank(b));
   return arr;
-}
-
-function mapSampleTypeToRecordType(type) {
-  const t = String(type || "").toLowerCase();
-  if (t.includes("run")) return "run";
-  if (t.includes("strength")) return "gym";
-  if (t.includes("bodyweight")) return "other";
-  return "other";
 }
 
 function sampleIconName(type) {
@@ -1820,7 +1857,7 @@ export default function TrainIndex() {
     }
   }, []);
 
-  const useCoachPlan = useCallback(
+  const activateCoachPlan = useCallback(
     async (coachPlan) => {
       const uid = auth.currentUser?.uid;
       if (!uid) {
@@ -2758,6 +2795,44 @@ export default function TrainIndex() {
     () => SAMPLE_WORKOUTS.find((w) => w.key === recordSeedSampleKey) || null,
     [recordSeedSampleKey]
   );
+  const selectedRecordHero = useMemo(() => {
+    if (!selectedRecordSample) return null;
+
+    if (selectedRecordSample.category === "strength") {
+      return {
+        colors: theme.isDark ? ["#11150C", "#0B0F08", "#000000"] : ["#C7D83A", "#728116", "#101010"],
+        accent: "#D8F04E",
+      };
+    }
+
+    if (selectedRecordSample.category === "hybrid") {
+      return {
+        colors: theme.isDark ? ["#091015", "#0B161A", "#000000"] : ["#8DE0F0", "#3C8B8A", "#111111"],
+        accent: "#84E6F5",
+      };
+    }
+
+    if (selectedRecordSample.category === "recovery") {
+      return {
+        colors: theme.isDark ? ["#0A1211", "#0C1716", "#000000"] : ["#9AD8C2", "#50866D", "#111111"],
+        accent: "#8EE4C2",
+      };
+    }
+
+    return {
+      colors: theme.isDark ? ["#06080B", "#0B1115", "#000000"] : ["#D7E83D", "#7A8618", "#111111"],
+      accent: theme.primaryBg,
+    };
+  }, [selectedRecordSample, theme.isDark, theme.primaryBg]);
+  const quickCreateCards = useMemo(
+    () =>
+      QUICK_CREATE_TILES.map((tile) => {
+        const sample = SAMPLE_WORKOUTS.find((item) => item.key === tile.sampleKey);
+        if (!sample) return null;
+        return { ...tile, sample };
+      }).filter(Boolean),
+    []
+  );
   const activeTipTopic = useMemo(
     () => TRAINING_TIP_TOPICS.find((t) => t.key === tipTopicKey) || TRAINING_TIP_TOPICS[0],
     [tipTopicKey]
@@ -2831,24 +2906,6 @@ export default function TrainIndex() {
       setSelectedDayIndex(idx);
     },
     []
-  );
-
-  const applySampleWorkout = useCallback(
-    (sample) => {
-      const dayIdx = Number.isInteger(focusedDay?.dayIdx) ? focusedDay.dayIdx : 0;
-      setRecordDayIndex(dayIdx);
-      setRecordType(mapSampleTypeToRecordType(sample?.type));
-      setRecordTitle(sample?.title || "Sample workout");
-      setRecordDurationMin(sample?.durationMin ? String(sample.durationMin) : "");
-      setRecordDistanceKm(
-        Number.isFinite(Number(sample?.distanceKm)) ? String(sample.distanceKm) : ""
-      );
-      setRecordRpe(sample?.rpe ? String(sample.rpe) : "");
-      setRecordNotes(sample?.notes || "");
-      setRecordSeedSampleKey(sample?.key || "");
-      setRecordOpen(true);
-    },
-    [focusedDay?.dayIdx]
   );
 
   const saveQuickRecord = useCallback(async () => {
@@ -3657,7 +3714,12 @@ export default function TrainIndex() {
                       </Text>
 
                       <TouchableOpacity
-                        onPress={() => applySampleWorkout(sample)}
+                        onPress={() =>
+                          router.push({
+                            pathname: "/train/create-workout",
+                            params: { sampleKey: sample.key, mode: "manual" },
+                          })
+                        }
                         style={[s.samplePrimaryCta, { backgroundColor: theme.primaryBg }]}
                         activeOpacity={0.9}
                       >
@@ -3821,7 +3883,7 @@ export default function TrainIndex() {
                                   pathname: "/train/coach-plan-preview",
                                   params: { templateId: cp.id },
                                 })
-                              : useCoachPlan(cp)
+                              : activateCoachPlan(cp)
                           }
                           disabled={isUsing}
                           style={[
@@ -3860,6 +3922,111 @@ export default function TrainIndex() {
                 </Text>
               </View>
             )}
+          </View>
+
+          <View style={s.exploreTipsBlock}>
+            <View style={s.sectionHead}>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.cardTitle, { color: theme.text }]}>Create workout</Text>
+                <Text style={[s.sectionSubtle, { color: theme.subtext, marginTop: 4 }]}>
+                  Prefill a run, strength or hybrid session in one tap.
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={() =>
+                  router.push({
+                    pathname: "/train/create-workout",
+                    params: { mode: "ai" },
+                  })
+                }
+                style={[s.coachBrowseBtn, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+                activeOpacity={0.85}
+              >
+                <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>Generate</Text>
+                <Feather name="sparkles" size={13} color={theme.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={s.quickCreateGrid}>
+              {quickCreateCards.map((card) => (
+                <TouchableOpacity
+                  key={`quick-create-${card.sampleKey}`}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/train/create-workout",
+                      params: { sampleKey: card.sampleKey, mode: "manual" },
+                    })
+                  }
+                  style={s.quickCreateCardShell}
+                  activeOpacity={0.9}
+                >
+                  <LinearGradient
+                    colors={[
+                      withHexAlpha(card.colors[0], theme.isDark ? "26" : "18"),
+                      withHexAlpha(card.colors[1], theme.isDark ? "12" : "0D"),
+                    ]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={[
+                      s.quickCreateCard,
+                      {
+                        backgroundColor: theme.card2,
+                        borderColor: withHexAlpha(card.colors[0], theme.isDark ? "52" : "30"),
+                      },
+                    ]}
+                  >
+                    <View style={s.quickCreateCardTop}>
+                      <View
+                        style={[
+                          s.quickCreateIconPill,
+                          {
+                            backgroundColor: withHexAlpha(card.colors[0], theme.isDark ? "28" : "22"),
+                            borderColor: withHexAlpha(card.colors[0], theme.isDark ? "5E" : "3D"),
+                          },
+                        ]}
+                      >
+                        <Feather name={card.icon} size={14} color="#FFFFFF" />
+                      </View>
+                      <Text style={s.quickCreateCardKicker}>{card.kicker}</Text>
+                    </View>
+
+                    <Text style={s.quickCreateCardTitle} numberOfLines={2}>
+                      {card.label}
+                    </Text>
+                    <Text style={s.quickCreateCardMeta} numberOfLines={1}>
+                      {card.sample.durationMin} min · {sampleSecondaryMeta(card.sample)} · {sampleEffortLabel(card.sample.rpe)}
+                    </Text>
+
+                    <Feather
+                      name={card.icon}
+                      size={42}
+                      color="rgba(255,255,255,0.12)"
+                      style={s.quickCreateWatermark}
+                    />
+                  </LinearGradient>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View
+              style={[
+                s.quickCreateCompactFooter,
+                { borderColor: theme.border, backgroundColor: theme.card2 },
+              ]}
+            >
+              <Text style={[s.quickCreateCompactText, { color: theme.subtext }]}>
+                Use a tile for a structured custom workout, or quick log if you trained something else.
+              </Text>
+              <TouchableOpacity
+                onPress={() => openQuickRecord(focusedDay ? focusedDay.dayIdx : 0)}
+                style={[s.quickCreateCompactBtn, { borderColor: theme.border, backgroundColor: theme.card }]}
+                activeOpacity={0.85}
+              >
+                <Feather name="plus-circle" size={14} color={theme.text} />
+                <Text style={[s.quickCreateCompactBtnText, { color: theme.text }]}>Quick log</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           <View style={s.exploreTipsBlock}>
@@ -4280,21 +4447,34 @@ export default function TrainIndex() {
               >
                 {selectedRecordSample ? (
                   <LinearGradient
-                    colors={
-                      theme.isDark
-                        ? ["#D8A125", "#8F6D14", "#15171E"]
-                        : ["#F5C95E", "#D9A136", "#EDE9DC"]
-                    }
+                    colors={selectedRecordHero?.colors || [theme.card2, theme.card, "#000000"]}
                     start={{ x: 0, y: 0 }}
-                    end={{ x: 0.95, y: 1 }}
-                    style={s.quickLogHero}
+                    end={{ x: 1, y: 1 }}
+                    style={[s.quickLogHero, { borderColor: withHexAlpha(selectedRecordHero?.accent || theme.primaryBg, theme.isDark ? "3D" : "33") }]}
                   >
                     <View style={s.quickLogHeroTop}>
-                      <View style={[s.sampleTypePill, { backgroundColor: "rgba(0,0,0,0.18)", borderColor: "rgba(255,255,255,0.24)" }]}>
-                        <Feather name={sampleIconName(selectedRecordSample.type)} size={13} color="#FFFFFF" />
-                        <Text style={[s.sampleTypeText, { color: "#FFFFFF" }]}>{selectedRecordSample.type}</Text>
+                      <Text style={s.quickLogHeroEyebrow}>
+                        {(weekGrid?.[recordDayIndex]?.dateLabel || "Session") + " · Prefilled sample"}
+                      </Text>
+
+                      <View
+                        style={[
+                          s.quickLogHeroTypePill,
+                          {
+                            backgroundColor: withHexAlpha(selectedRecordHero?.accent || theme.primaryBg, theme.isDark ? "20" : "1A"),
+                            borderColor: withHexAlpha(selectedRecordHero?.accent || theme.primaryBg, theme.isDark ? "66" : "52"),
+                          },
+                        ]}
+                      >
+                        <Feather
+                          name={sampleIconName(selectedRecordSample.type)}
+                          size={13}
+                          color={selectedRecordHero?.accent || theme.primaryBg}
+                        />
+                        <Text style={[s.quickLogHeroTypeText, { color: selectedRecordHero?.accent || theme.primaryBg }]}>
+                          {selectedRecordSample.type}
+                        </Text>
                       </View>
-                      <Text style={s.quickLogHeroKicker}>Prefilled sample</Text>
                     </View>
 
                     <Text style={s.quickLogHeroTitle}>{recordTitle || selectedRecordSample.title}</Text>
@@ -4322,9 +4502,19 @@ export default function TrainIndex() {
                       </View>
                     </View>
 
-                    <Text style={s.quickLogHeroBestFor}>
-                      {selectedRecordSample.bestFor || sampleRecommendationReason}
-                    </Text>
+                    <View style={s.quickLogHeroBestForRow}>
+                      <Feather name="sparkles" size={13} color={selectedRecordHero?.accent || theme.primaryBg} />
+                      <Text style={s.quickLogHeroBestFor}>
+                        {selectedRecordSample.bestFor || sampleRecommendationReason}
+                      </Text>
+                    </View>
+
+                    <LinearGradient
+                      colors={["transparent", selectedRecordHero?.accent || theme.primaryBg, "transparent"]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={s.quickLogHeroEdge}
+                    />
                   </LinearGradient>
                 ) : null}
 
@@ -5246,6 +5436,98 @@ const s = StyleSheet.create({
   exploreTipsBlock: {
     marginTop: 10,
   },
+  quickCreateGrid: {
+    marginTop: 10,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  quickCreateCardShell: {
+    width: "48.5%",
+  },
+  quickCreateCard: {
+    minHeight: 112,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 11,
+    overflow: "hidden",
+  },
+  quickCreateCardTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  quickCreateIconPill: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  quickCreateCardKicker: {
+    color: "rgba(255,255,255,0.84)",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+  },
+  quickCreateCardTitle: {
+    marginTop: 16,
+    color: "#FFFFFF",
+    fontSize: 19,
+    lineHeight: 22,
+    fontWeight: "900",
+    maxWidth: "88%",
+  },
+  quickCreateCardMeta: {
+    marginTop: 6,
+    color: "rgba(255,255,255,0.82)",
+    fontSize: 10,
+    fontWeight: "700",
+    lineHeight: 14,
+    maxWidth: "88%",
+  },
+  quickCreateWatermark: {
+    position: "absolute",
+    right: 8,
+    bottom: 8,
+  },
+  quickCreateCompactFooter: {
+    marginTop: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  quickCreateCompactText: {
+    flex: 1,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "600",
+  },
+  quickCreateCompactBtn: {
+    minHeight: 36,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+  },
+  quickCreateCompactBtnText: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
   sampleCtaHint: {
     fontSize: 11,
     fontWeight: "700",
@@ -5330,48 +5612,70 @@ const s = StyleSheet.create({
     gap: 10,
   },
   quickLogHero: {
+    position: "relative",
     borderRadius: 18,
-    padding: 14,
-    gap: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 18,
+    gap: 9,
     overflow: "hidden",
   },
   quickLogHeroTop: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     gap: 10,
   },
-  quickLogHeroKicker: {
+  quickLogHeroEyebrow: {
+    flex: 1,
     fontSize: 10,
     fontWeight: "900",
-    letterSpacing: 0.5,
+    letterSpacing: 0.7,
     textTransform: "uppercase",
-    color: "#FFFFFF",
+    color: "rgba(255,255,255,0.74)",
+  },
+  quickLogHeroTypePill: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  quickLogHeroTypeText: {
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
   },
   quickLogHeroTitle: {
-    marginTop: 1,
-    fontSize: 24,
-    lineHeight: 30,
+    marginTop: 4,
+    fontSize: 28,
+    lineHeight: 33,
     fontWeight: "900",
     color: "#FFFFFF",
   },
   quickLogHeroSummary: {
     fontSize: 13,
     lineHeight: 19,
-    fontWeight: "700",
-    color: "#F2F2F2",
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.84)",
   },
   quickLogHeroMetaRow: {
-    marginTop: 4,
+    marginTop: 6,
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
   },
   quickLogHeroMetaChip: {
     borderRadius: 999,
-    paddingHorizontal: 9,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 10,
     paddingVertical: 5,
-    backgroundColor: "rgba(0,0,0,0.22)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.14)",
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
@@ -5381,12 +5685,26 @@ const s = StyleSheet.create({
     fontWeight: "900",
     color: "#FFFFFF",
   },
-  quickLogHeroBestFor: {
+  quickLogHeroBestForRow: {
     marginTop: 2,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 7,
+  },
+  quickLogHeroBestFor: {
+    flex: 1,
     fontSize: 12,
     lineHeight: 18,
     fontWeight: "700",
-    color: "#F2F2F2",
+    color: "rgba(255,255,255,0.88)",
+  },
+  quickLogHeroEdge: {
+    position: "absolute",
+    left: 18,
+    right: 18,
+    bottom: 0,
+    height: 3,
+    borderRadius: 999,
   },
   quickLogSectionTitle: {
     marginTop: 2,
