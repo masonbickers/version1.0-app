@@ -90,6 +90,8 @@ export default function SettingsPage() {
 
   const [garminConnecting, setGarminConnecting] = React.useState(false);
   const [garminConnected, setGarminConnected] = React.useState(false);
+  const [garminStatusChecking, setGarminStatusChecking] = React.useState(false);
+  const [garminSyncing, setGarminSyncing] = React.useState(false);
 
   const handleClose = React.useCallback(() => {
     if (typeof router.canGoBack === "function" && router.canGoBack()) {
@@ -142,9 +144,7 @@ export default function SettingsPage() {
   };
 
   /* ───────────────────────────────
-      STRAVA (FIXED)
-      ✅ No more exp://localhost or scheme://localhost redirects
-      ✅ Flow: App -> SERVER /strava/start -> Strava -> SERVER /strava/callback -> App deep link
+      STRAVA
   ─────────────────────────────── */
 
   const runInitialStravaSync = React.useCallback(async (accessToken) => {
@@ -157,45 +157,42 @@ export default function SettingsPage() {
       await syncStravaActivities(user.uid, accessToken);
     } catch (e) {
       console.log("Initial Strava sync error:", e);
-      Alert.alert(
-        "Strava",
-        "Connected, but syncing failed. Try again later."
-      );
+      Alert.alert("Strava", "Connected, but syncing failed. Try again later.");
     } finally {
       setStravaSyncing(false);
     }
   }, []);
 
-  const fetchStravaTokensFromResult = React.useCallback(
-    async (resultKey) => {
-      const user = auth.currentUser;
-      if (!user?.uid) throw new Error("Please sign in again.");
-      const idToken = await user.getIdToken();
+  const fetchStravaTokensFromResult = React.useCallback(async (resultKey) => {
+    const user = auth.currentUser;
+    if (!user?.uid) throw new Error("Please sign in again.");
 
-      const resp = await fetch(`${API_BASE}/strava/oauth-result`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ resultKey }),
-      });
+    const idToken = await user.getIdToken();
 
-      const json = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        throw new Error(
-          json?.error || `OAuth result failed (${resp.status})`
-        );
-      }
-      return json || {};
-    },
-    []
-  );
+    const resp = await fetch(`${API_BASE}/strava/oauth-result`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({ resultKey }),
+    });
+
+    const json = await resp.json().catch(() => ({}));
+
+    if (!resp.ok) {
+      throw new Error(json?.error || `OAuth result failed (${resp.status})`);
+    }
+
+    return json || {};
+  }, []);
 
   const checkApiReachable = React.useCallback(async () => {
     if (!API_BASE) return false;
+
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+    const timeout = setTimeout(() => controller.abort(), 12000);
+
     try {
       const resp = await fetch(`${API_BASE}/health`, {
         method: "GET",
@@ -212,10 +209,12 @@ export default function SettingsPage() {
   const handleConnectStrava = React.useCallback(async () => {
     try {
       const user = auth.currentUser;
+
       if (!user?.uid) {
         Alert.alert("Strava", "Please sign in again and try.");
         return;
       }
+
       if (!API_BASE) {
         Alert.alert(
           "Strava",
@@ -228,9 +227,8 @@ export default function SettingsPage() {
       if (!apiUp) {
         Alert.alert(
           "Strava",
-          `Can't reach your API server at ${API_BASE}.\n\nStart the backend on port 3001 and keep your phone on the same Wi-Fi.`
+          `Your API at ${API_BASE} did not respond to the health check in time. We'll still try to open Strava OAuth now.`
         );
-        return;
       }
 
       setStravaConnecting(true);
@@ -250,9 +248,7 @@ export default function SettingsPage() {
 
       console.log("Strava auth result =", result);
 
-      if (result.type !== "success" || !result.url) {
-        return;
-      }
+      if (result.type !== "success" || !result.url) return;
 
       const parsed = Linking.parse(result.url);
       console.log("Strava parsed result =", parsed);
@@ -273,23 +269,28 @@ export default function SettingsPage() {
         }
 
         if (!accessToken) {
-          throw new Error("OAuth completed but no Strava access token was returned.");
+          throw new Error(
+            "OAuth completed but no Strava access token was returned."
+          );
         }
 
         const updates = [
           ["strava_connected", "1"],
           ["strava_access_token", String(accessToken)],
         ];
-        if (refreshToken) updates.push(["strava_refresh_token", String(refreshToken)]);
+
+        if (refreshToken) {
+          updates.push(["strava_refresh_token", String(refreshToken)]);
+        }
+
         if (expiresAt != null && String(expiresAt) !== "") {
           updates.push(["strava_expires_at", String(expiresAt)]);
         }
+
         await AsyncStorage.multiSet(updates);
         setStravaConnected(true);
 
-        if (accessToken) {
-          await runInitialStravaSync(String(accessToken));
-        }
+        await runInitialStravaSync(String(accessToken));
 
         Alert.alert("Strava", "Strava account connected.");
       } else {
@@ -333,7 +334,10 @@ export default function SettingsPage() {
               Alert.alert("Strava", "Strava has been disconnected.");
             } catch (e) {
               console.error("Strava disconnect error", e);
-              Alert.alert("Strava", "Something went wrong disconnecting Strava.");
+              Alert.alert(
+                "Strava",
+                "Something went wrong disconnecting Strava."
+              );
             }
           },
         },
@@ -342,16 +346,18 @@ export default function SettingsPage() {
   };
 
   /* ───────────────────────────────
-      GARMIN (same “server start -> deep link return” approach)
+      GARMIN
   ─────────────────────────────── */
 
   const handleConnectGarmin = async () => {
     try {
       const user = auth.currentUser;
+
       if (!user?.uid) {
         Alert.alert("Garmin", "Please sign in again and try.");
         return;
       }
+
       if (!API_BASE) {
         Alert.alert(
           "Garmin",
@@ -377,9 +383,7 @@ export default function SettingsPage() {
 
       console.log("Garmin auth result =", result);
 
-      if (result.type !== "success" || !result.url) {
-        return;
-      }
+      if (result.type !== "success" || !result.url) return;
 
       const parsed = Linking.parse(result.url);
       console.log("Garmin parsed result =", parsed);
@@ -426,12 +430,106 @@ export default function SettingsPage() {
               Alert.alert("Garmin", "Garmin has been disconnected.");
             } catch (e) {
               console.error("Garmin disconnect error", e);
-              Alert.alert("Garmin", "Something went wrong disconnecting Garmin.");
+              Alert.alert(
+                "Garmin",
+                "Something went wrong disconnecting Garmin."
+              );
             }
           },
         },
       ]
     );
+  };
+
+  const handleCheckGarminActivitiesStatus = async () => {
+    try {
+      const user = auth.currentUser;
+
+      if (!user?.uid) {
+        Alert.alert("Garmin", "Please sign in again.");
+        return;
+      }
+
+      if (!API_BASE) {
+        Alert.alert(
+          "Garmin",
+          "API is not configured for this build. Set EXPO_PUBLIC_API_URL in EAS environment variables."
+        );
+        return;
+      }
+
+      setGarminStatusChecking(true);
+
+      const idToken = await user.getIdToken();
+
+      const res = await fetch(`${API_BASE}/garmin/activities/status`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      });
+
+      const text = await res.text();
+      let json = {};
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        json = { raw: text };
+      }
+
+      Alert.alert(
+        "Garmin Activities Status",
+        JSON.stringify({ apiBase: API_BASE, status: res.status, ...json }, null, 2)
+      );
+    } catch (e) {
+      console.log("Garmin activities status error", e);
+      Alert.alert("Garmin", e?.message || "Could not check Garmin status.");
+    } finally {
+      setGarminStatusChecking(false);
+    }
+  };
+
+  const handleSyncGarminActivities = async () => {
+    try {
+      const user = auth.currentUser;
+
+      if (!user?.uid) {
+        Alert.alert("Garmin", "Please sign in again.");
+        return;
+      }
+
+      if (!API_BASE) {
+        Alert.alert(
+          "Garmin",
+          "API is not configured for this build. Set EXPO_PUBLIC_API_URL in EAS environment variables."
+        );
+        return;
+      }
+
+      setGarminSyncing(true);
+
+      const idToken = await user.getIdToken();
+
+      const res = await fetch(`${API_BASE}/garmin/activities/sync`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      });
+
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok || json?.ok !== true) {
+        throw new Error(json?.error || "Could not request Garmin sync.");
+      }
+
+      Alert.alert("Garmin Sync", json?.message || "Garmin sync requested.");
+    } catch (e) {
+      console.log("Garmin sync error", e);
+      Alert.alert("Garmin", e?.message || "Could not sync Garmin activities.");
+    } finally {
+      setGarminSyncing(false);
+    }
   };
 
   return (
@@ -440,7 +538,10 @@ export default function SettingsPage() {
         style={s.page}
         contentContainerStyle={[
           s.content,
-          { paddingTop: Math.max(14, insets.top + 4), paddingBottom: Math.max(28, insets.bottom + 14) },
+          {
+            paddingTop: Math.max(14, insets.top + 4),
+            paddingBottom: Math.max(28, insets.bottom + 14),
+          },
         ]}
       >
         <View style={s.header}>
@@ -451,6 +552,7 @@ export default function SettingsPage() {
           >
             <Feather name="chevron-left" size={19} color={colors.text} />
           </TouchableOpacity>
+
           <View style={s.headerTextWrap}>
             <Text style={s.headerKicker}>General</Text>
             <Text style={s.headerTitle}>Settings</Text>
@@ -462,6 +564,7 @@ export default function SettingsPage() {
           <Text style={s.sectionTitle}>Appearance</Text>
           <View style={s.sectionLine} />
         </View>
+
         <View style={s.card}>
           <Text style={s.label}>Theme</Text>
           <View style={s.themeRow}>
@@ -479,6 +582,7 @@ export default function SettingsPage() {
           <Text style={s.sectionTitle}>Preferences</Text>
           <View style={s.sectionLine} />
         </View>
+
         <View style={s.card}>
           <Row
             icon="bell"
@@ -498,7 +602,9 @@ export default function SettingsPage() {
             isDark={isDark}
             accentFill={accentFill}
           />
+
           <Divider colors={colors} />
+
           <Row
             icon="activity"
             label="Share anonymous analytics"
@@ -523,6 +629,7 @@ export default function SettingsPage() {
           <Text style={s.sectionTitle}>Connections</Text>
           <View style={s.sectionLine} />
         </View>
+
         <View style={s.card}>
           <Row
             icon="zap"
@@ -540,7 +647,11 @@ export default function SettingsPage() {
               ) : stravaConnected ? (
                 <Feather name="check-circle" size={20} color="#22C55E" />
               ) : (
-                <Feather name="chevron-right" size={18} color={colors.subtext} />
+                <Feather
+                  name="chevron-right"
+                  size={18}
+                  color={colors.subtext}
+                />
               )
             }
             colors={colors}
@@ -551,6 +662,7 @@ export default function SettingsPage() {
           {stravaConnected && (
             <>
               <Divider colors={colors} />
+
               <Row
                 icon="x-circle"
                 label="Disconnect Strava"
@@ -582,7 +694,11 @@ export default function SettingsPage() {
               ) : garminConnected ? (
                 <Feather name="check-circle" size={20} color="#22C55E" />
               ) : (
-                <Feather name="chevron-right" size={18} color={colors.subtext} />
+                <Feather
+                  name="chevron-right"
+                  size={18}
+                  color={colors.subtext}
+                />
               )
             }
             colors={colors}
@@ -593,6 +709,63 @@ export default function SettingsPage() {
           {garminConnected && (
             <>
               <Divider colors={colors} />
+
+              <Row
+                icon="activity"
+                label={
+                  garminStatusChecking
+                    ? "Checking Garmin Activities…"
+                    : "Check Garmin Activities Status"
+                }
+                onPress={
+                  garminStatusChecking
+                    ? undefined
+                    : handleCheckGarminActivitiesStatus
+                }
+                colors={colors}
+                isDark={isDark}
+                accentFill={accentFill}
+                right={
+                  garminStatusChecking ? (
+                    <ActivityIndicator size="small" />
+                  ) : (
+                    <Feather
+                      name="chevron-right"
+                      size={18}
+                      color={colors.subtext}
+                    />
+                  )
+                }
+              />
+
+              <Divider colors={colors} />
+
+              <Row
+                icon="refresh-cw"
+                label={
+                  garminSyncing
+                    ? "Syncing Garmin Activities…"
+                    : "Sync Garmin Activities"
+                }
+                onPress={garminSyncing ? undefined : handleSyncGarminActivities}
+                colors={colors}
+                isDark={isDark}
+                accentFill={accentFill}
+                right={
+                  garminSyncing ? (
+                    <ActivityIndicator size="small" />
+                  ) : (
+                    <Feather
+                      name="chevron-right"
+                      size={18}
+                      color={colors.subtext}
+                    />
+                  )
+                }
+              />
+
+              <Divider colors={colors} />
+
               <Row
                 icon="x-circle"
                 label="Disconnect Garmin"
@@ -611,16 +784,19 @@ export default function SettingsPage() {
           <Text style={s.sectionTitle}>Account</Text>
           <View style={s.sectionLine} />
         </View>
+
         <View style={s.card}>
           <Row
             icon="user"
             label="Edit profile"
-            onPress={() => router.push("/profile/edit")}
+            onPress={() => router.push("/profile")}
             colors={colors}
             isDark={isDark}
             accentFill={accentFill}
           />
+
           <Divider colors={colors} />
+
           <Row
             icon="credit-card"
             label="Plans & Billing"
@@ -629,25 +805,9 @@ export default function SettingsPage() {
             isDark={isDark}
             accentFill={accentFill}
           />
+
           <Divider colors={colors} />
-          <Row
-            icon="lock"
-            label="Colours"
-            onPress={() => router.push("/colours")}
-            colors={colors}
-            isDark={isDark}
-            accentFill={accentFill}
-          />
-          <Divider colors={colors} />
-          <Row
-            icon="lock"
-            label="Fonts"
-            onPress={() => router.push("/fonts")}
-            colors={colors}
-            isDark={isDark}
-            accentFill={accentFill}
-          />
-          <Divider colors={colors} />
+
           <Row
             icon="log-out"
             label="Sign out"
@@ -667,18 +827,32 @@ export default function SettingsPage() {
 
 /* ---------- small components ---------- */
 
-function Row({ icon, label, right, onPress, danger, colors, isDark, accentFill }) {
+function Row({
+  icon,
+  label,
+  right,
+  onPress,
+  danger,
+  colors,
+  isDark,
+  accentFill,
+}) {
   const dangerColor = colors.danger || "#EF4444";
   const iconBg = danger
     ? "rgba(239,68,68,0.16)"
     : isDark
     ? "rgba(230,255,59,0.12)"
     : "rgba(17,17,17,0.06)";
+
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={onPress ? 0.8 : 1}
-      style={{ flexDirection: "row", alignItems: "center", paddingVertical: 13 }}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        paddingVertical: 13,
+      }}
     >
       <View
         style={{
@@ -689,7 +863,11 @@ function Row({ icon, label, right, onPress, danger, colors, isDark, accentFill }
           justifyContent: "center",
           backgroundColor: iconBg,
           borderWidth: StyleSheet.hairlineWidth,
-          borderColor: danger ? "rgba(239,68,68,0.35)" : isDark ? "rgba(230,255,59,0.30)" : "rgba(15,23,42,0.15)",
+          borderColor: danger
+            ? "rgba(239,68,68,0.35)"
+            : isDark
+            ? "rgba(230,255,59,0.30)"
+            : "rgba(15,23,42,0.15)",
         }}
       >
         <Feather
@@ -698,6 +876,7 @@ function Row({ icon, label, right, onPress, danger, colors, isDark, accentFill }
           color={danger ? dangerColor : isDark ? accentFill : colors.text}
         />
       </View>
+
       <Text
         style={{
           marginLeft: 11,
@@ -709,9 +888,8 @@ function Row({ icon, label, right, onPress, danger, colors, isDark, accentFill }
       >
         {label}
       </Text>
-      {right ?? (
-        <Feather name="chevron-right" size={18} color={colors.subtext} />
-      )}
+
+      {right ?? <Feather name="chevron-right" size={18} color={colors.subtext} />}
     </TouchableOpacity>
   );
 }
@@ -733,6 +911,7 @@ function makeStyles(colors, isDark, accentFill, accentInk) {
   const cardBg = isDark
     ? "rgba(17,19,24,0.92)"
     : colors.sapSilverLight || colors.card;
+
   const cardBorder = isDark
     ? "rgba(255,255,255,0.10)"
     : colors.sapSilverMedium || colors.border;
@@ -870,7 +1049,12 @@ function makeStyles(colors, isDark, accentFill, accentInk) {
     optionText: { color: colors.subtext, fontWeight: "800", fontSize: 12 },
     optionTextActive: { color: colors.text },
 
-    hint: { marginTop: 8, color: colors.subtext, fontSize: 12, lineHeight: 16 },
+    hint: {
+      marginTop: 8,
+      color: colors.subtext,
+      fontSize: 12,
+      lineHeight: 16,
+    },
 
     footerNote: {
       textAlign: "center",

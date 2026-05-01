@@ -115,4 +115,49 @@ router.get("/", requireUser, async (req, res) => {
   }
 });
 
+router.post("/sync", requireUser, async (req, res) => {
+  try {
+    const uid = String(req.user?.uid || "").trim();
+
+    if (!uid) {
+      return res.status(401).json({
+        ok: false,
+        error: "Unauthenticated user",
+      });
+    }
+
+    const userRef = admin.firestore().collection("users").doc(uid);
+    const userSnap = await userRef.get();
+    const garmin = userSnap.data()?.integrations?.garmin || null;
+
+    if (garmin?.connected !== true) {
+      return res.status(400).json({
+        ok: false,
+        error: "Garmin is not connected",
+      });
+    }
+
+    await userRef.collection("garmin_sync_requests").add({
+      type: "manual_activity_sync",
+      requestedAt: admin.firestore.FieldValue.serverTimestamp(),
+      requestedAtMs: Date.now(),
+      status: "requested",
+      garminUserId: garmin?.garminUserId || null,
+    });
+
+    return res.json({
+      ok: true,
+      message:
+        "Garmin sync requested. New activities will appear after Garmin sends activity data.",
+      garminUserId: garmin?.garminUserId || null,
+    });
+  } catch (e) {
+    console.error("Garmin manual sync error:", e);
+    return res.status(500).json({
+      ok: false,
+      error: e?.message || "Failed to request Garmin sync",
+    });
+  }
+});
+
 export default router;
