@@ -25,7 +25,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { auth, db } from "../../../../firebaseConfig";
 import { useTheme } from "../../../../providers/ThemeProvider";
-import { MASON_COACH_TEMPLATE_DOCS } from "../data/coachTemplates";
+import { MASON_COACH_TEMPLATE_DOCS } from "../../../../src/train/data/coachTemplates";
 
 const AVATAR_SWATCHES = ["#2563EB", "#0EA5E9", "#0891B2", "#16A34A", "#D97706", "#9333EA"];
 const LOCAL_COACH_PROFILE_BY_KEY = {
@@ -595,7 +595,7 @@ export default function CoachProfilePage() {
     [router]
   );
 
-  const useCoachPlan = useCallback(
+  const applyCoachPlan = useCallback(
     async (coachPlan) => {
       const uid = auth.currentUser?.uid;
       if (!uid) {
@@ -877,7 +877,7 @@ export default function CoachProfilePage() {
                               pathname: "/train/coach-plan-preview",
                               params: { templateId: plan.id },
                             })
-                          : useCoachPlan(plan)
+                          : applyCoachPlan(plan)
                       }
                       disabled={isUsing}
                       style={[

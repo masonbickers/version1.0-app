@@ -158,6 +158,21 @@ function formatSessionDetail(session, { includeDate = false } = {}) {
   return bits.filter(Boolean).join(" · ");
 }
 
+function formatSessionCoachLine(session, { includeDate = false } = {}) {
+  if (!session) return null;
+
+  const title = String(session?.title || session?.name || "Session").trim();
+  const bits = [];
+  if (includeDate && session?.dateLabel) bits.push(session.dateLabel);
+  bits.push(title);
+  if (session?.distanceKm != null) bits.push(`${session.distanceKm} km`);
+  else if (session?.durationMin != null) bits.push(`${session.durationMin} min`);
+
+  const effort = String(session?.notes || session?.description || "").trim();
+  const main = bits.filter(Boolean).join(" - ");
+  return effort ? `${main}. ${effort}` : main;
+}
+
 function buildLiveContextFacts(context) {
   const lines = [];
   const clock = context?.clock || null;
@@ -246,7 +261,7 @@ function tryDeterministicCoachReply(message, context) {
 
   if ((asksDay || asksDate || asksTime) && clock) {
     const lines = [];
-    if (clock?.todayLabel) lines.push(`Today is ${clock.todayLabel}.`);
+    if (clock?.todayLabel) lines.push(`It is ${clock.todayLabel}.`);
     if (asksTime && clock?.localTime) lines.push(`Local time is ${clock.localTime}.`);
     if (clock?.timezone) lines.push(`Timezone: ${clock.timezone}.`);
     return lines.filter(Boolean).join("\n");
@@ -267,15 +282,31 @@ function tryDeterministicCoachReply(message, context) {
       return [
         `Today is ${clock.todayLabel}.`,
         "",
-        "You do not have a scheduled session today in the loaded plan.",
+        "I do not have a scheduled session for you today in the loaded plan.",
+        "",
+        "Use it as a recovery day, or log anything you do separately.",
+      ].join("\n");
+    }
+
+    if (todaySchedule.length === 1) {
+      const session = todaySchedule[0];
+      const line = formatSessionCoachLine(session);
+      return [
+        `Today is ${clock.todayLabel}.`,
+        "",
+        `You have ${line}.`,
+        "",
+        "Keep it controlled and follow the plan target rather than adding extra volume.",
       ].join("\n");
     }
 
     return [
       `Today is ${clock.todayLabel}.`,
       "",
-      "Today's sessions:",
-      ...todaySchedule.map((item) => `- ${formatSessionDetail(item)}`),
+      "You have these sessions today:",
+      ...todaySchedule.map((item) => `- ${formatSessionCoachLine(item)}`),
+      "",
+      "Prioritise the key session, and keep the rest easy unless the plan says otherwise.",
     ].join("\n");
   }
 
@@ -297,10 +328,12 @@ function tryDeterministicCoachReply(message, context) {
     }
 
     return [
-      "This week's scheduled sessions:",
+      "Here is your week at a glance:",
       ...currentWeekSchedule.map(
-        (item) => `- ${formatSessionDetail(item, { includeDate: true })}`
+        (item) => `- ${formatSessionCoachLine(item, { includeDate: true })}`
       ),
+      "",
+      "The main job is to hit the planned work without chasing extra volume.",
     ].join("\n");
   }
 
@@ -320,12 +353,18 @@ function tryDeterministicCoachReply(message, context) {
     );
 
     if (!daySessions.length) {
-      return `You do not have a scheduled session on ${weekdayMatch[0].toUpperCase()}${weekdayMatch.slice(1)} in the loaded current week.`;
+      return [
+        `I do not have a scheduled session for ${weekdayMatch[0].toUpperCase()}${weekdayMatch.slice(1)} in the loaded current week.`,
+        "",
+        "Treat it as recovery unless you manually add or move a session.",
+      ].join("\n");
     }
 
     return [
-      `${weekdayMatch[0].toUpperCase()}${weekdayMatch.slice(1)} sessions:`,
-      ...daySessions.map((item) => `- ${formatSessionDetail(item, { includeDate: true })}`),
+      `On ${weekdayMatch[0].toUpperCase()}${weekdayMatch.slice(1)}, you have:`,
+      ...daySessions.map((item) => `- ${formatSessionCoachLine(item, { includeDate: true })}`),
+      "",
+      "Stick to the target unless your recovery says otherwise.",
     ].join("\n");
   }
 
@@ -342,13 +381,15 @@ function tryDeterministicCoachReply(message, context) {
     }
 
     return [
-      "Your active plan" + (activePlans.length > 1 ? "s are:" : " is:"),
+      "You are currently on" + (activePlans.length > 1 ? " these plans:" : " this plan:"),
       ...activePlans.map((plan) => {
         const bits = [plan?.name || "Plan"];
         if (plan?.kind) bits.push(plan.kind);
         if (plan?.targetEventDate) bits.push(`target ${plan.targetEventDate}`);
         return `- ${bits.join(" · ")}`;
       }),
+      "",
+      "I will use this as the baseline for training advice.",
     ].join("\n");
   }
 
@@ -466,6 +507,7 @@ Behave more like ChatGPT than a generic app bot:
 - answer the user's question first
 - keep replies concise by default
 - write for mobile reading, not desktop reading
+- sound like a coach in conversation, not a notification or template
 
 STYLE RULES:
 - Do not answer in one dense paragraph unless the user explicitly asks for that format.
@@ -477,6 +519,8 @@ STYLE RULES:
 - Start with a short direct answer, then break the rest down.
 - Leave a blank line between short sections when it improves readability.
 - Avoid fluff, filler, and repeated phrasing.
+- Avoid generic sign-offs like "Enjoy your run", "You've got this", or "Let me know if..."
+- Do not repeat the user's exact wording unless needed for clarity.
 - Avoid markdown tables.
 - If the question is simple, answer in 1 to 4 short lines.
 - If the answer is longer, use this default shape:

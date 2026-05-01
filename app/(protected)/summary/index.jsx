@@ -14,7 +14,7 @@ import {
 
 import { auth } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
-import AccountSheet from "../../components/AccountSheet";
+import AccountSheet from "../../../components/AccountSheet";
 
 const PRIMARY = "#E6FF3B";
 

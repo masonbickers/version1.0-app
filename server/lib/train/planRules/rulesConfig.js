@@ -190,6 +190,18 @@ export const RULES = {
     },
   },
 
+  adaptation: {
+    recoveryWeek: {
+      readinessLookbackDays: 10,
+      lowReadinessDaysLast3d: 2,
+      actionableDaysLast7d: 3,
+      consecutiveActionableDays: 3,
+      lowAverageScoreLast3d: 48,
+      complianceFloor14d: 0.75,
+      avgRpeFloor7d: 7.5,
+    },
+  },
+
   fillSessionsPolicy: {
     easy: {
       minKmPerRunWhenWeeklyAtLeast18: 4.5,

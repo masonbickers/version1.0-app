@@ -911,6 +911,10 @@ export function normaliseAthleteProfile(athleteProfile = {}) {
     paces,
     hrZones,
     anchorTrace,
+    phaseOverrides: Array.isArray(sourceProfile?.phaseOverrides) ? sourceProfile.phaseOverrides : null,
+    recentTrainingSummary: sourceProfile?.recentTrainingSummary || null,
+    recentReadinessSummary: sourceProfile?.recentReadinessSummary || null,
+    adaptationTrace: sourceProfile?.adaptationTrace || null,
 
     maxHardSessions: RULES.maxHardSessionsByExperience?.[experience] ?? 1,
     inputContract: {

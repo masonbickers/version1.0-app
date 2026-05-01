@@ -1,19 +1,10 @@
 // app/(protected)/train/session/[sessionKey]/index.jsx
-import Feather from "../../../../components/LucideFeather";
+import Feather from "../../../../../components/LucideFeather";
+import Constants from "expo-constants";
 import { LinearGradient } from "expo-linear-gradient";
-import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import {
-  collection,
-  deleteField,
-  doc,
-  getDoc,
-  onSnapshot,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  writeBatch,
-} from "firebase/firestore";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { doc, getDoc, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   ActivityIndicator,
@@ -28,16 +19,30 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { API_URL } from "../../../../../config/api";
 import { auth, db } from "../../../../../firebaseConfig";
 import { useTheme } from "../../../../../providers/ThemeProvider";
-import {
-  buildPlannedTrainSessionPayload,
-  fetchTrainPlanById,
-  loadPlannedSessionRecord,
-  stripNilValues,
-} from "../../../../../src/train/utils/sessionRecordHelpers";
 import { classifyAuxSegmentKind, decodeSessionKey } from "../../../../../src/train/utils/sessionHelpers";
+
+/* ------------------------------------------------------------------ */
+/*  API URL – send-to-watch                                           */
+/* ------------------------------------------------------------------ */
+
+function resolveDevHost() {
+  const a = Constants.expoGoConfig?.debuggerHost?.split(":")?.[0];
+  const b = Constants.expoConfig?.hostUri?.split(":")?.[0];
+  return a || b || "localhost";
+}
+
+function resolveApiUrl() {
+  const envUrl = process.env.EXPO_PUBLIC_API_URL;
+  if (envUrl) return envUrl;
+
+  const host = resolveDevHost();
+  return `http://${host}:3001`;
+}
+
+const API_URL = resolveApiUrl();
+export { API_URL };
 
 /* ------------------------------------------------------------------ */
 /*  THEME – SAP GEL STYLE                                             */
@@ -241,16 +246,6 @@ function withHexAlpha(color, alpha) {
     return `#${r}${r}${g}${g}${b}${b}${a}`;
   }
   return raw;
-}
-
-function isWritableUserPlanPath(pathSegments, uid) {
-  return (
-    Array.isArray(pathSegments) &&
-    pathSegments.length >= 4 &&
-    pathSegments[0] === "users" &&
-    pathSegments[1] === uid &&
-    ["plans", "runPlans", "trainingPlans"].includes(pathSegments[2])
-  );
 }
 
 function isStrengthPlanDoc(data) {
@@ -778,167 +773,6 @@ function normaliseToSegments(session) {
   }
 
   return [];
-}
-
-function buildGarminDurationFromSegment(seg) {
-  if (!seg || typeof seg !== "object") return null;
-
-  const durationTypeRaw = String(seg.durationType || "").trim();
-  const durationType = durationTypeRaw.toLowerCase();
-  const rawValue = Number(seg.durationValue);
-  const hasNativeRunStepShape =
-    !!seg.stepType ||
-    !!seg.targetType ||
-    !!seg.targetValue ||
-    (seg.duration && typeof seg.duration === "object");
-
-  if (durationType === "time" && Number.isFinite(rawValue) && rawValue > 0) {
-    return {
-      durationType: "time",
-      durationUnit: "sec",
-      durationValue: Math.round(hasNativeRunStepShape ? rawValue : rawValue * 60),
-    };
-  }
-
-  if (durationType === "distance" && Number.isFinite(rawValue) && rawValue > 0) {
-    return {
-      durationType: "distance",
-      durationUnit: "m",
-      durationValue: Math.round(hasNativeRunStepShape ? rawValue : rawValue * 1000),
-    };
-  }
-
-  if (
-    durationTypeRaw === "Time (min)" &&
-    Number.isFinite(rawValue) &&
-    rawValue > 0
-  ) {
-    return {
-      durationType: "time",
-      durationUnit: "sec",
-      durationValue: Math.round(rawValue * 60),
-    };
-  }
-
-  if (
-    durationTypeRaw === "Distance (km)" &&
-    Number.isFinite(rawValue) &&
-    rawValue > 0
-  ) {
-    return {
-      durationType: "distance",
-      durationUnit: "m",
-      durationValue: Math.round(rawValue * 1000),
-    };
-  }
-
-  const restSec = Number(seg.restSec);
-  if (Number.isFinite(restSec) && restSec > 0) {
-    return {
-      durationType: "time",
-      durationUnit: "sec",
-      durationValue: Math.round(restSec),
-    };
-  }
-
-  const durationMin = Number(seg.durationMin);
-  if (Number.isFinite(durationMin) && durationMin > 0) {
-    return {
-      durationType: "time",
-      durationUnit: "sec",
-      durationValue: Math.round(durationMin * 60),
-    };
-  }
-
-  const distanceKm = Number(seg.distanceKm);
-  if (Number.isFinite(distanceKm) && distanceKm > 0) {
-    return {
-      durationType: "distance",
-      durationUnit: "m",
-      durationValue: Math.round(distanceKm * 1000),
-    };
-  }
-
-  return null;
-}
-
-function segmentToGarminStep(seg) {
-  if (!seg || typeof seg !== "object") return null;
-
-  if (isRepeatBlock(seg) && Array.isArray(seg.steps) && seg.steps.length) {
-    const innerSteps = seg.steps.map(segmentToGarminStep).filter(Boolean);
-    if (!innerSteps.length) return null;
-
-    return {
-      isRepeat: true,
-      repeatCount: getRepeatCount(seg),
-      steps: innerSteps,
-    };
-  }
-
-  const duration = buildGarminDurationFromSegment(seg);
-  if (!duration) return null;
-
-  const kind = classifySegment(seg);
-  const title = getSegmentTitle(seg);
-  const intensity = formatIntensity(seg);
-  const notes = [intensity, String(seg.notes || "").trim()].filter(Boolean).join(" · ");
-
-  return {
-    type: title || "Run",
-    stepType:
-      kind === "warmup"
-        ? "warmup"
-        : kind === "cooldown"
-        ? "cooldown"
-        : kind === "rest"
-        ? "recovery"
-        : "run",
-    notes,
-    ...duration,
-  };
-}
-
-function buildFallbackRunWorkout(session, segments, meta) {
-  const mappedSteps = (Array.isArray(segments) ? segments : [])
-    .map(segmentToGarminStep)
-    .filter(Boolean);
-
-  const totalDistanceKm = Number(
-    meta?.distanceKm ??
-      meta?.executableDistanceKm ??
-      meta?.renderedDistanceKm ??
-      meta?.budgetedDistanceKm ??
-      session?.targetDistanceKm ??
-      session?.distanceKm ??
-      session?.plannedDistanceKm ??
-      0
-  );
-
-  const durationMin = Number(
-    meta?.durationMin ??
-      session?.targetDurationMin ??
-      session?.durationMin ??
-      session?.totalDurationMin ??
-      0
-  );
-
-  if (!mappedSteps.length && !(Number.isFinite(totalDistanceKm) && totalDistanceKm > 0) && !(Number.isFinite(durationMin) && durationMin > 0)) {
-    return null;
-  }
-
-  return {
-    sport: "run",
-    totalDistanceKm:
-      Number.isFinite(totalDistanceKm) && totalDistanceKm > 0
-        ? Number(totalDistanceKm.toFixed(3))
-        : 0,
-    totalDurationSec:
-      Number.isFinite(durationMin) && durationMin > 0
-        ? Math.round(durationMin * 60)
-        : 0,
-    steps: mappedSteps,
-  };
 }
 
 function classifySegment(seg) {
@@ -1537,13 +1371,37 @@ function buildStrengthOverview(session, meta, weekFocus) {
   return lines;
 }
 
+function buildWatchPayload(session, encodedKey, meta, segments, planType) {
+  const sport =
+    session?.workout?.sport ||
+    (planType === "strength" ? "strength" : "run");
+
+  const totalDurationSec =
+    session?.workout?.totalDurationSec ||
+    (meta?.durationMin ? meta.durationMin * 60 : 0);
+
+  const totalDistanceKm =
+    session?.workout?.totalDistanceKm ||
+    meta?.distanceKm ||
+    0;
+
+  return {
+    sessionKey: encodedKey,
+    title: session?.title || session?.type || "Session",
+    workout: session?.workout || {
+      sport,
+      totalDurationSec,
+      totalDistanceKm,
+      steps: Array.isArray(session?.steps) && session.steps.length ? session.steps : segments,
+    },
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /*  HERO                                                              */
 /* ------------------------------------------------------------------ */
 
-function RunHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, theme }) {
-  const badges = Array.isArray(statusBadges) ? statusBadges.filter(Boolean) : [];
-
+function RunHero({ session, dayLabel, weekIndex, totalWeeks, logBadge, onBack, theme }) {
   return (
     <View style={{ height: 360 }}>
       <ImageBackground
@@ -1557,6 +1415,8 @@ function RunHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, theme
           end={{ x: 0, y: 1 }}
           style={{ flex: 1 }}
         >
+          <HeroTopBar onBack={onBack} />
+
           <View style={st.heroBottomContent}>
             <Text style={st.heroSmallLabel}>
               {dayLabel || "Session"}
@@ -1572,21 +1432,16 @@ function RunHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, theme
                 {session?.title || session?.type || "Session"}
               </Text>
 
-              {badges.map((badge) => (
+              {!!logBadge && (
                 <View
-                  key={`${badge.label}-${badge.tone || "good"}`}
                   style={[
                     st.statusPill,
-                    badge.tone === "bad"
-                      ? st.statusBad
-                      : badge.tone === "info"
-                      ? st.statusInfo
-                      : st.statusGood,
+                    logBadge.tone === "good" ? st.statusGood : st.statusBad,
                   ]}
                 >
-                  <Text style={st.statusPillText}>{badge.label}</Text>
+                  <Text style={st.statusPillText}>{logBadge.label}</Text>
                 </View>
-              ))}
+              )}
             </View>
 
             {(session?.sessionType || session?.type) && (
@@ -1609,9 +1464,7 @@ function RunHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, theme
   );
 }
 
-function StrengthHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, theme }) {
-  const badges = Array.isArray(statusBadges) ? statusBadges.filter(Boolean) : [];
-
+function StrengthHero({ session, dayLabel, weekIndex, totalWeeks, logBadge, onBack, theme }) {
   return (
     <View style={{ height: 320, backgroundColor: "#000000" }}>
       <LinearGradient
@@ -1621,6 +1474,8 @@ function StrengthHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, 
         style={{ flex: 1 }}
       >
         <View style={[st.heroStrengthOverlay, theme.isDark ? null : { backgroundColor: "rgba(0,0,0,0.18)" }]}>
+          <HeroTopBar onBack={onBack} />
+
           <View style={st.heroBottomContent}>
             <Text style={st.heroSmallLabel}>
               {dayLabel || "Session"}
@@ -1636,21 +1491,16 @@ function StrengthHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, 
                 {session?.title || session?.type || "Strength session"}
               </Text>
 
-              {badges.map((badge) => (
+              {!!logBadge && (
                 <View
-                  key={`${badge.label}-${badge.tone || "good"}`}
                   style={[
                     st.statusPill,
-                    badge.tone === "bad"
-                      ? st.statusBad
-                      : badge.tone === "info"
-                      ? st.statusInfo
-                      : st.statusGood,
+                    logBadge.tone === "good" ? st.statusGood : st.statusBad,
                   ]}
                 >
-                  <Text style={st.statusPillText}>{badge.label}</Text>
+                  <Text style={st.statusPillText}>{logBadge.label}</Text>
                 </View>
-              ))}
+              )}
             </View>
 
             <Text style={st.heroSubtitleText}>
@@ -1670,38 +1520,24 @@ function StrengthHero({ session, dayLabel, weekIndex, totalWeeks, statusBadges, 
   );
 }
 
-function SessionStickyHeader({ onBack, theme, insets }) {
+function HeroTopBar({ onBack }) {
   return (
-    <View pointerEvents="box-none" style={st.stickyHeaderWrap}>
-      <LinearGradient
-        pointerEvents="none"
-        colors={
-          theme.isDark
-            ? ["rgba(0,0,0,0.72)", "rgba(0,0,0,0.26)", "transparent"]
-            : ["rgba(15,23,42,0.28)", "rgba(15,23,42,0.08)", "transparent"]
-        }
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={st.stickyHeaderFade}
-      />
+    <View style={st.heroTopBar}>
+      <TouchableOpacity
+        onPress={onBack}
+        style={st.roundIconBtn}
+        activeOpacity={0.85}
+      >
+        <Feather name="chevron-left" size={20} color="#ffffff" />
+      </TouchableOpacity>
 
-      <View style={[st.stickyHeaderRow, { paddingTop: Math.max(insets.top, 12) + 6 }]}>
-        <TouchableOpacity
-          onPress={onBack}
-          style={st.roundIconBtn}
-          activeOpacity={0.85}
-        >
-          <Feather name="chevron-left" size={20} color="#ffffff" />
+      <View style={{ flexDirection: "row", gap: 10 }}>
+        <TouchableOpacity style={st.roundIconBtn} activeOpacity={0.85}>
+          <Feather name="heart" size={18} color="#ffffff" />
         </TouchableOpacity>
-
-        <View style={{ flexDirection: "row", gap: 10 }}>
-          <TouchableOpacity style={st.roundIconBtn} activeOpacity={0.85}>
-            <Feather name="heart" size={18} color="#ffffff" />
-          </TouchableOpacity>
-          <TouchableOpacity style={st.roundIconBtn} activeOpacity={0.85}>
-            <Feather name="maximize-2" size={18} color="#ffffff" />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity style={st.roundIconBtn} activeOpacity={0.85}>
+          <Feather name="maximize-2" size={18} color="#ffffff" />
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -1714,14 +1550,8 @@ function SessionStickyHeader({ onBack, theme, insets }) {
 export default function TrainSessionDetail() {
   const theme = useScreenTheme();
   const router = useRouter();
-  const {
-    sessionKey,
-    returnWeekIndex: returnWeekIndexParam,
-    returnDayIndex: returnDayIndexParam,
-    returnToken: returnTokenParam,
-  } = useLocalSearchParams();
+  const { sessionKey } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
-  const currentUid = auth.currentUser?.uid || null;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -1731,13 +1561,11 @@ export default function TrainSessionDetail() {
   const [dayLabel, setDayLabel] = useState("");
   const [weekIndex, setWeekIndex] = useState(null);
   const [weekFocus, setWeekFocus] = useState("");
+  const [sendingToWatch, setSendingToWatch] = useState(false);
   const [mode, setMode] = useState("outdoor");
   const [activeTab, setActiveTab] = useState("steps");
   const [moveSheetOpen, setMoveSheetOpen] = useState(false);
   const [movingSession, setMovingSession] = useState(false);
-  const [garminConnected, setGarminConnected] = useState(false);
-  const [sendingToWatch, setSendingToWatch] = useState(false);
-  const [statusActionLoading, setStatusActionLoading] = useState(false);
 
   const [logLoading, setLogLoading] = useState(true);
   const [sessionLog, setSessionLog] = useState(null);
@@ -1746,93 +1574,12 @@ export default function TrainSessionDetail() {
     () => (Array.isArray(sessionKey) ? sessionKey[0] : sessionKey),
     [sessionKey]
   );
-  const returnWeekIndex = useMemo(() => {
-    const raw = Array.isArray(returnWeekIndexParam) ? returnWeekIndexParam[0] : returnWeekIndexParam;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : null;
-  }, [returnWeekIndexParam]);
-  const returnDayIndex = useMemo(() => {
-    const raw = Array.isArray(returnDayIndexParam) ? returnDayIndexParam[0] : returnDayIndexParam;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) && parsed >= 0 && parsed < DAY_ORDER.length
-      ? Math.round(parsed)
-      : null;
-  }, [returnDayIndexParam]);
-  const hasExplicitTrainReturn = useMemo(
-    () =>
-      String(Array.isArray(returnTokenParam) ? returnTokenParam[0] : returnTokenParam || "").trim().length > 0 &&
-      returnWeekIndex != null &&
-      returnDayIndex != null,
-    [returnDayIndex, returnTokenParam, returnWeekIndex]
-  );
   const decodedKey = useMemo(() => decodeSessionKey(encodedKey), [encodedKey]);
-  const fallbackReturnWeekIndex = Number.isFinite(Number(decodedKey?.weekIndex))
-    ? Math.max(0, Math.round(Number(decodedKey.weekIndex)))
-    : null;
-  const fallbackReturnDayIndex = Number.isFinite(Number(decodedKey?.dayIndex))
-    ? Math.max(0, Math.round(Number(decodedKey.dayIndex)))
-    : null;
-  const goBackToPreviousScreen = useCallback(() => {
-    if (hasExplicitTrainReturn) {
-      router.replace({
-        pathname: "/train",
-        params: {
-          returnWeekIndex: String(returnWeekIndex),
-          returnDayIndex: String(returnDayIndex),
-          returnToken: String(Date.now()),
-        },
-      });
-      return;
-    }
-    if (typeof router.canGoBack === "function" && router.canGoBack()) {
-      router.back();
-      return;
-    }
-    router.replace({
-      pathname: "/train",
-      params:
-        fallbackReturnWeekIndex != null && fallbackReturnDayIndex != null
-          ? {
-              returnWeekIndex: String(fallbackReturnWeekIndex),
-              returnDayIndex: String(fallbackReturnDayIndex),
-              returnToken: String(Date.now()),
-            }
-          : {},
-    });
-  }, [
-    fallbackReturnDayIndex,
-    fallbackReturnWeekIndex,
-    hasExplicitTrainReturn,
-    returnDayIndex,
-    returnWeekIndex,
-    router,
-  ]);
 
   useEffect(() => {
     setMoveSheetOpen(false);
     setMovingSession(false);
-    setSendingToWatch(false);
   }, [encodedKey]);
-
-  useEffect(() => {
-    if (!currentUid) {
-      setGarminConnected(false);
-      return;
-    }
-
-    const unsub = onSnapshot(
-      doc(db, "users", currentUid),
-      (snap) => {
-        const garmin = snap.exists() ? snap.data()?.integrations?.garmin : null;
-        setGarminConnected(!!garmin?.connected);
-      },
-      () => {
-        setGarminConnected(false);
-      }
-    );
-
-    return () => unsub();
-  }, [currentUid]);
 
   useEffect(() => {
     (async () => {
@@ -1840,13 +1587,13 @@ export default function TrainSessionDetail() {
         setError("");
         setLoading(true);
 
-        if (!encodedKey) {
+        if (!sessionKey) {
           setError("Invalid session link.");
           setLoading(false);
           return;
         }
 
-        const { planId, weekIndex, dayIndex, sessionIndex } = decodeSessionKey(encodedKey);
+        const { planId, weekIndex, dayIndex, sessionIndex } = decodeSessionKey(sessionKey);
 
         if (!planId) {
           setError("Invalid session link.");
@@ -1854,20 +1601,39 @@ export default function TrainSessionDetail() {
           return;
         }
 
-        if (!currentUid) {
+        const uid = auth.currentUser?.uid;
+        if (!uid) {
           setError("Not signed in.");
           setLoading(false);
           return;
         }
 
-        const planDoc = await fetchTrainPlanById(currentUid, planId);
-        if (!planDoc) {
+        const candidates = [
+          doc(db, "users", uid, "plans", planId),
+          doc(db, "users", uid, "runPlans", planId),
+          doc(db, "plans", planId),
+          doc(db, "runPlans", planId),
+        ];
+
+        let snap = null;
+        let data = null;
+
+        for (const ref of candidates) {
+          const s = await getDoc(ref);
+          if (s.exists()) {
+            snap = s;
+            data = s.data() || {};
+            break;
+          }
+        }
+
+        if (!snap || !data) {
           setError("Plan not found.");
           setLoading(false);
           return;
         }
 
-        const { weeks, primaryActivity } = unwrapPlanDoc(planDoc);
+        const { weeks, primaryActivity } = unwrapPlanDoc(data);
         const normalisedWeeks = (Array.isArray(weeks) ? weeks : []).map((w, i) =>
           normaliseWeekForLookup(w, i + 1)
         );
@@ -1887,12 +1653,12 @@ export default function TrainSessionDetail() {
           return;
         }
 
-        const detectedPlanType = classifyPlanType(planDoc, sess);
+        const detectedPlanType = classifyPlanType(data, sess);
 
         setPlan({
-          ...planDoc,
-          id: planDoc.id || planId,
-          primaryActivity: primaryActivity || planDoc?.primaryActivity,
+          id: snap.id,
+          ...data,
+          primaryActivity: primaryActivity || data?.primaryActivity,
           weeks: normalisedWeeks,
         });
         setSession(sess);
@@ -1913,32 +1679,29 @@ export default function TrainSessionDetail() {
         setLoading(false);
       }
     })();
-  }, [currentUid, encodedKey]);
+  }, [sessionKey]);
 
-  const loadSessionLog = useCallback(async () => {
-    try {
-      if (!currentUid || !encodedKey) {
+  useEffect(() => {
+    (async () => {
+      try {
+        const uid = auth.currentUser?.uid;
+        if (!uid || !encodedKey) {
+          setSessionLog(null);
+          setLogLoading(false);
+          return;
+        }
+
+        setLogLoading(true);
+        const snap = await getDoc(doc(db, "users", uid, "sessionLogs", encodedKey));
+        setSessionLog(snap.exists() ? snap.data() : null);
+      } catch (e) {
+        console.log("[session] load log error:", e);
         setSessionLog(null);
+      } finally {
         setLogLoading(false);
-        return;
       }
-
-      setLogLoading(true);
-      const snap = await getDoc(doc(db, "users", currentUid, "sessionLogs", encodedKey));
-      setSessionLog(snap.exists() ? snap.data() : null);
-    } catch (e) {
-      console.log("[session] load log error:", e);
-      setSessionLog(null);
-    } finally {
-      setLogLoading(false);
-    }
-  }, [currentUid, encodedKey]);
-
-  useFocusEffect(
-    useCallback(() => {
-      loadSessionLog();
-    }, [loadSessionLog])
-  );
+    })();
+  }, [encodedKey]);
 
   const segments = useMemo(() => normaliseToSegments(session), [session]);
 
@@ -2134,14 +1897,6 @@ export default function TrainSessionDetail() {
     };
   }, [session, segments, plan, isStrengthSession]);
 
-  const sendableRunWorkout = useMemo(() => {
-    if (isStrengthSession || !session) return null;
-    if (session?.workout && typeof session.workout === "object") {
-      return session.workout;
-    }
-    return buildFallbackRunWorkout(session, segments, meta);
-  }, [isStrengthSession, meta, segments, session]);
-
   const description = useMemo(() => {
     if (!session || typeof session !== "object") return "";
     return (
@@ -2193,386 +1948,6 @@ export default function TrainSessionDetail() {
     if (status === "skipped") return { label: "SKIPPED", tone: "bad" };
     return null;
   }, [sessionLog]);
-
-  const garminSync = useMemo(
-    () =>
-      sessionLog?.garminSync && typeof sessionLog.garminSync === "object"
-        ? sessionLog.garminSync
-        : null,
-    [sessionLog?.garminSync]
-  );
-  const garminSyncStatus = useMemo(
-    () => String(garminSync?.status || "").trim().toLowerCase(),
-    [garminSync?.status]
-  );
-  const isGarminSynced = garminSyncStatus === "sent";
-  const garminWorkoutId = useMemo(() => {
-    const value = String(garminSync?.workoutId || "").trim();
-    return value || null;
-  }, [garminSync?.workoutId]);
-  const heroBadges = useMemo(() => {
-    const out = [];
-    if (logBadge) out.push(logBadge);
-    if (isRunSession && isGarminSynced) {
-      out.push({ label: "SENT TO WATCH", tone: "info" });
-    }
-    return out;
-  }, [isGarminSynced, isRunSession, logBadge]);
-  const garminSyncSummary = useMemo(() => {
-    if (!isRunSession || !isGarminSynced) return null;
-
-    return {
-      title: "Sent to watch",
-      body:
-        "This workout is linked to this planned session and is ready inside Garmin Connect for device sync.",
-      meta: garminWorkoutId ? `Workout ID ${garminWorkoutId}` : null,
-    };
-  }, [garminWorkoutId, isGarminSynced, isRunSession]);
-
-  const sessionStatus = useMemo(
-    () => String(sessionLog?.status || "").trim().toLowerCase(),
-    [sessionLog?.status]
-  );
-  const isSkippedSession = sessionStatus === "skipped";
-  const isCompletedSession = sessionStatus === "completed";
-
-  const savedTrainSessionId = useMemo(() => {
-    const value = String(sessionLog?.lastTrainSessionId || "").trim();
-    return value || null;
-  }, [sessionLog?.lastTrainSessionId]);
-
-  const canMoveSession = useMemo(
-    () => isWritableUserPlanPath(plan?.__path, currentUid),
-    [currentUid, plan?.__path]
-  );
-
-  const openSavedSession = useCallback(() => {
-    if (savedTrainSessionId) {
-      router.push(`/train/history/${savedTrainSessionId}`);
-      return;
-    }
-    router.push("/train/history");
-  }, [router, savedTrainSessionId]);
-
-  const handleMarkSessionSkipped = useCallback(async () => {
-    try {
-      if (!encodedKey) {
-        Alert.alert("Invalid session", "Missing session key.");
-        return;
-      }
-      if (!currentUid) {
-        Alert.alert("Not signed in", "Please sign in and try again.");
-        return;
-      }
-      if (isSkippedSession) return;
-
-      setStatusActionLoading(true);
-
-      const { planId, weekIndex, dayIndex, sessionIndex } = decodeSessionKey(encodedKey);
-      const sessionLogRef = doc(db, "users", currentUid, "sessionLogs", encodedKey);
-      const existingLogSnap = await getDoc(sessionLogRef);
-      const existingLog = existingLogSnap.exists() ? existingLogSnap.data() || {} : null;
-      const resolvedTrainSessionId =
-        String(savedTrainSessionId || existingLog?.lastTrainSessionId || "").trim() || null;
-
-      let trainSessionRef = resolvedTrainSessionId
-        ? doc(db, "users", currentUid, "trainSessions", resolvedTrainSessionId)
-        : doc(collection(db, "users", currentUid, "trainSessions"));
-
-      let hasExistingTrainSession = false;
-      if (resolvedTrainSessionId) {
-        const trainSessionSnap = await getDoc(trainSessionRef);
-        hasExistingTrainSession = trainSessionSnap.exists();
-        if (!hasExistingTrainSession) {
-          trainSessionRef = doc(collection(db, "users", currentUid, "trainSessions"));
-        }
-      }
-
-      const plannedRecord = await loadPlannedSessionRecord(currentUid, encodedKey);
-      if (!plannedRecord?.planDoc || !plannedRecord?.session) {
-        Alert.alert("Skip failed", "Could not find the planned session.");
-        return;
-      }
-
-      const existingNotes = String(existingLog?.notes || "").trim();
-      const plannedPayload = buildPlannedTrainSessionPayload({
-        encodedKey,
-        planDoc: plannedRecord.planDoc,
-        session: plannedRecord.session,
-        dayLabel: plannedRecord.dayLabel,
-        status: "skipped",
-        notes: existingNotes,
-        source: "manual_log",
-      });
-
-      const trainSessionPayload = {
-        ...stripNilValues(plannedPayload),
-        notes: existingNotes || null,
-      };
-      if (hasExistingTrainSession) {
-        delete trainSessionPayload.source;
-      }
-
-      const statusFieldsForTrainSession = hasExistingTrainSession
-        ? {
-            updatedAt: serverTimestamp(),
-            skippedAt: serverTimestamp(),
-            completedAt: deleteField(),
-          }
-        : {
-            createdAt: serverTimestamp(),
-            skippedAt: serverTimestamp(),
-          };
-
-      const sessionDate =
-        plannedPayload?.date || existingLog?.date || new Date().toLocaleDateString("sv-SE");
-
-      const sessionLogPayload = {
-        sessionKey: encodedKey,
-        planId: planId || null,
-        weekIndex,
-        dayIndex,
-        sessionIndex,
-        date: sessionDate,
-        status: "skipped",
-        source: "manual_log",
-        notes: existingNotes || null,
-        lastTrainSessionId: trainSessionRef.id,
-        updatedAt: serverTimestamp(),
-        statusAt: serverTimestamp(),
-        skippedAt: serverTimestamp(),
-        completedAt: deleteField(),
-      };
-
-      if (!existingLogSnap.exists()) {
-        sessionLogPayload.createdAt = serverTimestamp();
-      }
-
-      const batch = writeBatch(db);
-      batch.set(
-        trainSessionRef,
-        {
-          ...trainSessionPayload,
-          ...statusFieldsForTrainSession,
-          status: "skipped",
-        },
-        { merge: hasExistingTrainSession }
-      );
-      batch.set(sessionLogRef, sessionLogPayload, { merge: true });
-      await batch.commit();
-
-      await loadSessionLog();
-    } catch (e) {
-      Alert.alert("Couldn't skip session", e?.message || "Try again.");
-    } finally {
-      setStatusActionLoading(false);
-    }
-  }, [currentUid, encodedKey, isSkippedSession, loadSessionLog, savedTrainSessionId]);
-
-  const handleUndoSkip = useCallback(async () => {
-    try {
-      if (!encodedKey) {
-        Alert.alert("Invalid session", "Missing session key.");
-        return;
-      }
-      if (!currentUid) {
-        Alert.alert("Not signed in", "Please sign in and try again.");
-        return;
-      }
-      if (!isSkippedSession) return;
-
-      setStatusActionLoading(true);
-
-      const sessionLogRef = doc(db, "users", currentUid, "sessionLogs", encodedKey);
-      const batch = writeBatch(db);
-
-      batch.set(
-        sessionLogRef,
-        {
-          status: deleteField(),
-          statusAt: serverTimestamp(),
-          skippedAt: deleteField(),
-          completedAt: deleteField(),
-          lastTrainSessionId: deleteField(),
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-
-      if (savedTrainSessionId) {
-        batch.delete(doc(db, "users", currentUid, "trainSessions", savedTrainSessionId));
-      }
-
-      await batch.commit();
-      await loadSessionLog();
-    } catch (e) {
-      Alert.alert("Couldn't undo skip", e?.message || "Try again.");
-    } finally {
-      setStatusActionLoading(false);
-    }
-  }, [currentUid, encodedKey, isSkippedSession, loadSessionLog, savedTrainSessionId]);
-
-  const openStravaLinkFlow = useCallback(() => {
-    if (!encodedKey) return;
-
-    const sessionTitle = String(session?.title || session?.name || "").trim();
-
-    router.push({
-      pathname: "/history",
-      params: {
-        ...(savedTrainSessionId
-          ? { linkTrainSessionId: String(savedTrainSessionId) }
-          : { linkSessionKey: String(encodedKey) }),
-        ...(sessionTitle ? { linkSessionTitle: sessionTitle } : {}),
-      },
-    });
-  }, [encodedKey, router, savedTrainSessionId, session?.name, session?.title]);
-
-  const handleSendToWatch = useCallback(async () => {
-    try {
-      if (!isRunSession) return;
-      const user = auth.currentUser;
-      const uid = user?.uid;
-      if (!uid) throw new Error("Please sign in again.");
-      if (!garminConnected) {
-        Alert.alert("Garmin not connected", "Connect Garmin in Settings first.");
-        return;
-      }
-      if (!API_URL) {
-        throw new Error("API URL is missing for this build.");
-      }
-
-      const workout = sendableRunWorkout;
-      if (!workout || typeof workout !== "object") {
-        throw new Error("This run does not have workout data to send yet.");
-      }
-
-      setSendingToWatch(true);
-      const idToken = await user.getIdToken();
-      const payload = {
-        userId: uid,
-        sessionKey: encodedKey,
-        trainSessionId: savedTrainSessionId || null,
-        garminWorkoutId: garminWorkoutId || null,
-        title: String(session?.title || session?.name || "Workout").trim(),
-        workout,
-      };
-
-      const res = await fetch(`${API_URL}/garmin/send-workout`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const result = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const detailText =
-          typeof result?.details === "string"
-            ? result.details
-            : result?.details && typeof result.details === "object"
-            ? JSON.stringify(result.details)
-            : "";
-        throw new Error(
-          [result?.error || result?.message || "Failed to send workout", detailText]
-            .filter(Boolean)
-            .join(" · ")
-        );
-      }
-
-      if (result?.synced) {
-        setSessionLog((prev) => ({
-          ...(prev || {}),
-          sessionKey: encodedKey,
-          garminSync: {
-            ...(prev?.garminSync || {}),
-            provider: "garmin",
-            source: "training_api",
-            status: "sent",
-            workoutId:
-              result?.createdWorkoutId != null
-                ? result.createdWorkoutId
-                : prev?.garminSync?.workoutId || null,
-            syncedAt: new Date().toISOString(),
-          },
-        }));
-        await loadSessionLog();
-        Alert.alert(
-          result?.alreadySynced ? "Already sent" : "Sent",
-          result?.message ||
-            (result?.alreadySynced
-              ? "Workout already sent to your watch."
-              : "Workout sent to your watch.")
-        );
-      } else {
-        Alert.alert(
-          "Garmin connected",
-          result?.message ||
-            "Workout was prepared, but direct Garmin upload is not configured yet."
-        );
-      }
-    } catch (e) {
-      Alert.alert("Couldn’t send to watch", e?.message || "Try again.");
-    } finally {
-      setSendingToWatch(false);
-    }
-  }, [
-    encodedKey,
-    garminConnected,
-    garminWorkoutId,
-    isRunSession,
-    loadSessionLog,
-    savedTrainSessionId,
-    session?.name,
-    session?.title,
-    sendableRunWorkout,
-  ]);
-
-  const openMoveSessionSheet = useCallback(() => {
-    if (!canMoveSession) {
-      Alert.alert(
-        "Can't move session",
-        "Only sessions from your editable plan can be moved right now."
-      );
-      return;
-    }
-    setMoveSheetOpen(true);
-  }, [canMoveSession]);
-
-  const statusSummary = useMemo(() => {
-    const status = String(sessionLog?.status || "").toLowerCase();
-    if (!status) return null;
-
-    const title = status === "skipped" ? "Session skipped" : "Session completed";
-    const body =
-      status === "skipped"
-        ? "This session is marked as skipped. You can undo that, move it to another day, or still complete it from here."
-        : savedTrainSessionId
-        ? "This planned session has been completed and linked to your history."
-        : "This planned session has been completed and saved.";
-
-    const note = String(sessionLog?.notes || "").trim();
-
-    return {
-      title,
-      body,
-      note: note || null,
-      actionLabel:
-        status === "skipped"
-          ? statusActionLoading
-            ? "Updating..."
-            : "Undo skip"
-          : savedTrainSessionId
-          ? "View saved session"
-          : "Open history",
-      actionKind: status === "skipped" ? "undo" : "history",
-      secondaryActionLabel:
-        status === "skipped" && canMoveSession ? "Move day" : null,
-      tone: status === "skipped" ? "bad" : "good",
-    };
-  }, [canMoveSession, savedTrainSessionId, sessionLog, statusActionLoading]);
 
   const chips = useMemo(() => {
     const arr = [];
@@ -2655,111 +2030,70 @@ export default function TrainSessionDetail() {
           onPress: () => setActiveTab("steps"),
         },
         {
-          key: "about",
-          icon: "file-text",
-          label: "SESSION\nOVERVIEW",
-          onPress: () => setActiveTab("about"),
-        },
-        {
           key: "move",
           icon: "calendar",
           label: "MOVE\nDAY",
-          onPress: openMoveSessionSheet,
+          onPress: () => setMoveSheetOpen(true),
         },
         {
-          key: isSkippedSession ? "undo-skip" : "saved",
-          icon: isSkippedSession ? "rotate-ccw" : savedTrainSessionId ? "arrow-up-right" : "clock",
-          label: isSkippedSession
-            ? statusActionLoading
-              ? "UPDATING\nSTATUS"
-              : "UNDO\nSKIP"
-            : savedTrainSessionId
-            ? "VIEW\nSAVED"
-            : "VIEW\nHISTORY",
-          onPress: isSkippedSession ? handleUndoSkip : openSavedSession,
+          key: "link",
+          icon: "link",
+          label: "LINK\nACTIVITY",
+          onPress: () => {
+            router.push(`/train/session/${encodeURIComponent(encodedKey)}/link-activity`);
+          },
+        },
+        {
+          key: "skip",
+          icon: "skip-forward",
+          label: "SKIP\nWORKOUT",
+          onPress: () => {
+            router.push(
+              `/train/session/${encodeURIComponent(encodedKey)}/log-strength?status=skipped`
+            );
+          },
         },
       ];
     }
 
     return [
       {
-        key: garminConnected ? "watch" : "about",
-        icon: garminConnected
-          ? isGarminSynced && !sendingToWatch
-            ? "check-circle"
-            : "watch"
-          : "activity",
-        label: garminConnected
-          ? sendingToWatch
-            ? "SENDING\nWATCH"
-            : isGarminSynced
-            ? "SENT\nWATCH"
-            : "SEND\nWATCH"
-          : "SESSION\nOVERVIEW",
-        onPress: garminConnected ? handleSendToWatch : () => setActiveTab("about"),
+        key: "warmup",
+        icon: "activity",
+        label: "WARM-UP\nSTRETCHES",
+        onPress: () => setActiveTab("about"),
       },
       {
         key: "move",
         icon: "calendar",
         label: "MOVE\nDAY",
-        onPress: openMoveSessionSheet,
+        onPress: () => setMoveSheetOpen(true),
       },
       {
-        key: isSkippedSession ? "undo-skip" : savedTrainSessionId ? "saved" : "link",
-        icon: isSkippedSession ? "rotate-ccw" : savedTrainSessionId ? "arrow-up-right" : "link",
-        label: isSkippedSession
-          ? statusActionLoading
-            ? "UPDATING\nSTATUS"
-            : "UNDO\nSKIP"
-          : savedTrainSessionId
-          ? "VIEW\nSAVED"
-          : "LINK\nSTRAVA",
-        onPress: isSkippedSession
-          ? handleUndoSkip
-          : savedTrainSessionId
-          ? openSavedSession
-          : openStravaLinkFlow,
+        key: "link",
+        icon: "link",
+        label: "LINK\nACTIVITY",
+        onPress: () => {
+          router.push(`/train/session/${encodeURIComponent(encodedKey)}/link-activity`);
+        },
       },
       {
-        key: isSkippedSession ? "complete" : "skip",
-        icon: isSkippedSession ? "play-circle" : "skip-forward",
-        label: isSkippedSession ? "COMPLETE\nNOW" : "SKIP\nWORKOUT",
-        onPress: isSkippedSession
-          ? () => router.push(`/train/session/${encodeURIComponent(encodedKey)}/live`)
-          : handleMarkSessionSkipped,
+        key: "skip",
+        icon: "skip-forward",
+        label: "SKIP\nWORKOUT",
+        onPress: () => {
+          router.push(`/train/session/${encodeURIComponent(encodedKey)}/complete?status=skipped`);
+        },
       },
     ];
-  }, [
-    encodedKey,
-    garminConnected,
-    handleMarkSessionSkipped,
-    handleSendToWatch,
-    handleUndoSkip,
-    isGarminSynced,
-    isStrengthSession,
-    isSkippedSession,
-    openMoveSessionSheet,
-    openSavedSession,
-    openStravaLinkFlow,
-    router,
-    savedTrainSessionId,
-    sendingToWatch,
-    statusActionLoading,
-  ]);
+  }, [isStrengthSession, router, encodedKey]);
 
   const handleMoveSessionToDay = async (targetDayRaw) => {
     if (!session || !plan?.id || !encodedKey) return;
 
-    if (!currentUid) {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
       Alert.alert("Not signed in", "Please sign in and try again.");
-      return;
-    }
-
-    if (!canMoveSession || !Array.isArray(plan?.__path)) {
-      Alert.alert(
-        "Can't move session",
-        "Only sessions from your editable plan can be moved right now."
-      );
       return;
     }
 
@@ -2813,66 +2147,16 @@ export default function TrainSessionDetail() {
       let movedSession = sourceSessions[sourceSessionIndex];
 
       if (!movedSession) {
-        const expectedId = String(
-          session?.id ||
-            session?.sessionId ||
-            session?.uid ||
-            session?.__id ||
-            ""
-        )
-          .trim()
-          .toLowerCase();
-
-        const idMatchIdx = expectedId
-          ? sourceSessions.findIndex((s) => {
-              const sourceId = String(
-                s?.id || s?.sessionId || s?.uid || s?.__id || ""
-              )
-                .trim()
-                .toLowerCase();
-              return !!sourceId && sourceId === expectedId;
-            })
-          : -1;
-
-        if (idMatchIdx >= 0) {
-          sourceSessionIndex = idMatchIdx;
-          movedSession = sourceSessions[idMatchIdx];
-        }
-      }
-
-      if (!movedSession) {
-        const expectedTitle = String(session?.title || session?.name || "")
-          .trim()
-          .toLowerCase();
-        const expectedType = String(session?.sessionType || session?.type || "")
-          .trim()
-          .toLowerCase();
-
-        const matchingIndexes = sourceSessions.reduce((acc, s, idx) => {
-          const sourceTitle = String(s?.title || s?.name || "")
-            .trim()
-            .toLowerCase();
-          const sourceType = String(s?.sessionType || s?.type || "")
-            .trim()
-            .toLowerCase();
-          if (
-            expectedTitle &&
-            sourceTitle === expectedTitle &&
-            sourceType === expectedType
-          ) {
-            acc.push(idx);
-          }
-          return acc;
-        }, []);
-
-        if (matchingIndexes.length === 1) {
-          const fallbackIdx = matchingIndexes[0];
+        const fallbackIdx = sourceSessions.findIndex((s) => {
+          const a = String(s?.title || s?.name || "").trim().toLowerCase();
+          const b = String(session?.title || session?.name || "").trim().toLowerCase();
+          const ta = String(s?.sessionType || s?.type || "").trim().toLowerCase();
+          const tb = String(session?.sessionType || session?.type || "").trim().toLowerCase();
+          return a && b && a === b && ta === tb;
+        });
+        if (fallbackIdx >= 0) {
           sourceSessionIndex = fallbackIdx;
           movedSession = sourceSessions[fallbackIdx];
-        } else if (matchingIndexes.length > 1) {
-          throw new Error(
-            "Session match is ambiguous for this day. Open the exact session card again and retry."
-          );
         }
       }
 
@@ -2911,7 +2195,7 @@ export default function TrainSessionDetail() {
         ),
       };
 
-      const planRef = doc(db, ...plan.__path);
+      const planRef = doc(db, "users", uid, "plans", planId);
       const payload = {
         weeks,
         updatedAt: serverTimestamp(),
@@ -2931,14 +2215,14 @@ export default function TrainSessionDetail() {
       );
 
       if (newSessionKey !== oldSessionKey) {
-        const oldLogRef = doc(db, "users", currentUid, "sessionLogs", oldSessionKey);
+        const oldLogRef = doc(db, "users", uid, "sessionLogs", oldSessionKey);
         const oldLogSnap = await getDoc(oldLogRef);
 
         if (oldLogSnap.exists()) {
           const oldLogData = oldLogSnap.data() || {};
 
           await setDoc(
-            doc(db, "users", currentUid, "sessionLogs", newSessionKey),
+            doc(db, "users", uid, "sessionLogs", newSessionKey),
             {
               ...oldLogData,
               sessionKey: newSessionKey,
@@ -2966,7 +2250,7 @@ export default function TrainSessionDetail() {
       }
 
       await setDoc(
-        doc(db, "users", currentUid, "uiState", "train"),
+        doc(db, "users", uid, "uiState", "train"),
         {
           lastSessionMove: {
             planId,
@@ -2988,6 +2272,34 @@ export default function TrainSessionDetail() {
       Alert.alert("Couldn't move session", e?.message || "Try again.");
     } finally {
       setMovingSession(false);
+    }
+  };
+
+  const handleSendToWatch = async () => {
+    if (!session) return;
+    if (isStrengthSession) return;
+    try {
+      setSendingToWatch(true);
+      const uid = auth.currentUser?.uid;
+      if (!uid) throw new Error("No user");
+
+      const payload = {
+        userId: uid,
+        ...buildWatchPayload(session, encodedKey, meta, displayedSegments, planType),
+      };
+
+      const res = await fetch(`${API_URL}/garmin/send-workout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error("Failed to send workout");
+      console.log("[session] Workout sent to watch");
+    } catch (e) {
+      console.log("[session] send to watch error:", e);
+    } finally {
+      setSendingToWatch(false);
     }
   };
 
@@ -3013,7 +2325,8 @@ export default function TrainSessionDetail() {
             dayLabel={dayLabel}
             weekIndex={weekIndex}
             totalWeeks={totalWeeks}
-            statusBadges={!logLoading ? heroBadges : null}
+            logBadge={!logLoading ? logBadge : null}
+            onBack={() => router.back()}
             theme={theme}
           />
         ) : (
@@ -3022,7 +2335,8 @@ export default function TrainSessionDetail() {
             dayLabel={dayLabel}
             weekIndex={weekIndex}
             totalWeeks={totalWeeks}
-            statusBadges={!logLoading ? heroBadges : null}
+            logBadge={!logLoading ? logBadge : null}
+            onBack={() => router.back()}
             theme={theme}
           />
         )}
@@ -3099,130 +2413,6 @@ export default function TrainSessionDetail() {
               ))}
             </View>
           )}
-
-          {!logLoading && statusSummary ? (
-            <View
-              style={[
-                st.statusSummaryCard,
-                {
-                  borderColor:
-                    statusSummary.tone === "good"
-                      ? withHexAlpha(theme.primaryBorder, theme.isDark ? "A3" : "7A")
-                      : withHexAlpha("#F87171", theme.isDark ? "A3" : "70"),
-                  backgroundColor: withHexAlpha(theme.card, theme.isDark ? "D4" : "F2"),
-                },
-              ]}
-            >
-              <View style={st.statusSummaryTopRow}>
-                <View
-                  style={[
-                    st.statusSummaryIconWrap,
-                    {
-                      backgroundColor:
-                        statusSummary.tone === "good"
-                          ? withHexAlpha(theme.primaryBg, theme.isDark ? "22" : "2E")
-                          : "rgba(248,113,113,0.16)",
-                    },
-                  ]}
-                >
-                  <Feather
-                    name={statusSummary.tone === "good" ? "check-circle" : "skip-forward"}
-                    size={18}
-                    color={statusSummary.tone === "good" ? theme.primaryBg : "#F87171"}
-                  />
-                </View>
-
-                <View style={{ flex: 1 }}>
-                  <Text style={[st.statusSummaryEyebrow, { color: theme.subtext }]}>
-                    Planned session status
-                  </Text>
-                  <Text style={[st.statusSummaryTitle, { color: theme.text }]}>
-                    {statusSummary.title}
-                  </Text>
-                  <Text style={[st.statusSummaryBody, { color: theme.subtext }]}>
-                    {statusSummary.body}
-                  </Text>
-                  {statusSummary.note ? (
-                    <Text style={[st.statusSummaryNote, { color: theme.text }]}>
-                      Notes: {statusSummary.note}
-                    </Text>
-                  ) : null}
-                </View>
-              </View>
-
-              <View style={st.statusSummaryActionsRow}>
-                <TouchableOpacity
-                  onPress={
-                    statusSummary.actionKind === "undo" ? handleUndoSkip : openSavedSession
-                  }
-                  disabled={statusActionLoading}
-                  style={[st.statusSummaryAction, { borderColor: theme.border }]}
-                  activeOpacity={0.85}
-                >
-                  <Text style={[st.statusSummaryActionText, { color: theme.text }]}>
-                    {statusSummary.actionLabel}
-                  </Text>
-                  <Feather
-                    name={statusSummary.actionKind === "undo" ? "rotate-ccw" : "arrow-up-right"}
-                    size={14}
-                    color={theme.text}
-                  />
-                </TouchableOpacity>
-
-                {statusSummary.secondaryActionLabel ? (
-                  <TouchableOpacity
-                    onPress={openMoveSessionSheet}
-                    disabled={statusActionLoading || movingSession}
-                    style={[st.statusSummaryAction, { borderColor: theme.border }]}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={[st.statusSummaryActionText, { color: theme.text }]}>
-                      {statusSummary.secondaryActionLabel}
-                    </Text>
-                    <Feather name="calendar" size={14} color={theme.text} />
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            </View>
-          ) : null}
-
-          {!logLoading && garminSyncSummary ? (
-            <View
-              style={[
-                st.garminSyncCard,
-                {
-                  backgroundColor: withHexAlpha(theme.primaryBg, theme.isDark ? "16" : "1F"),
-                  borderColor: withHexAlpha(theme.primaryBg, theme.isDark ? "4A" : "59"),
-                },
-              ]}
-            >
-              <View style={st.garminSyncTopRow}>
-                <View
-                  style={[
-                    st.garminSyncIconWrap,
-                    { backgroundColor: withHexAlpha(theme.primaryBg, theme.isDark ? "24" : "2E") },
-                  ]}
-                >
-                  <Feather name="watch" size={17} color={theme.primaryBg} />
-                </View>
-
-                <View style={{ flex: 1 }}>
-                  <Text style={[st.garminSyncEyebrow, { color: theme.subtext }]}>Garmin</Text>
-                  <Text style={[st.garminSyncTitle, { color: theme.text }]}>
-                    {garminSyncSummary.title}
-                  </Text>
-                  <Text style={[st.garminSyncBody, { color: theme.subtext }]}>
-                    {garminSyncSummary.body}
-                  </Text>
-                  {garminSyncSummary.meta ? (
-                    <Text style={[st.garminSyncMeta, { color: theme.text }]}>
-                      {garminSyncSummary.meta}
-                    </Text>
-                  ) : null}
-                </View>
-              </View>
-            </View>
-          ) : null}
 
           {loading ? (
             <View style={{ paddingVertical: 24, alignItems: "center" }}>
@@ -3889,6 +3079,7 @@ export default function TrainSessionDetail() {
                           const extraChips = buildExtraMetricChips(seg);
                           const segTitle = getSegmentTitle(seg);
                           const detailLine = [durLabel, intenLabel].filter(Boolean).join(" · ");
+                          const leadWithTitle = hasStrengthPrescription(seg);
                           const useRunTitle =
                             !isStrengthSession &&
                             !!segTitle &&
@@ -4122,8 +3313,6 @@ export default function TrainSessionDetail() {
         </View>
       </ScrollView>
 
-      <SessionStickyHeader onBack={goBackToPreviousScreen} theme={theme} insets={insets} />
-
       <Modal
         visible={moveSheetOpen}
         transparent
@@ -4213,41 +3402,32 @@ export default function TrainSessionDetail() {
                 >
                   <Feather name="check-circle" size={18} color={theme.primaryText} />
                   <Text style={st.bottomPrimaryText}>
-                    {isSkippedSession ? "Log Session" : isCompletedSession ? "Edit Log" : "Log Session"}
+                    {sessionLog?.status ? "Edit Log" : "Log Session"}
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  onPress={isSkippedSession ? openMoveSessionSheet : () =>
+                  onPress={() =>
                     router.push(`/train/session/${encodeURIComponent(encodedKey)}/link-activity`)
                   }
                   style={[st.bottomSecondaryBtn, { borderColor: theme.border }]}
                   activeOpacity={0.85}
                 >
-                  <Feather
-                    name={isSkippedSession ? "calendar" : "link"}
-                    size={16}
-                    color={theme.text}
-                  />
-                  <Text style={[st.bottomSecondaryText, { color: theme.text }]}>
-                    {isSkippedSession ? "Move" : "Link"}
-                  </Text>
+                  <Feather name="link" size={16} color={theme.text} />
+                  <Text style={[st.bottomSecondaryText, { color: theme.text }]}>Link</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  onPress={isSkippedSession ? handleUndoSkip : handleMarkSessionSkipped}
-                  disabled={statusActionLoading}
+                  onPress={() =>
+                    router.push(
+                      `/train/session/${encodeURIComponent(encodedKey)}/log-strength?status=skipped`
+                    )
+                  }
                   style={[st.bottomSecondaryBtn, { borderColor: theme.border }]}
                   activeOpacity={0.85}
                 >
-                  <Feather
-                    name={isSkippedSession ? "rotate-ccw" : "skip-forward"}
-                    size={16}
-                    color={theme.text}
-                  />
-                  <Text style={[st.bottomSecondaryText, { color: theme.text }]}>
-                    {statusActionLoading ? "Updating" : isSkippedSession ? "Undo" : "Skip"}
-                  </Text>
+                  <Feather name="skip-forward" size={16} color={theme.text} />
+                  <Text style={[st.bottomSecondaryText, { color: theme.text }]}>Skip</Text>
                 </TouchableOpacity>
               </>
             ) : (
@@ -4262,48 +3442,28 @@ export default function TrainSessionDetail() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  onPress={isSkippedSession ? openMoveSessionSheet : openStravaLinkFlow}
-                  style={[st.bottomSecondaryBtn, { borderColor: theme.border }]}
+                  onPress={handleSendToWatch}
+                  disabled={sendingToWatch}
+                  style={[
+                    st.bottomSecondaryBtn,
+                    { borderColor: theme.border, opacity: sendingToWatch ? 0.6 : 1 },
+                  ]}
                   activeOpacity={0.85}
                 >
-                  <Feather
-                    name={isSkippedSession ? "calendar" : "link"}
-                    size={16}
-                    color={theme.text}
-                  />
+                  <Feather name="watch" size={16} color={theme.text} />
                   <Text style={[st.bottomSecondaryText, { color: theme.text }]}>
-                    {isSkippedSession ? "Move" : "Strava"}
+                    {sendingToWatch ? "Sending…" : "Watch"}
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  onPress={isSkippedSession ? handleUndoSkip : () =>
-                    router.push({
-                      pathname: "/train/session/[sessionKey]/complete",
-                      params: {
-                        sessionKey: encodedKey,
-                        status: "completed",
-                        returnWeekIndex: String(
-                          returnWeekIndex ?? fallbackReturnWeekIndex ?? decodedKey?.weekIndex ?? 0
-                        ),
-                        returnDayIndex: String(
-                          returnDayIndex ?? fallbackReturnDayIndex ?? decodedKey?.dayIndex ?? 0
-                        ),
-                        returnToken: String(Date.now()),
-                      },
-                    })
-                  }
-                  disabled={statusActionLoading}
+                  onPress={() => router.push(`/train/session/${encodeURIComponent(encodedKey)}/complete`)}
                   style={[st.bottomSecondaryBtn, { borderColor: theme.border }]}
                   activeOpacity={0.85}
                 >
-                  <Feather
-                    name={isSkippedSession ? "rotate-ccw" : "check-circle"}
-                    size={16}
-                    color={theme.text}
-                  />
+                  <Feather name="check-circle" size={16} color={theme.text} />
                   <Text style={[st.bottomSecondaryText, { color: theme.text }]}>
-                    {statusActionLoading ? "Updating" : isSkippedSession ? "Undo" : "Complete"}
+                    {sessionLog?.status ? "Edit" : "Log"}
                   </Text>
                 </TouchableOpacity>
               </>
@@ -4320,22 +3480,8 @@ export default function TrainSessionDetail() {
 /* ------------------------------------------------------------------ */
 
 const st = StyleSheet.create({
-  stickyHeaderWrap: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 20,
-    pointerEvents: "box-none",
-  },
-  stickyHeaderFade: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 118,
-  },
-  stickyHeaderRow: {
+  heroTopBar: {
+    marginTop: 50,
     paddingHorizontal: 16,
     flexDirection: "row",
     justifyContent: "space-between",
@@ -4395,11 +3541,6 @@ const st = StyleSheet.create({
     backgroundColor: "rgba(248,113,113,0.18)",
     borderWidth: 1,
     borderColor: "rgba(248,113,113,0.42)",
-  },
-  statusInfo: {
-    backgroundColor: "rgba(217,255,59,0.18)",
-    borderWidth: 1,
-    borderColor: "rgba(217,255,59,0.44)",
   },
   statusPillText: {
     color: "#FFFFFF",
@@ -4688,110 +3829,6 @@ const st = StyleSheet.create({
     justifyContent: "center",
   },
   quickActionLabel: { fontSize: 10, fontWeight: "700", letterSpacing: 0.8, textAlign: "center" },
-  statusSummaryCard: {
-    marginTop: 14,
-    borderRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: 14,
-    gap: 12,
-  },
-  statusSummaryTopRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-  },
-  statusSummaryIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  statusSummaryEyebrow: {
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
-  },
-  statusSummaryTitle: {
-    marginTop: 2,
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  statusSummaryBody: {
-    marginTop: 4,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "500",
-  },
-  statusSummaryNote: {
-    marginTop: 8,
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: "600",
-  },
-  statusSummaryActionsRow: {
-    marginTop: 2,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    flexWrap: "wrap",
-  },
-  statusSummaryAction: {
-    alignSelf: "flex-start",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
-  statusSummaryActionText: {
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  garminSyncCard: {
-    marginTop: 10,
-    borderRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  garminSyncTopRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-  },
-  garminSyncIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  garminSyncEyebrow: {
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
-  },
-  garminSyncTitle: {
-    marginTop: 2,
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  garminSyncBody: {
-    marginTop: 4,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "500",
-  },
-  garminSyncMeta: {
-    marginTop: 8,
-    fontSize: 12,
-    fontWeight: "700",
-  },
 
   moveModalBackdrop: {
     flex: 1,

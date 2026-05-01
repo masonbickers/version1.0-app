@@ -30,6 +30,7 @@ import { API_URL } from "../../../../config/api";
 import { auth, db } from "../../../../firebaseConfig";
 import { useTheme } from "../../../../providers/ThemeProvider";
 import { getJsonAuthHeaders } from "../../../../src/lib/api/authHeaders";
+import { withPlanAdaptationDefaults } from "../../../../src/lib/train/adaptationModel";
 
 const STEPS = [
   "Goal",
@@ -787,7 +788,7 @@ export default function CreateStrengthPlan() {
         updatedAt: serverTimestamp(),
       };
 
-      const cleanedPlanDoc = removeUndefinedDeep(planDoc);
+      const cleanedPlanDoc = removeUndefinedDeep(withPlanAdaptationDefaults(planDoc));
       await addDoc(collection(db, "users", uid, "plans"), cleanedPlanDoc);
 
       Alert.alert(

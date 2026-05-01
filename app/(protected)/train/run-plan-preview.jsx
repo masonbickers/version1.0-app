@@ -19,15 +19,6 @@ import { useTheme } from "../../../providers/ThemeProvider";
 
 const APPLE_BLUE = "#E6FF3B";
 const DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const TYPE = {
-  meta: 11,
-  body: 12,
-  bodyStrong: 13,
-  section: 14,
-  cardTitle: 16,
-  hero: 18,
-  pageTitle: 24,
-};
 
 // ------------------------------------------------------------------
 // Theme helper
@@ -40,22 +31,17 @@ function useScreenTheme() {
     text: colors.text,
     subtext: colors.subtext,
     border: colors.border,
-    divider: colors.divider || colors.border,
-    surfaceAlt: colors.surfaceAlt || (isDark ? "#1A1A1C" : "#F3F3F3"),
     muted: colors.muted || (isDark ? "#3A3A3C" : "#F2F2F7"),
-    primaryBg: colors.accentBg || APPLE_BLUE,
-    primaryText: colors.sapOnPrimary || "#111111",
-    chipBg: isDark ? "rgba(230,255,59,0.22)" : "rgba(230,255,59,0.30)",
-    chipText: colors.sapOnPrimary || "#111111",
-    bottomBarBg: isDark ? "#0B0B0B" : "#F4F4F4",
+    primaryBg: APPLE_BLUE,
+    primaryText: "#FFFFFF",
   };
 }
 
 // Little pill tag
-function Tag({ label, theme }) {
+function Tag({ label }) {
   return (
-    <View style={[styles.tag, { backgroundColor: theme.chipBg, borderColor: theme.divider }]}>
-      <Text style={[styles.tagText, { color: theme.chipText }]}>{label}</Text>
+    <View style={styles.tag}>
+      <Text style={styles.tagText}>{label}</Text>
     </View>
   );
 }
@@ -182,7 +168,7 @@ export default function RunPlanPreview() {
       Alert.alert("Plan saved", "Your run plan has been saved to your library.", [
         {
           text: "View my plans",
-          onPress: () => router.push("/train"),
+          onPress: () => router.push("/(protected)/train/index"),
         },
         { text: "Stay here" },
       ]);
@@ -198,8 +184,8 @@ export default function RunPlanPreview() {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
         <View style={styles.centerContainer}>
-          <Text style={{ color: theme.text, fontSize: TYPE.cardTitle, marginBottom: 8 }}>No plan loaded</Text>
-          <Text style={{ color: theme.subtext, fontSize: TYPE.body, marginBottom: 16 }}>
+          <Text style={{ color: theme.text, fontSize: 16, marginBottom: 8 }}>No plan loaded</Text>
+          <Text style={{ color: theme.subtext, fontSize: 13, marginBottom: 16 }}>
             There was a problem loading your plan. Try generating it again.
           </Text>
           <TouchableOpacity
@@ -219,10 +205,10 @@ export default function RunPlanPreview() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
       {/* HEADER */}
-      <View style={[styles.headerRow, { borderBottomColor: theme.divider }]}>
+      <View style={styles.headerRow}>
         <TouchableOpacity
           onPress={() => router.back()}
-          style={[styles.pillBtn, { borderColor: theme.border, paddingHorizontal: 10, backgroundColor: theme.card }]}
+          style={[styles.pillBtn, { borderColor: theme.border, paddingHorizontal: 10 }]}
           activeOpacity={0.85}
         >
           <Feather name="chevron-left" size={18} color={theme.text} />
@@ -231,7 +217,7 @@ export default function RunPlanPreview() {
 
         <View style={{ alignItems: "center" }}>
           <Text style={[styles.hTitle, { color: theme.text }]}>Your run plan</Text>
-          <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginTop: 2 }}>
+          <Text style={{ fontSize: 12, color: theme.subtext, marginTop: 2 }}>
             Review your weeks, days, and sessions before saving
           </Text>
         </View>
@@ -249,37 +235,28 @@ export default function RunPlanPreview() {
         <View style={[styles.summaryCard, { borderColor: theme.border, backgroundColor: theme.card }]}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
             <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={{ fontSize: TYPE.hero, fontWeight: "800", color: theme.text, marginBottom: 4 }}>
+              <Text style={{ fontSize: 16, fontWeight: "800", color: theme.text, marginBottom: 4 }}>
                 {safeGoalDistance || "Run goal"}
               </Text>
-              <Text style={{ color: theme.subtext, fontSize: TYPE.section }}>
+              <Text style={{ color: theme.subtext, fontSize: 13 }}>
                 {safePrimaryFocus || "Structured run plan built from your profile and availability."}
               </Text>
               {safePlan.name && safePlan.name !== safeGoalDistance && (
-                <Text style={{ color: theme.subtext, fontSize: TYPE.body, marginTop: 6, fontStyle: "italic" }}>
+                <Text style={{ color: theme.subtext, fontSize: 12, marginTop: 6, fontStyle: "italic" }}>
                   {safePlan.name}
                 </Text>
               )}
             </View>
 
             <View style={{ alignItems: "flex-end", gap: 4 }}>
-              {totalWeeks && <Tag label={`${totalWeeks} weeks`} theme={theme} />}
-              {safePlan.goalType ? <Tag label={safePlan.goalType} theme={theme} /> : null}
-              {safePlan.primaryActivity ? <Tag label={safePlan.primaryActivity} theme={theme} /> : null}
+              {totalWeeks && <Tag label={`${totalWeeks} weeks`} />}
+              {safePlan.goalType ? <Tag label={safePlan.goalType} /> : null}
+              {safePlan.primaryActivity ? <Tag label={safePlan.primaryActivity} /> : null}
             </View>
           </View>
 
-          <View
-            style={{
-              marginTop: 10,
-              padding: 8,
-              borderRadius: 10,
-              backgroundColor: theme.surfaceAlt,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: theme.divider,
-            }}
-          >
-            <Text style={{ fontSize: TYPE.body, color: theme.subtext }}>
+          <View style={{ marginTop: 10, padding: 8, borderRadius: 10, backgroundColor: theme.muted }}>
+            <Text style={{ fontSize: 11, color: theme.subtext }}>
               This plan is saved as structured JSON. If your generator outputs weeks.sessions instead of weeks.days,
               we’ll still render it correctly.
             </Text>
@@ -306,29 +283,29 @@ export default function RunPlanPreview() {
               style={[styles.weekCard, { borderColor: theme.border, backgroundColor: theme.card }]}
             >
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                <Text style={{ fontSize: TYPE.cardTitle, fontWeight: "800", color: theme.text }}>{weekTitle}</Text>
-                {weekFocus ? <Tag label={weekFocus} theme={theme} /> : null}
+                <Text style={{ fontSize: 15, fontWeight: "800", color: theme.text }}>{weekTitle}</Text>
+                {weekFocus ? <Tag label={weekFocus} /> : null}
               </View>
 
               {week.notes ? (
-                <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginBottom: 6 }}>{week.notes}</Text>
+                <Text style={{ fontSize: 12, color: theme.subtext, marginBottom: 6 }}>{week.notes}</Text>
               ) : null}
 
               {weekDays.length === 0 ? (
-                <Text style={{ fontSize: TYPE.body, color: theme.subtext }}>No days listed in this week.</Text>
+                <Text style={{ fontSize: 12, color: theme.subtext }}>No days listed in this week.</Text>
               ) : (
                 weekDays.map((day, dIdx) => {
                   const dayLabel = day.day || day.dayName || `Day ${dIdx + 1}`;
                   const sessions = Array.isArray(day.sessions) ? day.sessions : [];
 
                   return (
-                    <View key={dayLabel + dIdx} style={[styles.dayBlock, { borderTopColor: theme.divider }]}>
-                      <Text style={{ fontSize: TYPE.section, fontWeight: "700", color: theme.text, marginBottom: 4 }}>
+                    <View key={dayLabel + dIdx} style={styles.dayBlock}>
+                      <Text style={{ fontSize: 13, fontWeight: "700", color: theme.text, marginBottom: 4 }}>
                         {dayLabel}
                       </Text>
 
                       {sessions.length === 0 ? (
-                        <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginBottom: 4 }}>
+                        <Text style={{ fontSize: 11, color: theme.subtext, marginBottom: 4 }}>
                           Rest / no structured session.
                         </Text>
                       ) : (
@@ -358,7 +335,7 @@ export default function RunPlanPreview() {
                           return (
                             <View
                               key={title + sIdx}
-                              style={[styles.sessionCard, { borderColor: theme.divider, backgroundColor: theme.surfaceAlt }]}
+                              style={[styles.sessionCard, { borderColor: theme.border, backgroundColor: theme.bg }]}
                             >
                               <View
                                 style={{
@@ -369,12 +346,12 @@ export default function RunPlanPreview() {
                                 }}
                               >
                                 <View style={{ flex: 1, paddingRight: 8 }}>
-                                  <Text style={{ fontSize: TYPE.section, fontWeight: "700", color: theme.text }}>
+                                  <Text style={{ fontSize: 12.5, fontWeight: "700", color: theme.text }}>
                                     {title}
                                   </Text>
 
                                   {(durMinFromTotals || distFromTotals || distFromDistanceKm) ? (
-                                    <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginTop: 2 }}>
+                                    <Text style={{ fontSize: 11, color: theme.subtext, marginTop: 2 }}>
                                       {durMinFromTotals ? `~${durMinFromTotals} min` : ""}
                                       {durMinFromTotals && (distFromTotals || distFromDistanceKm) ? " · " : ""}
                                       {distFromTotals ? `~${distFromTotals} km` : ""}
@@ -384,14 +361,14 @@ export default function RunPlanPreview() {
                                 </View>
 
                                 {showCount > 0 ? (
-                                  <Text style={{ fontSize: TYPE.meta, color: theme.subtext }}>
+                                  <Text style={{ fontSize: 11, color: theme.subtext }}>
                                     {showCount} item{showCount > 1 ? "s" : ""}
                                   </Text>
                                 ) : null}
                               </View>
 
                               {notes ? (
-                                <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginBottom: 4 }}>{notes}</Text>
+                                <Text style={{ fontSize: 11, color: theme.subtext, marginBottom: 4 }}>{notes}</Text>
                               ) : null}
 
                               {/* Prefer SEGMENTS. Fallback to STEPS. Else show a compact rules-engine row */}
@@ -406,18 +383,18 @@ export default function RunPlanPreview() {
                                     const rpe = seg.rpe || "";
 
                                     return (
-                                      <View key={label + tIdx} style={[styles.stepRow, { borderTopColor: theme.divider }]}>
+                                      <View key={label + tIdx} style={styles.stepRow}>
                                         <View style={{ flex: 1 }}>
-                                          <Text style={{ fontSize: TYPE.bodyStrong, fontWeight: "600", color: theme.text }}>
+                                          <Text style={{ fontSize: 11.5, fontWeight: "600", color: theme.text }}>
                                             {label}
                                           </Text>
                                           {desc ? (
-                                            <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginTop: 2 }}>
+                                            <Text style={{ fontSize: 11, color: theme.subtext, marginTop: 2 }}>
                                               {desc}
                                             </Text>
                                           ) : null}
                                           {(intensity || rpe) ? (
-                                            <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginTop: 2 }}>
+                                            <Text style={{ fontSize: 11, color: theme.subtext, marginTop: 2 }}>
                                               {[intensity, rpe].filter(Boolean).join(" · ")}
                                             </Text>
                                           ) : null}
@@ -425,12 +402,12 @@ export default function RunPlanPreview() {
 
                                         <View style={{ alignItems: "flex-end", marginLeft: 8 }}>
                                           {dist > 0 ? (
-                                            <Text style={{ fontSize: TYPE.body, color: theme.text, fontWeight: "600" }}>
+                                            <Text style={{ fontSize: 11, color: theme.text, fontWeight: "600" }}>
                                               {safeToFixed1(dist)} km
                                             </Text>
                                           ) : null}
                                           {dur > 0 ? (
-                                            <Text style={{ fontSize: TYPE.body, color: theme.subtext }}>
+                                            <Text style={{ fontSize: 11, color: theme.subtext }}>
                                               ~{Math.round(dur)} min
                                             </Text>
                                           ) : null}
@@ -452,13 +429,13 @@ export default function RunPlanPreview() {
                                     const hasDur = typeof dur === "number" && dur > 0;
 
                                     return (
-                                      <View key={stepType + tIdx} style={[styles.stepRow, { borderTopColor: theme.divider }]}>
+                                      <View key={stepType + tIdx} style={styles.stepRow}>
                                         <View style={{ flex: 1 }}>
-                                          <Text style={{ fontSize: TYPE.bodyStrong, fontWeight: "600", color: theme.text }}>
+                                          <Text style={{ fontSize: 11.5, fontWeight: "600", color: theme.text }}>
                                             {stepType}
                                           </Text>
                                           {stepDesc ? (
-                                            <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginTop: 2 }}>
+                                            <Text style={{ fontSize: 11, color: theme.subtext, marginTop: 2 }}>
                                               {stepDesc}
                                             </Text>
                                           ) : null}
@@ -466,15 +443,15 @@ export default function RunPlanPreview() {
 
                                         <View style={{ alignItems: "flex-end", marginLeft: 8 }}>
                                           {hasDist ? (
-                                            <Text style={{ fontSize: TYPE.body, color: theme.text, fontWeight: "600" }}>
+                                            <Text style={{ fontSize: 11, color: theme.text, fontWeight: "600" }}>
                                               {dist} km
                                             </Text>
                                           ) : null}
                                           {hasDur ? (
-                                            <Text style={{ fontSize: TYPE.body, color: theme.subtext }}>~{dur} min</Text>
+                                            <Text style={{ fontSize: 11, color: theme.subtext }}>~{dur} min</Text>
                                           ) : null}
                                           {intensity ? (
-                                            <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginTop: 1 }}>
+                                            <Text style={{ fontSize: 11, color: theme.subtext, marginTop: 1 }}>
                                               {typeof intensity === "number" ? `RPE ${intensity}` : String(intensity)}
                                             </Text>
                                           ) : null}
@@ -484,7 +461,7 @@ export default function RunPlanPreview() {
                                   })}
                                 </View>
                               ) : (
-                                <Text style={{ fontSize: TYPE.body, color: theme.subtext, marginTop: 4 }}>
+                                <Text style={{ fontSize: 11, color: theme.subtext, marginTop: 4 }}>
                                   {typeof session?.distanceKm === "number"
                                     ? `Planned distance: ~${safeToFixed1(session.distanceKm)} km`
                                     : "No segments/steps provided for this session."}
@@ -512,7 +489,7 @@ export default function RunPlanPreview() {
               borderColor: theme.border,
             }}
           >
-            <Text style={{ fontSize: TYPE.body, color: theme.subtext }}>
+            <Text style={{ fontSize: 13, color: theme.subtext }}>
               No week-by-week structure was provided. If you’re passing plans via route params, consider saving the
               generated plan first and loading by ID to avoid truncation.
             </Text>
@@ -521,11 +498,11 @@ export default function RunPlanPreview() {
       </ScrollView>
 
       {/* Bottom action bar */}
-      <View style={[styles.bottomBar, { borderTopColor: theme.divider, backgroundColor: theme.bottomBarBg }]}>
+      <View style={[styles.bottomBar, { borderTopColor: theme.border }]}>
         <TouchableOpacity
           onPress={() => router.back()}
           activeOpacity={0.85}
-          style={[styles.secondaryBtn, { borderColor: theme.border, flex: 1, backgroundColor: theme.card }]}
+          style={[styles.secondaryBtn, { borderColor: theme.border, flex: 1 }]}
         >
           <Text style={{ color: theme.text, fontWeight: "700", textAlign: "center" }}>Edit inputs</Text>
         </TouchableOpacity>
@@ -554,7 +531,7 @@ export default function RunPlanPreview() {
 // STYLES
 // ------------------------------------------------------------------
 const styles = StyleSheet.create({
-  hTitle: { fontSize: TYPE.pageTitle, fontWeight: "800" },
+  hTitle: { fontSize: 24, fontWeight: "800" },
 
   headerRow: {
     paddingHorizontal: 16,
@@ -563,7 +540,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    borderBottomWidth: StyleSheet.hairlineWidth,
   },
 
   pillBtn: {
@@ -613,6 +589,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingTop: 4,
     borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(148,163,184,0.4)",
   },
 
   sessionCard: {
@@ -626,17 +603,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     paddingVertical: 4,
     borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(209,213,219,0.7)",
   },
 
   tag: {
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(0,122,255,0.08)",
   },
   tagText: {
-    fontSize: TYPE.meta,
+    fontSize: 11,
     fontWeight: "700",
+    color: APPLE_BLUE,
   },
 
   bottomBar: {
@@ -644,6 +623,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(0,0,0,0.02)",
     gap: 10,
   },
 

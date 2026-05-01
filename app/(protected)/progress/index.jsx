@@ -363,7 +363,7 @@ export default function ProgressPage() {
           <View style={s.card}>
             <View style={s.cardHead}>
               <Text style={s.cardTitle}>Recent sessions</Text>
-              <TouchableOpacity onPress={() => router.push("/activity-feed")} activeOpacity={0.85}>
+              <TouchableOpacity onPress={() => router.push("/history")} activeOpacity={0.85}>
                 <Text style={s.linkText}>View all</Text>
               </TouchableOpacity>
             </View>

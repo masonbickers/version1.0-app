@@ -2,6 +2,7 @@
 import axios from "axios";
 import express from "express";
 import admin from "../admin.js";
+import { requireUser } from "../utils/requireUser.js";
 
 const router = express.Router();
 
@@ -28,6 +29,8 @@ const TOKEN_ENDPOINT =
   process.env.GARMIN_TOKEN_ENDPOINT ||
   "https://diauth.garmin.com/di-oauth2-service/oauth/token";
 
+router.use(requireUser);
+
 /* ───────────────────────── HELPERS ───────────────────────── */
 
 function todayISO() {
@@ -39,6 +42,32 @@ function dayWindowUTC(date) {
   const startSec = Math.floor(start.getTime() / 1000);
   const endSec = startSec + 86400 - 1;
   return { startSec, endSec };
+}
+
+function isISODate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+}
+
+function addDaysISO(date, delta) {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+function daysBetweenInclusive(from, to) {
+  const start = new Date(`${from}T00:00:00.000Z`).getTime();
+  const end = new Date(`${to}T00:00:00.000Z`).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
+
+  const days = [];
+  for (let current = from; current <= to; current = addDaysISO(current, 1)) {
+    days.push(current);
+  }
+  return days;
+}
+
+function uidFromRequest(req) {
+  return String(req.user?.uid || "").trim();
 }
 
 async function getUserGarminData(uid) {
@@ -153,6 +182,28 @@ async function bearerGet(url, accessToken) {
   }
 }
 
+async function requestDailiesBackfill({ uid, date, accessToken, refreshed }) {
+  const { startSec, endSec } = dayWindowUTC(date);
+  const url = `${HEALTH_BASE}/backfill/dailies?summaryStartTimeInSeconds=${startSec}&summaryEndTimeInSeconds=${endSec}`;
+  const result = await bearerGet(url, accessToken);
+
+  await saveHealth(String(uid), "backfill_dailies_request", date, result.body, {
+    url,
+    status: result.status,
+    refreshed: !!refreshed,
+    summaryStartTimeInSeconds: startSec,
+    summaryEndTimeInSeconds: endSec,
+  });
+
+  return {
+    ok: result.ok,
+    status: result.status,
+    pending: result.status === 202,
+    date,
+    data: result.body,
+  };
+}
+
 async function saveHealth(uid, kind, date, payload, meta = {}) {
   const ref = admin
     .firestore()
@@ -177,10 +228,11 @@ async function saveHealth(uid, kind, date, payload, meta = {}) {
 /* ───────────────────────── ROUTES ───────────────────────── */
 
 /**
- * GET /garmin/health/debug?uid=...
+ * GET /garmin/health/debug
  */
 router.get("/debug", async (req, res) => {
-  const { uid } = req.query;
+  const uid = uidFromRequest(req);
+  if (!uid) return res.status(401).json({ ok: false, error: "Unauthenticated user" });
   const garmin = await getUserGarminData(uid);
 
   res.json({
@@ -199,13 +251,13 @@ router.get("/debug", async (req, res) => {
 });
 
 /**
- * GET /garmin/health/user-id?uid=...
+ * GET /garmin/health/user-id
  * Useful sanity check: calls /user/id on apis.garmin.com
  */
 router.get("/user-id", async (req, res) => {
   try {
-    const { uid } = req.query;
-    if (!uid) return res.status(400).json({ ok: false, error: "Missing uid" });
+    const uid = uidFromRequest(req);
+    if (!uid) return res.status(401).json({ ok: false, error: "Unauthenticated user" });
 
     const garmin = await getUserGarminData(uid);
     if (!garmin?.accessToken) {
@@ -236,14 +288,14 @@ router.get("/user-id", async (req, res) => {
 });
 
 /**
- * GET /garmin/health/backfill/dailies?uid=...&date=YYYY-MM-DD
+ * GET /garmin/health/backfill/dailies?date=YYYY-MM-DD
  * Requests historical data generation for the day window. Garmin will deliver via webhook/ping.
  */
 router.get("/backfill/dailies", async (req, res) => {
   try {
-    const { uid } = req.query;
+    const uid = uidFromRequest(req);
     const date = String(req.query.date || todayISO());
-    if (!uid) return res.status(400).json({ ok: false, error: "Missing uid" });
+    if (!uid) return res.status(401).json({ ok: false, error: "Unauthenticated user" });
 
     const garmin = await getUserGarminData(uid);
     if (!garmin?.accessToken) {
@@ -253,17 +305,11 @@ router.get("/backfill/dailies", async (req, res) => {
     const tokenResult = await refreshAccessTokenIfNeeded(String(uid), garmin);
     if (!tokenResult.ok) return res.status(401).json({ ok: false, error: tokenResult.error });
 
-    const { startSec, endSec } = dayWindowUTC(date);
-
-    const url = `${HEALTH_BASE}/backfill/dailies?summaryStartTimeInSeconds=${startSec}&summaryEndTimeInSeconds=${endSec}`;
-    const result = await bearerGet(url, tokenResult.accessToken);
-
-    await saveHealth(String(uid), "backfill_dailies_request", date, result.body, {
-      url,
-      status: result.status,
-      refreshed: !!tokenResult.refreshed,
-      summaryStartTimeInSeconds: startSec,
-      summaryEndTimeInSeconds: endSec,
+    const result = await requestDailiesBackfill({
+      uid: String(uid),
+      date,
+      accessToken: tokenResult.accessToken,
+      refreshed: tokenResult.refreshed,
     });
 
     return res.json({
@@ -275,7 +321,7 @@ router.get("/backfill/dailies", async (req, res) => {
         result.status === 202
           ? "Backfill requested. Garmin will deliver data via webhook/ping."
           : "Backfill request complete.",
-      data: result.body,
+      data: result.data,
     });
   } catch (e) {
     console.error("[garmin-health] backfill dailies error:", e?.message || e);
@@ -284,7 +330,75 @@ router.get("/backfill/dailies", async (req, res) => {
 });
 
 /**
- * GET /garmin/health/dailies?uid=...&date=YYYY-MM-DD
+ * GET /garmin/health/backfill/dailies-range?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Requests Garmin daily summary backfill for each date in a bounded range.
+ */
+router.get("/backfill/dailies-range", async (req, res) => {
+  try {
+    const uid = uidFromRequest(req);
+    const to = String(req.query.to || todayISO());
+    const from = String(req.query.from || addDaysISO(to, -29));
+    if (!uid) return res.status(401).json({ ok: false, error: "Unauthenticated user" });
+    if (!isISODate(from) || !isISODate(to)) {
+      return res.status(400).json({ ok: false, error: "from and to must use YYYY-MM-DD" });
+    }
+
+    const dates = daysBetweenInclusive(from, to);
+    if (!dates.length) {
+      return res.status(400).json({ ok: false, error: "Invalid date range" });
+    }
+    if (dates.length > 90) {
+      return res.status(400).json({ ok: false, error: "Date range cannot exceed 90 days" });
+    }
+
+    const garmin = await getUserGarminData(uid);
+    if (!garmin?.accessToken) {
+      return res.status(401).json({ ok: false, error: "Garmin not linked (no accessToken)" });
+    }
+
+    const tokenResult = await refreshAccessTokenIfNeeded(String(uid), garmin);
+    if (!tokenResult.ok) return res.status(401).json({ ok: false, error: tokenResult.error });
+
+    const results = [];
+    for (const date of dates) {
+      const result = await requestDailiesBackfill({
+        uid: String(uid),
+        date,
+        accessToken: tokenResult.accessToken,
+        refreshed: tokenResult.refreshed,
+      });
+      results.push({
+        date,
+        ok: result.ok,
+        status: result.status,
+        pending: result.pending,
+      });
+    }
+
+    const accepted = results.filter((row) => row.status === 202).length;
+    const failed = results.filter((row) => !row.ok).length;
+
+    return res.json({
+      ok: failed === 0,
+      from,
+      to,
+      requested: results.length,
+      accepted,
+      failed,
+      message:
+        accepted > 0
+          ? "Backfill requested. Garmin will deliver available data via webhook."
+          : "Backfill requests completed.",
+      results,
+    });
+  } catch (e) {
+    console.error("[garmin-health] backfill dailies range error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "Internal Server Error" });
+  }
+});
+
+/**
+ * GET /garmin/health/dailies?date=YYYY-MM-DD
  *
  * NOTE:
  * - Many setups require Garmin-issued pull token windows (ping payload).
@@ -293,9 +407,9 @@ router.get("/backfill/dailies", async (req, res) => {
  */
 router.get("/dailies", async (req, res) => {
   try {
-    const { uid } = req.query;
+    const uid = uidFromRequest(req);
     const date = String(req.query.date || todayISO());
-    if (!uid) return res.status(400).json({ ok: false, error: "Missing uid" });
+    if (!uid) return res.status(401).json({ ok: false, error: "Unauthenticated user" });
 
     const garmin = await getUserGarminData(uid);
     if (!garmin?.accessToken) {
@@ -338,13 +452,14 @@ router.get("/dailies", async (req, res) => {
 });
 
 /**
- * GET /garmin/health/read?uid=...&kind=...&date=YYYY-MM-DD
+ * GET /garmin/health/read?kind=...&date=YYYY-MM-DD
  * Reads stored payload from Firestore (what your app should use after webhooks store data).
  */
 router.get("/read", async (req, res) => {
   try {
-    const { uid, kind, date } = req.query;
-    if (!uid) return res.status(400).json({ ok: false, error: "Missing uid" });
+    const uid = uidFromRequest(req);
+    const { kind, date } = req.query;
+    if (!uid) return res.status(401).json({ ok: false, error: "Unauthenticated user" });
     if (!kind) return res.status(400).json({ ok: false, error: "Missing kind" });
     const d = String(date || todayISO());
     const baseRef = admin

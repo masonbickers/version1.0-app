@@ -204,9 +204,68 @@ async function exchangeCodeForToken({
   return response.data || {};
 }
 
-// GET /strava/start?uid=...&returnUrl=...
+async function buildStravaAuthUrl(req, { uid, requestedReturn }) {
+  const clientId = String(process.env.STRAVA_CLIENT_ID || "").trim();
+  if (!clientId) {
+    const error = new Error("Missing STRAVA_CLIENT_ID");
+    error.statusCode = 500;
+    throw error;
+  }
+  if (!isValidStravaClientId(clientId)) {
+    const error = new Error("Invalid STRAVA_CLIENT_ID");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const redirectUri = resolveRedirectUri(req);
+  const state = randomState();
+  const returnUrl = pickBestReturnUrl(requestedReturn);
+
+  await putState(state, {
+    uid,
+    returnUrl,
+    redirectUri,
+  });
+
+  const params = new URLSearchParams({
+    client_id: String(clientId),
+    response_type: "code",
+    redirect_uri: redirectUri,
+    state,
+    approval_prompt: "auto",
+    scope: "read,activity:read_all",
+  });
+
+  return {
+    authUrl: `https://www.strava.com/oauth/authorize?${params.toString()}`,
+    redirectUri,
+    returnUrl,
+  };
+}
+
+router.post("/start-url", requireUser, async (req, res) => {
+  try {
+    const uid = String(req.user?.uid || "").trim();
+    const requestedReturn = String(req.body?.returnUrl || "").trim();
+    if (!uid) return res.status(401).json({ error: "Unauthenticated user" });
+
+    const result = await buildStravaAuthUrl(req, { uid, requestedReturn });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error("Strava start-url error:", error?.message || error);
+    return res
+      .status(error?.statusCode || 500)
+      .json({ error: error?.message || "Failed to start Strava OAuth" });
+  }
+});
+
+// Local-development fallback. Production app builds use POST /strava/start-url.
 router.get("/start", async (req, res) => {
   try {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(410).send("Use POST /strava/start-url.");
+    }
+
     const uid = String(req.query?.uid || "").trim();
     const requestedReturn = String(req.query?.returnUrl || "").trim();
 
@@ -214,43 +273,14 @@ router.get("/start", async (req, res) => {
       return res.status(400).send("Missing uid");
     }
 
-    const clientId = String(process.env.STRAVA_CLIENT_ID || "").trim();
-    if (!clientId) {
-      return res.status(500).send("Missing STRAVA_CLIENT_ID");
-    }
-    if (!isValidStravaClientId(clientId)) {
-      console.error("[strava/start] Invalid STRAVA_CLIENT_ID format");
-      return res.status(500).send("Invalid STRAVA_CLIENT_ID");
-    }
-
-    const redirectUri = resolveRedirectUri(req);
-    const state = randomState();
-    const returnUrl = pickBestReturnUrl(requestedReturn);
-
-    console.log("[strava/start] redirectUri =", redirectUri);
-    console.log("[strava/start] returnUrl =", returnUrl);
-
-    await putState(state, {
+    const { authUrl, redirectUri, returnUrl } = await buildStravaAuthUrl(req, {
       uid,
-      returnUrl,
-      redirectUri,
+      requestedReturn,
     });
 
-    const params = new URLSearchParams({
-      client_id: String(clientId),
-      response_type: "code",
-      redirect_uri: redirectUri,
-      state,
-      approval_prompt: "auto",
-      scope: "read,activity:read_all",
-    });
-
-    const authUrl = `https://www.strava.com/oauth/authorize?${params.toString()}`;
     if (String(req.query?.debug || "").trim() === "1") {
       return res.json({
         ok: true,
-        clientIdLooksValid: isValidStravaClientId(clientId),
-        clientIdPreview: isValidStravaClientId(clientId) ? String(clientId) : "invalid",
         redirectUri,
         returnUrl,
         authUrl,
@@ -406,6 +436,10 @@ router.post("/oauth-result", requireUser, async (req, res) => {
 
 // POST /strava/exchange  { code: "..." }
 router.post("/exchange", async (req, res) => {
+  if (process.env.NODE_ENV === "production") {
+    return res.status(404).json({ error: "Not found" });
+  }
+
   const { code } = req.body || {};
 
   if (!code) {

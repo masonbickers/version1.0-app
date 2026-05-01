@@ -1,13 +1,12 @@
 "use client";
 
 import { Feather } from "@expo/vector-icons";
-import { doc, getDoc } from "firebase/firestore";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { API_URL } from "../../../config/api";
-import { auth, db } from "../../../firebaseConfig";
+import { auth } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
 
 function todayISO() {
@@ -18,6 +17,18 @@ function todayISO() {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function addDaysISO(date, delta) {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+async function authHeaders() {
+  const token = await auth.currentUser?.getIdToken?.();
+  if (!token) throw new Error("Please sign in again.");
+  return { Authorization: `Bearer ${token}` };
+}
+
 export default function GarminHealthPage() {
   const { colors, isDark } = useTheme();
   const accent = colors.sapPrimary || colors.primary || "#007AFF";
@@ -25,42 +36,78 @@ export default function GarminHealthPage() {
 
   const uid = auth.currentUser?.uid;
 
-  const [date, setDate] = useState(todayISO());
+  const [date] = useState(todayISO());
   const [loading, setLoading] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
   const [data, setData] = useState(null);
   const [meta, setMeta] = useState(null);
 
-  const pullAndShow = async () => {
+  const readStoredDay = async () => {
     if (!uid) return Alert.alert("Not signed in", "Sign in first.");
 
     setLoading(true);
     try {
-      // 1) Ask server to pull from Garmin + store in Firestore
-      const url = `${API_URL}/auth/garmin/health/daily?uid=${encodeURIComponent(uid)}&date=${encodeURIComponent(date)}`;
-      const r = await fetch(url);
+      const url = `${API_URL}/garmin/health/read?kind=dailies&date=${encodeURIComponent(date)}`;
+      const r = await fetch(url, { headers: await authHeaders() });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok || !j.ok) {
-        console.log("Garmin pull failed:", r.status, j);
-        return Alert.alert("Garmin pull failed", j?.error || "Check server logs / entitlement / endpoint path.");
-      }
+      if (!r.ok || !j.ok) throw new Error(j?.error || "Could not read Garmin health data.");
 
-      // 2) Read stored document
-      const ref = doc(db, "users", uid, "garmin_health", `daily_${date}`);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) {
-        setData(j.data || null);
-        setMeta({ note: "Stored doc not found; showing server response." });
+      if (!j.found) {
+        setData(null);
+        setMeta({
+          found: false,
+          date,
+          note: "No stored Garmin daily summary for this date yet. Request backfill, then check again after Garmin delivers the webhook.",
+          triedDocIds: j.triedDocIds || [],
+        });
         return;
       }
 
-      const stored = snap.data();
-      setData(stored.payload || null);
-      setMeta({ fetchedAtMs: stored.fetchedAtMs, kind: stored.kind, date: stored.date });
+      const stored = j.doc || {};
+      setData(stored.data || stored.payload || null);
+      setMeta({ found: true, docId: j.docId, kind: stored.kind, date: stored.date });
     } catch (e) {
       console.error(e);
       Alert.alert("Error", e?.message || "Something went wrong");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const requestBackfill30 = async () => {
+    if (!uid) return Alert.alert("Not signed in", "Sign in first.");
+
+    const to = todayISO();
+    const from = addDaysISO(to, -29);
+
+    setBackfilling(true);
+    try {
+      const url = `${API_URL}/garmin/health/backfill/dailies-range?from=${encodeURIComponent(
+        from
+      )}&to=${encodeURIComponent(to)}`;
+      const r = await fetch(url, { headers: await authHeaders() });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error || "Backfill request failed.");
+
+      setMeta({
+        backfill: true,
+        from,
+        to,
+        requested: j.requested,
+        accepted: j.accepted,
+        failed: j.failed,
+        message: j.message,
+        results: j.results,
+      });
+      Alert.alert(
+        "Garmin backfill requested",
+        `Requested ${j.requested || 0} days. Garmin will deliver available daily summaries via webhook.`
+      );
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Backfill failed", e?.message || "Something went wrong");
+    } finally {
+      setBackfilling(false);
     }
   };
 
@@ -76,16 +123,25 @@ export default function GarminHealthPage() {
           <Text style={s.cardTitle}>Actions</Text>
 
           <Pressable
-            onPress={pullAndShow}
-            disabled={loading}
-            style={({ pressed }) => [s.primaryBtn, pressed && { opacity: 0.92 }, loading && { opacity: 0.7 }]}
+            onPress={requestBackfill30}
+            disabled={backfilling}
+            style={({ pressed }) => [s.primaryBtn, pressed && { opacity: 0.92 }, backfilling && { opacity: 0.7 }]}
           >
-            {loading ? <ActivityIndicator color="#fff" /> : <Feather name="download" size={16} color="#fff" />}
-            <Text style={s.primaryBtnText}>{loading ? "Pulling…" : "Pull today’s Garmin health"}</Text>
+            {backfilling ? <ActivityIndicator color="#fff" /> : <Feather name="download" size={16} color="#fff" />}
+            <Text style={s.primaryBtnText}>{backfilling ? "Requesting…" : "Backfill last 30 days"}</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={readStoredDay}
+            disabled={loading}
+            style={({ pressed }) => [s.secondaryBtn, pressed && { opacity: 0.92 }, loading && { opacity: 0.7 }]}
+          >
+            {loading ? <ActivityIndicator color={accent} /> : <Feather name="refresh-cw" size={16} color={accent} />}
+            <Text style={s.secondaryBtnText}>{loading ? "Checking…" : "Check selected day"}</Text>
           </Pressable>
 
           <Text style={s.helper}>
-            This calls your server, which fetches from Garmin Health API and stores the raw payload in Firestore.
+            Backfill requests Garmin daily summaries. Available data is delivered later by Garmin webhook, then stored in Firestore.
           </Text>
         </View>
 
@@ -129,6 +185,18 @@ function styles(colors, isDark, accent) {
       backgroundColor: accent,
     },
     primaryBtnText: { color: "#fff", fontWeight: "900" },
+    secondaryBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      borderRadius: 999,
+      paddingVertical: 12,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: accent,
+    },
+    secondaryBtnText: { color: accent, fontWeight: "900" },
     helper: { fontSize: 12, color: colors.subtext },
     mono: {
       fontFamily: "Menlo",

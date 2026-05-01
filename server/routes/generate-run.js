@@ -1,5 +1,10 @@
 import express from "express";
 import { applyRunPlanRules } from "../lib/train/planRules/index.js";
+import {
+  applyRecentTrainingSafeguardsToProfile,
+  loadRecentReadinessRowsForUser,
+  loadRecentTrainingRowsForUser,
+} from "../lib/train/planRules/adaptation.js";
 import { parseRecentRaceAnchor } from "../lib/train/planRules/deriveInputs.js";
 import {
   normaliseDayAbbrev,
@@ -384,7 +389,7 @@ function flattenWorkoutSteps(steps = []) {
 }
 
 // POST /generate-run?summary=1
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   try {
     const critical = validateCriticalRouteInputs(req.body);
     if (critical.errors.length) {
@@ -429,7 +434,28 @@ router.post("/", (req, res) => {
       });
     }
 
-    const enrichedProfile = athleteProfile;
+    let enrichedProfile = athleteProfile;
+    const useRecentTraining =
+      req.query?.useRecentTraining !== "0" &&
+      req.query?.useRecentTraining !== "false" &&
+      athleteProfile?.adaptation?.enabled !== false;
+
+    if (useRecentTraining && req.user?.uid) {
+      try {
+        const [recentTrainingRows, recentReadinessRows] = await Promise.all([
+          loadRecentTrainingRowsForUser(req.user.uid),
+          loadRecentReadinessRowsForUser(req.user.uid),
+        ]);
+        const adaptationResult = applyRecentTrainingSafeguardsToProfile({
+          athleteProfile,
+          recentTrainingRows,
+          recentReadinessRows,
+        });
+        enrichedProfile = adaptationResult?.athleteProfile || athleteProfile;
+      } catch (adaptErr) {
+        console.log("[generate-run] recent training adaptation skipped:", adaptErr?.message || adaptErr);
+      }
+    }
 
     // ✅ Rules engine generates the full plan using personalized inputs
     const plan = applyRunPlanRules(null, enrichedProfile);
@@ -450,6 +476,9 @@ router.post("/", (req, res) => {
         hrZones: plan?.hrZones || null,
         anchorTrace: plan?.anchorTrace || null,
       },
+      adaptation: plan?.adaptationTrace || null,
+      recentTrainingSummary: plan?.recentTrainingSummary || null,
+      recentReadinessSummary: plan?.recentReadinessSummary || null,
       decisionTrace: plan?.decisionTrace || null,
       personalizationValidation: {
         usedDefaults: !validation.hasPaceAnchor || !validation.hasHrAnchor,

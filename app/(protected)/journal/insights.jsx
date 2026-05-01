@@ -19,6 +19,7 @@ import {
     View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useEffect, useState } from "react";
 
 import { auth, db } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";

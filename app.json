@@ -11,7 +11,12 @@
       "bundleIdentifier": "com.bickers.beapp",
       "supportsTablet": true,
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Allow Be to use your camera to scan meals and barcodes.",
+        "NSLocationWhenInUseUsageDescription": "Allow Be to use your location while you record outdoor training and search for nearby races.",
+        "NSMicrophoneUsageDescription": "Allow Be to use your microphone for voice meal logging.",
+        "NSSpeechRecognitionUsageDescription": "Allow Be to convert your speech into meal logs.",
+        "NSPhotoLibraryUsageDescription": "Allow Be to choose photos for nutrition logging and your profile."
       }
     },
     "android": {
@@ -22,7 +27,6 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -47,20 +51,31 @@
       "expo-asset",
       "expo-font",
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Be to use your camera to scan meals and barcodes."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Be to use your location while you record outdoor training and search for nearby races."
+        }
+      ],
+      [
         "expo-image-picker",
         {
-          "cameraPermission": "Allow $(PRODUCT_NAME) to use your camera for meal scan.",
-          "photosPermission": "Allow $(PRODUCT_NAME) to access photos for nutrition logging."
+          "cameraPermission": "Allow Be to use your camera to scan meals.",
+          "photosPermission": "Allow Be to choose photos for nutrition logging and your profile."
         }
       ],
       [
         "@react-native-voice/voice",
         {
-          "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone for voice meal logging.",
-          "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to convert your speech into meal logs."
+          "microphonePermission": "Allow Be to use your microphone for voice meal logging.",
+          "speechRecognitionPermission": "Allow Be to convert your speech into meal logs."
         }
-      ],
-      "expo-widgets"
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

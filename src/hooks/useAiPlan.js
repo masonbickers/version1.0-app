@@ -1,4 +1,4 @@
-// app/hooks/useAiPlan.js
+// src/hooks/useAiPlan.js
 import { useCallback, useState } from "react";
 import { API_URL } from "../../config/api"; // 👈 adjust path if needed
 import { getJsonAuthHeaders } from "../lib/api/authHeaders";

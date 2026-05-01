@@ -1,6 +1,6 @@
 // app/(protected)/train/index.jsx
 import { LinearGradient } from "expo-linear-gradient";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import {
   addDoc,
   collection,
@@ -35,12 +35,12 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Feather from "../../components/LucideFeather";
+import Feather from "../../../components/LucideFeather";
 
 import { API_URL } from "../../../config/api";
 import { auth, db } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
-import { MASON_COACH_TEMPLATE_DOCS } from "./data/coachTemplates";
+import { MASON_COACH_TEMPLATE_DOCS } from "../../../src/train/data/coachTemplates";
 
 /* ──────────────────────────────────────────────────────────────
    Helpers + constants
@@ -62,6 +62,7 @@ const TRAIN_INDEX_SCREEN_CACHE = {
   sessionLogMap: {},
   sessionLogsReady: false,
   sessionLogsReadyKey: "",
+  scrollOffsetY: 0,
   weekStripWidth: 0,
   coachPlans: [],
   coachPlansLoaded: false,
@@ -1194,6 +1195,54 @@ function resolveSessionLogStatus(log) {
   return "";
 }
 
+function trainSessionIsoDate(session) {
+  const explicit = String(session?.date || session?.isoDate || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(explicit)) return explicit;
+
+  const parsed =
+    parseDateLike(session?.completedAt) ||
+    parseDateLike(session?.updatedAt) ||
+    parseDateLike(session?.createdAt);
+
+  return parsed ? toISODate(parsed) : "";
+}
+
+function isUnlinkedCompletedTrainSession(session, linkedTrainSessionIds = new Set()) {
+  if (!session?.id) return false;
+  if (linkedTrainSessionIds.has(String(session.id))) return false;
+  if (String(session?.sessionKey || "").trim()) return false;
+  if (Number.isFinite(Number(session?.weekIndex)) && Number.isFinite(Number(session?.dayIndex))) {
+    return false;
+  }
+
+  const status = String(session?.status || "").trim().toLowerCase();
+  return (
+    status === "completed" ||
+    !!session?.completedAt ||
+    !!session?.actualDurationMin ||
+    !!session?.actualDistanceKm ||
+    Number(session?.workout?.totalDurationSec || 0) > 0 ||
+    Number(session?.workout?.totalDistanceKm || 0) > 0
+  );
+}
+
+function completedTrainSessionMeta(session) {
+  const durationMin =
+    session?.workout?.totalDurationSec != null
+      ? Math.round(Number(session.workout.totalDurationSec || 0) / 60)
+      : session?.actualDurationMin ?? session?.durationMin ?? session?.targetDurationMin ?? null;
+
+  const distanceKm =
+    session?.workout?.totalDistanceKm != null
+      ? session.workout.totalDistanceKm
+      : session?.actualDistanceKm ?? session?.distanceKm ?? session?.targetDistanceKm ?? null;
+
+  const parts = [];
+  if (durationMin) parts.push(`${Math.round(Number(durationMin))}m`);
+  if (distanceKm) parts.push(`${Number(distanceKm).toFixed(1)}k`);
+  return parts.join(" · ");
+}
+
 function isResolvedSessionStatus(status) {
   return status === "completed" || status === "skipped";
 }
@@ -1447,6 +1496,10 @@ function ActionRowButton({ icon, label, theme, onPress, primary = false }) {
 ────────────────────────────────────────────────────────────── */
 export default function TrainIndex() {
   const theme = useScreenTheme();
+  const quietSectionSurface = theme.isDark ? withHexAlpha(theme.card, "A6") : withHexAlpha(theme.card, "D9");
+  const quietInsetSurface = theme.isDark ? withHexAlpha(theme.card2, "8F") : withHexAlpha(theme.card2, "E8");
+  const quietBorder = theme.isDark ? withHexAlpha(theme.border, "A3") : withHexAlpha(theme.border, "C2");
+  const sectionRuleColor = theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(17,17,17,0.08)";
   const router = useRouter();
   const {
     returnWeekIndex: returnWeekIndexParam,
@@ -1466,6 +1519,10 @@ export default function TrainIndex() {
     ),
     WEEK_CAROUSEL_FALLBACK_WIDTH
   );
+  const initialScrollOffsetY =
+    hasWarmCache && Number.isFinite(Number(TRAIN_INDEX_SCREEN_CACHE.scrollOffsetY))
+      ? Math.max(0, Number(TRAIN_INDEX_SCREEN_CACHE.scrollOffsetY))
+      : 0;
 
   const [loading, setLoading] = useState(() => !hasWarmCache);
   const [plan, setPlan] = useState(() =>
@@ -1519,6 +1576,7 @@ export default function TrainIndex() {
       ? TRAIN_INDEX_SCREEN_CACHE.sessionLogMap
       : {}
   );
+  const [completedTrainSessions, setCompletedTrainSessions] = useState([]);
   const [sessionLogsReady, setSessionLogsReady] = useState(() =>
     hasWarmCache ? !!TRAIN_INDEX_SCREEN_CACHE.sessionLogsReady : false
   );
@@ -1541,6 +1599,10 @@ export default function TrainIndex() {
       )
     )
   ).current;
+  const mainScrollRef = useRef(null);
+  const initialScrollOffsetYRef = useRef(initialScrollOffsetY);
+  const latestScrollOffsetYRef = useRef(initialScrollOffsetYRef.current);
+  const pendingScrollRestoreRef = useRef(initialScrollOffsetY > 0);
   const weekCarouselAnimatingRef = useRef(false);
   const weekCarouselGestureRef = useRef(false);
   const latestPlanLoadRef = useRef(0);
@@ -1579,6 +1641,44 @@ export default function TrainIndex() {
       });
     },
     [currentWeekIndex, router, selectedDayIndex]
+  );
+
+  const handleMainScroll = useCallback((event) => {
+    const nextOffsetY = Math.max(
+      0,
+      Number(event?.nativeEvent?.contentOffset?.y || 0)
+    );
+    latestScrollOffsetYRef.current = nextOffsetY;
+    TRAIN_INDEX_SCREEN_CACHE.scrollOffsetY = nextOffsetY;
+  }, []);
+
+  const restoreScrollPosition = useCallback(() => {
+    if (!pendingScrollRestoreRef.current || loading) return;
+
+    const targetY = Math.max(0, Number(latestScrollOffsetYRef.current || 0));
+    if (!(targetY > 0)) {
+      pendingScrollRestoreRef.current = false;
+      return;
+    }
+
+    const scrollNode = mainScrollRef.current;
+    if (!scrollNode || typeof scrollNode.scrollTo !== "function") return;
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const liveNode = mainScrollRef.current;
+        if (!liveNode || typeof liveNode.scrollTo !== "function") return;
+        pendingScrollRestoreRef.current = false;
+        liveNode.scrollTo({ x: 0, y: targetY, animated: false });
+      });
+    });
+  }, [loading]);
+
+  useFocusEffect(
+    useCallback(() => {
+      pendingScrollRestoreRef.current = true;
+      restoreScrollPosition();
+    }, [restoreScrollPosition])
   );
 
   const openHistorySessionFromTrain = useCallback(
@@ -1990,6 +2090,7 @@ export default function TrainIndex() {
         sessionLogMap: {},
         sessionLogsReady: false,
         sessionLogsReadyKey: "",
+        scrollOffsetY: 0,
         weekStripWidth: 0,
         coachPlans: [],
         coachPlansLoaded: false,
@@ -2010,6 +2111,7 @@ export default function TrainIndex() {
       sessionLogMap,
       sessionLogsReady,
       sessionLogsReadyKey,
+      scrollOffsetY: latestScrollOffsetYRef.current,
       weekStripWidth,
       coachPlans,
       coachPlansLoaded: true,
@@ -2028,6 +2130,10 @@ export default function TrainIndex() {
     sessionLogsReadyKey,
     weekStripWidth,
   ]);
+
+  useEffect(() => {
+    restoreScrollPosition();
+  }, [restoreScrollPosition, showEmptyPlanState, showResolvedPlanState]);
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -2094,6 +2200,32 @@ export default function TrainIndex() {
       });
     };
   }, [activePlanIds, activePlanKey, sessionLogsReadyKey]);
+
+  useEffect(() => {
+    const uid = currentUid;
+    if (!uid) {
+      setCompletedTrainSessions([]);
+      return;
+    }
+
+    const ref = collection(db, "users", uid, "trainSessions");
+    const unsub = onSnapshot(
+      query(ref, orderBy("completedAt", "desc"), limit(80)),
+      (snap) => {
+        setCompletedTrainSessions(snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })));
+      },
+      (e) => {
+        console.log("[train] completed train sessions snapshot error:", e);
+        setCompletedTrainSessions([]);
+      }
+    );
+
+    return () => {
+      try {
+        unsub?.();
+      } catch {}
+    };
+  }, [currentUid]);
 
   const visibleWeeksCount = useMemo(() => {
     if (!hasPlan) return 0;
@@ -2359,6 +2491,32 @@ export default function TrainIndex() {
 
   const todayIso = useMemo(() => toISODate(calendarNow), [calendarNow]);
 
+  const linkedTrainSessionIds = useMemo(() => {
+    const ids = new Set();
+    Object.values(sessionLogMap || {}).forEach((log) => {
+      const id = String(log?.lastTrainSessionId || "").trim();
+      if (id) ids.add(id);
+    });
+    return ids;
+  }, [sessionLogMap]);
+
+  const extraCompletedSessionsByIso = useMemo(() => {
+    const byIso = {};
+    (Array.isArray(completedTrainSessions) ? completedTrainSessions : []).forEach((session) => {
+      if (!isUnlinkedCompletedTrainSession(session, linkedTrainSessionIds)) return;
+      const isoDate = trainSessionIsoDate(session);
+      if (!isoDate) return;
+      if (!byIso[isoDate]) byIso[isoDate] = [];
+      byIso[isoDate].push(session);
+    });
+
+    Object.values(byIso).forEach((sessions) => {
+      sessions.sort((a, b) => timestampMs(a?.completedAt || a?.createdAt) - timestampMs(b?.completedAt || b?.createdAt));
+    });
+
+    return byIso;
+  }, [completedTrainSessions, linkedTrainSessionIds]);
+
   const buildWeekGrid = useCallback((weekData, sourceWeekIndex) => {
     const safeWeekIndex = Number.isFinite(Number(sourceWeekIndex))
       ? Math.round(Number(sourceWeekIndex))
@@ -2410,7 +2568,30 @@ export default function TrainIndex() {
         };
       });
 
-      const sessionSummary = summariseCardStatuses(cards);
+      const extraCards = (extraCompletedSessionsByIso[isoDate] || []).map((session, extraIdx) => {
+        const title =
+          session?.title ||
+          session?.name ||
+          session?.sessionType ||
+          session?.primaryActivity ||
+          "Completed session";
+        return {
+          sess: session,
+          title,
+          meta: completedTrainSessionMeta(session),
+          guidance: session?.notes || "",
+          key: null,
+          log: null,
+          status: "completed",
+          savedTrainSessionId: String(session?.id || "").trim() || null,
+          linkedActivity: session?.linkedActivity || null,
+          isExtraCompletedSession: true,
+          extraSessionIndex: extraIdx,
+        };
+      });
+
+      const allCards = [...cards, ...extraCards];
+      const sessionSummary = summariseCardStatuses(allCards);
 
       const dateLabel = fmtDayDate(date);
       const short = new Date(date).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
@@ -2423,11 +2604,11 @@ export default function TrainIndex() {
         dateShort: short,
         isoDate,
         isToday,
-        cards,
+        cards: allCards,
         sessionSummary,
       };
     });
-  }, [plan?.id, planWeekZeroStart, sessionLogMap, todayIso]);
+  }, [extraCompletedSessionsByIso, plan?.id, planWeekZeroStart, sessionLogMap, todayIso]);
 
   const weekGrid = useMemo(
     () => buildWeekGrid(week, currentWeekIndex),
@@ -2865,6 +3046,12 @@ export default function TrainIndex() {
       body: `${weekTotals.sessions} sessions planned this week. Nail ${String(todayHero?.dayLabel || "this day").toLowerCase()}, then build from there.`,
     };
   }, [hasPlan, todayFirst, nextSession, weekTotals.sessions, todayHero?.dayLabel]);
+  const insightBasisLabel = useMemo(() => {
+    if (!hasPlan) return "Based on your current setup";
+    if (!todayFirst && nextSession) return `Next planned: ${nextSession.dayLabel}`;
+    if (todayHero?.title) return "Based on today's session";
+    return "Based on this week's plan";
+  }, [hasPlan, nextSession, todayHero?.title]);
 
   const openDaySheet = useCallback((idx) => {
     setDaySheetIndex(idx);
@@ -3070,10 +3257,19 @@ export default function TrainIndex() {
         pointerEvents="none"
       />
       <ScrollView
+        ref={mainScrollRef}
         style={{ flex: 1 }}
         contentInsetAdjustmentBehavior="never"
         automaticallyAdjustContentInsets={false}
+        contentOffset={
+          initialScrollOffsetYRef.current > 0
+            ? { x: 0, y: initialScrollOffsetYRef.current }
+            : undefined
+        }
         contentContainerStyle={s.pageContent}
+        onContentSizeChange={restoreScrollPosition}
+        onScroll={handleMainScroll}
+        scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
@@ -3539,7 +3735,7 @@ export default function TrainIndex() {
                 <TouchableOpacity
                   onPress={() => (nextSession.key ? goToSession(nextSession.key) : openDaySheet(nextSession.dayIdx))}
                   activeOpacity={0.85}
-                  style={[s.sessionRow, { marginTop: 8, backgroundColor: theme.card2, borderColor: theme.border }]}
+                  style={[s.sessionRow, { marginTop: 8, backgroundColor: quietInsetSurface, borderColor: quietBorder }]}
                 >
                   <View style={[s.sessionIcon, { borderColor: theme.border }]}>
                     <Feather name={typeIconName(nextSession.sess)} size={16} color={theme.text} />
@@ -3558,7 +3754,7 @@ export default function TrainIndex() {
                   <Feather name="chevron-right" size={18} color={theme.subtext} />
                 </TouchableOpacity>
               ) : (
-                <View style={[s.restCard, { marginTop: 8, borderColor: theme.border, backgroundColor: theme.card2 }]}>
+                <View style={[s.restCard, { marginTop: 8, borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
                   <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>No next session scheduled</Text>
                   <Text style={{ color: theme.subtext, marginTop: 4, fontSize: 12 }}>
                     If you train today, use Quick log to keep your record complete.
@@ -3570,7 +3766,7 @@ export default function TrainIndex() {
             {/* Plan progress */}
             <View style={s.section}>
               <Text style={[s.sectionTitle, { color: theme.text }]}>Plan progress</Text>
-              <View style={[s.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              <View style={[s.progressSectionWrap, { borderTopColor: sectionRuleColor }]}>
                 <View style={s.progressTopRow}>
                   <View style={s.progressPlanCol}>
                     <Text style={[s.progressKicker, { color: theme.subtext }]}>Active block</Text>
@@ -3582,33 +3778,33 @@ export default function TrainIndex() {
                     </Text>
                   </View>
 
-                  <View style={[s.progressPercentChip, { backgroundColor: theme.card2, borderColor: theme.border }]}>
+                  <View style={[s.progressPercentChip, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
                     <Text style={[s.progressPercentValue, { color: theme.text }]}>{planProgress}%</Text>
                     <Text style={[s.progressPercentLabel, { color: theme.subtext }]}>complete</Text>
                   </View>
                 </View>
 
                 <View style={s.progressMetaRow}>
-                  <View style={[s.progressStateChip, { backgroundColor: theme.card2, borderColor: theme.border }]}>
+                  <View style={[s.progressStateChip, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
                     <Text style={[s.progressStateText, { color: theme.text }]}>{progressStateLabel}</Text>
                   </View>
                   <Text style={[s.progressLabel, { color: theme.subtext }]}>Estimated block completion</Text>
                 </View>
 
-                <View style={[s.progressTrack, { backgroundColor: theme.card2, borderColor: theme.border }]}>
+                <View style={[s.progressTrack, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
                   <View style={[s.progressFill, { backgroundColor: theme.primaryBg, width: `${planProgress}%` }]} />
                 </View>
 
                 <View style={s.progressStatsRow}>
-                  <View style={[s.progressStatCard, { backgroundColor: theme.card2, borderColor: theme.border }]}>
+                  <View style={[s.progressStatCard, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
                     <Text style={[s.progressStatValue, { color: theme.text }]}>{weekTotals.sessions}</Text>
                     <Text style={[s.progressStatLabel, { color: theme.subtext }]}>Sessions</Text>
                   </View>
-                  <View style={[s.progressStatCard, { backgroundColor: theme.card2, borderColor: theme.border }]}>
+                  <View style={[s.progressStatCard, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
                     <Text style={[s.progressStatValue, { color: theme.text }]}>{weekTotals.mins}</Text>
                     <Text style={[s.progressStatLabel, { color: theme.subtext }]}>Minutes</Text>
                   </View>
-                  <View style={[s.progressStatCard, { backgroundColor: theme.card2, borderColor: theme.border }]}>
+                  <View style={[s.progressStatCard, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
                     <Text style={[s.progressStatValue, { color: theme.text }]}>{`${weekTotals.km} km`}</Text>
                     <Text style={[s.progressStatLabel, { color: theme.subtext }]}>Distance</Text>
                   </View>
@@ -3623,32 +3819,33 @@ export default function TrainIndex() {
             {/* Coach insight */}
             <View style={s.section}>
               <Text style={[s.sectionTitle, { color: theme.text }]}>Coach insight</Text>
-              <View style={[s.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-                <View style={s.cardHeadRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[s.cardTitle, { color: theme.text }]}>{insight.title}</Text>
-                    <Text style={{ color: theme.subtext, marginTop: 6, fontSize: 13, lineHeight: 20 }}>
-                      {insight.body}
-                    </Text>
-                  </View>
-                  <View style={[s.insightIconWrap, { backgroundColor: theme.primaryBg }]}>
-                    <Feather name="message-circle" size={15} color={theme.primaryText} />
-                  </View>
+              <View style={[s.insightBlock, { borderTopColor: sectionRuleColor }]}>
+                <Text style={[s.insightKicker, { color: theme.subtext }]}>Today</Text>
+                <Text style={[s.insightHeadline, { color: theme.text }]}>{insight.title}</Text>
+                <Text style={[s.insightBody, { color: theme.subtext }]}>
+                  {insight.body}
+                </Text>
+                <View style={s.insightMetaRow}>
+                  <View style={[s.insightMetaDot, { backgroundColor: theme.primaryBg }]} />
+                  <Text style={[s.insightMetaText, { color: theme.subtext }]}>{insightBasisLabel}</Text>
                 </View>
 
-                <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+                <View style={s.insightActionsRow}>
                   <ActionRowButton
                     icon="message-circle"
                     label="Ask coach"
                     theme={theme}
+                    primary
                     onPress={() => router.push("/chat")}
                   />
-                  <ActionRowButton
-                    icon="plus-circle"
-                    label="Quick log"
-                    theme={theme}
+                  <TouchableOpacity
                     onPress={() => openQuickRecord(focusedDay ? focusedDay.dayIdx : 0)}
-                  />
+                    activeOpacity={0.8}
+                    style={s.insightTextLink}
+                  >
+                    <Text style={[s.insightTextLinkLabel, { color: theme.text }]}>Quick log</Text>
+                    <Feather name="arrow-up-right" size={13} color={theme.subtext} />
+                  </TouchableOpacity>
                 </View>
               </View>
             </View>
@@ -3691,10 +3888,10 @@ export default function TrainIndex() {
                   return (
                     <View
                       key={sample.key}
-                      style={[s.sampleFeaturedCard, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+                      style={[s.sampleFeaturedCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
                     >
                       <View style={s.sampleFeaturedTop}>
-                        <View style={[s.sampleTypePill, { borderColor: theme.border, backgroundColor: theme.card }]}>
+                        <View style={[s.sampleTypePill, { borderColor: quietBorder, backgroundColor: quietSectionSurface }]}>
                           <Feather name={sampleIconName(sample.type)} size={13} color={theme.text} />
                           <Text style={[s.sampleTypeText, { color: theme.text }]}>{sample.type}</Text>
                         </View>
@@ -3735,7 +3932,7 @@ export default function TrainIndex() {
             {/* Guided get started */}
             <View style={s.section}>
               <Text style={[s.sectionTitle, { color: theme.text }]}>Get started</Text>
-              <View style={[s.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              <View style={[s.card, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}>
                 <Text style={[s.cardTitle, { color: theme.text }]}>One simple next step</Text>
                 <Text style={{ color: theme.subtext, marginTop: 6, fontSize: 13, lineHeight: 20 }}>
                   {NO_PLAN_NOTE}
@@ -3752,7 +3949,7 @@ export default function TrainIndex() {
 
                 <TouchableOpacity
                   onPress={() => openQuickRecord(focusedDay ? focusedDay.dayIdx : 0)}
-                  style={[s.secondaryGhost, { borderColor: theme.border, backgroundColor: theme.card2, marginTop: 10 }]}
+                  style={[s.secondaryGhost, { borderColor: quietBorder, backgroundColor: quietInsetSurface, marginTop: 10 }]}
                   activeOpacity={0.85}
                 >
                   <Feather name="plus-circle" size={14} color={theme.text} />
@@ -3763,7 +3960,7 @@ export default function TrainIndex() {
           </>
         ) : (
           <View style={s.section}>
-            <View style={[s.restCard, { borderColor: theme.border, backgroundColor: theme.card2 }]}>
+            <View style={[s.restCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
               <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>Loading active plan</Text>
               <Text style={{ color: theme.subtext, marginTop: 4, fontSize: 12 }}>
                 Pulling your latest schedule so the correct sessions show straight away.
@@ -3778,7 +3975,7 @@ export default function TrainIndex() {
             <Text style={[s.sectionTitle, { color: theme.text }]}>Explore</Text>
             <TouchableOpacity
               onPress={() => setMoreOpen(true)}
-              style={[s.coachBrowseBtn, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+              style={[s.coachBrowseBtn, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
               activeOpacity={0.85}
             >
               <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>More</Text>
@@ -3789,12 +3986,12 @@ export default function TrainIndex() {
             Secondary discovery: coach templates and training knowledge.
           </Text>
 
-          <View style={[s.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+          <View style={[s.card, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}>
             <View style={s.sectionHead}>
               <Text style={[s.cardTitle, { color: theme.text }]}>Coach set plans</Text>
               <TouchableOpacity
                 onPress={() => router.push("/train/coach-plans")}
-                style={[s.coachBrowseBtn, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+                style={[s.coachBrowseBtn, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
                 activeOpacity={0.85}
               >
                 <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>Browse all</Text>
@@ -3805,7 +4002,7 @@ export default function TrainIndex() {
             {hasRunPlan && !hasStrengthPlan ? (
               <TouchableOpacity
                 onPress={() => router.push("/train/create/create-strength")}
-                style={[s.exploreAssistRow, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+                style={[s.exploreAssistRow, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
                 activeOpacity={0.85}
               >
                 <Feather name="bar-chart-2" size={14} color={theme.text} />
@@ -3818,7 +4015,7 @@ export default function TrainIndex() {
             {hasStrengthPlan && !hasRunPlan ? (
               <TouchableOpacity
                 onPress={() => router.push("/train/create/create-run")}
-                style={[s.exploreAssistRow, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+                style={[s.exploreAssistRow, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
                 activeOpacity={0.85}
               >
                 <Feather name="activity" size={14} color={theme.text} />
@@ -3847,10 +4044,10 @@ export default function TrainIndex() {
                   return (
                     <View
                       key={`${cp.sourceCollection}_${cp.id}`}
-                      style={[s.coachPlanCard, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+                      style={[s.coachPlanCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
                     >
                       <View style={s.coachPlanTop}>
-                        <View style={[s.coachTypePill, { backgroundColor: theme.card, borderColor: theme.border }]}>
+                        <View style={[s.coachTypePill, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}>
                           <Feather name={kindIcon} size={12} color={theme.text} />
                           <Text style={[s.coachTypePillText, { color: theme.text }]}>{kindLabel}</Text>
                         </View>
@@ -3869,7 +4066,7 @@ export default function TrainIndex() {
                       <View style={s.coachPlanActions}>
                         <TouchableOpacity
                           onPress={() => viewCoachPlan(cp)}
-                          style={[s.coachActionBtn, { borderColor: theme.border, backgroundColor: theme.card }]}
+                          style={[s.coachActionBtn, { borderColor: quietBorder, backgroundColor: quietSectionSurface }]}
                           activeOpacity={0.85}
                         >
                           <Feather name="eye" size={13} color={theme.text} />
@@ -3915,7 +4112,7 @@ export default function TrainIndex() {
                 })}
               </ScrollView>
             ) : (
-              <View style={[s.restCard, { borderColor: theme.border, backgroundColor: theme.card2 }]}>
+              <View style={[s.restCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
                 <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>No coach plans published</Text>
                 <Text style={{ color: theme.subtext, marginTop: 4, fontSize: 12 }}>
                   Coach-set templates will appear here as they’re published.
@@ -3940,7 +4137,7 @@ export default function TrainIndex() {
                     params: { mode: "ai" },
                   })
                 }
-                style={[s.coachBrowseBtn, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+                style={[s.coachBrowseBtn, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
                 activeOpacity={0.85}
               >
                 <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>Generate</Text>
@@ -5060,6 +5257,11 @@ const s = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
+  progressSectionWrap: {
+    marginTop: 8,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
   progressPlanCol: {
     flex: 1,
   },
@@ -5163,13 +5365,63 @@ const s = StyleSheet.create({
     fontWeight: "500",
     lineHeight: 18,
   },
-
-  insightIconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
+  insightBlock: {
+    marginTop: 8,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  insightKicker: {
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.7,
+  },
+  insightHeadline: {
+    marginTop: 5,
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+  },
+  insightBody: {
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: "500",
+    maxWidth: "92%",
+  },
+  insightMetaRow: {
+    marginTop: 10,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 7,
+  },
+  insightMetaDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 999,
+  },
+  insightMetaText: {
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  insightActionsRow: {
+    marginTop: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  insightTextLink: {
+    minHeight: 40,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 2,
+  },
+  insightTextLinkLabel: {
+    fontSize: 13,
+    fontWeight: "700",
   },
 
   actionRowBtn: {

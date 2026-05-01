@@ -1,5 +1,6 @@
 // app/(protected)/train/utils/planModel.js
 import { serverTimestamp } from "firebase/firestore";
+import { withPlanAdaptationDefaults } from "./adaptationModel";
 
 // Days used across the plan (keep in sync with create.jsx)
 export const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -415,7 +416,7 @@ export function createPlanDocument({ appPlan, aiPlan, meta, config }) {
 
   const flatSessions = flattenPlanSessions(appPlan || {});
 
-  return {
+  return withPlanAdaptationDefaults({
     // Base plan structure (weeks etc.)
     ...appPlan,
 
@@ -442,5 +443,5 @@ export function createPlanDocument({ appPlan, aiPlan, meta, config }) {
 
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  };
+  });
 }

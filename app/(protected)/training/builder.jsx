@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * app/(protected)/plans/builder.jsx
+ * app/(protected)/training/builder.jsx
  * Next-level builder (client-side):
  * - Adds user-specific pace bands (derived from 5K/10K) into the prompt
  * - Stronger contract wording for strength: primary lifts + accessories + strict fields

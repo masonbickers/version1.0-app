@@ -24,7 +24,7 @@ import {
   getCoachTemplateById,
   parsePaceToSecPerKm,
   personaliseCoachTemplateDoc,
-} from "./data/coachTemplates";
+} from "../../../src/train/data/coachTemplates";
 
 const TEN_K_PACE_OPTIONS = Array.from({ length: ((8 * 60 - 3 * 60 - 30) / 5) + 1 }, (_, idx) =>
   formatSecPerKm(3 * 60 + 30 + idx * 5)

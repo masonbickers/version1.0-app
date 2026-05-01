@@ -444,7 +444,7 @@ export default function FindRacePage() {
                   }}
                 >
                   Getting your location… if this hangs, try switching distance to
-                  "Anywhere".
+                  &quot;Anywhere&quot;.
                 </Text>
               )}
           </View>
@@ -505,7 +505,7 @@ export default function FindRacePage() {
                   marginTop: 2,
                 }}
               >
-                Add a race date on the form to enable "Around my date".
+                Add a race date on the form to enable &quot;Around my date&quot;.
               </Text>
             )}
           </View>

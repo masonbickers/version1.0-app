@@ -40,7 +40,7 @@ export default function LoginLanding() {
           </Link>
 
           <View style={s.footerRow}>
-            <Text style={s.footerPrompt}>Don't have an account?</Text>
+            <Text style={s.footerPrompt}>Don&apos;t have an account?</Text>
             <Link href="/(auth)/signup" asChild>
               <TouchableOpacity activeOpacity={0.85}>
                 <Text style={s.footerLink}>Sign up</Text>

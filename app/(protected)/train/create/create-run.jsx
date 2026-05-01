@@ -30,6 +30,7 @@ import { API_URL } from "../../../../config/api";
 import { auth, db } from "../../../../firebaseConfig";
 import { useTheme } from "../../../../providers/ThemeProvider";
 import { getJsonAuthHeaders } from "../../../../src/lib/api/authHeaders";
+import { withPlanAdaptationDefaults } from "../../../../src/lib/train/adaptationModel";
 
 /* ------------------------------------------------------------------ */
 /* CONFIG                                                             */
@@ -1286,7 +1287,7 @@ export default function CreateRunPlan() {
         ? `${targetEventName} – ${normalisedGoalDistance}`
         : `${normalisedGoalDistance} plan`;
 
-      const planDoc = {
+      const planDoc = withPlanAdaptationDefaults({
         kind: "run",
         source: "generate-run",
         status: "generated",
@@ -1301,7 +1302,7 @@ export default function CreateRunPlan() {
         athleteProfile,
         plan: generatedPlan,
         debug: { weeks: weeksCount, week0Sessions },
-      };
+      });
 
       await addDoc(collection(db, "users", uid, "plans"), planDoc);
 

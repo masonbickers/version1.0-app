@@ -522,6 +522,52 @@ function buildRunCompletionReview(payload, notesValue) {
   };
 }
 
+function compactRunReviewForStorage(runReview) {
+  if (!runReview || typeof runReview !== "object") return null;
+
+  return {
+    planned: {
+      workCount: Number(runReview?.planned?.workCount || 0) || 0,
+      recoveryCount: Number(runReview?.planned?.recoveryCount || 0) || 0,
+      workDistanceKm: Number.isFinite(Number(runReview?.planned?.workDistanceKm))
+        ? Number(Number(runReview.planned.workDistanceKm).toFixed(2))
+        : null,
+      targetPaceSec: Number.isFinite(Number(runReview?.planned?.targetPaceSec))
+        ? Math.round(Number(runReview.planned.targetPaceSec))
+        : null,
+    },
+    actual: {
+      sourceKey: String(runReview?.actual?.sourceKey || "").trim() || null,
+      analysedLapCount: Number(runReview?.actual?.analysedLapCount || 0) || 0,
+      avgWorkPaceSec: Number.isFinite(Number(runReview?.actual?.avgWorkPaceSec))
+        ? Math.round(Number(runReview.actual.avgWorkPaceSec))
+        : null,
+      fastestWorkPaceSec: Number.isFinite(Number(runReview?.actual?.fastestWorkPaceSec))
+        ? Math.round(Number(runReview.actual.fastestWorkPaceSec))
+        : null,
+      consistencySec: Number.isFinite(Number(runReview?.actual?.consistencySec))
+        ? Math.round(Number(runReview.actual.consistencySec))
+        : null,
+      completionRate: Number.isFinite(Number(runReview?.actual?.completionRate))
+        ? Number(Number(runReview.actual.completionRate).toFixed(3))
+        : null,
+      actualWorkDistanceKm: Number.isFinite(Number(runReview?.actual?.actualWorkDistanceKm))
+        ? Number(Number(runReview.actual.actualWorkDistanceKm).toFixed(2))
+        : null,
+      targetDeltaSec: Number.isFinite(Number(runReview?.actual?.targetDeltaSec))
+        ? Math.round(Number(runReview.actual.targetDeltaSec))
+        : null,
+    },
+    analysis: {
+      reviewSource: String(runReview?.analysis?.reviewSource || "").trim() || null,
+      generatedAtMs: Number.isFinite(Number(runReview?.analysis?.generatedAtMs))
+        ? Number(runReview.analysis.generatedAtMs)
+        : Date.now(),
+      summary: String(runReview?.analysis?.summary || "").trim() || null,
+    },
+  };
+}
+
 function SummaryStat({ label, value, sub, colors, accent = null }) {
   return (
     <View
@@ -883,6 +929,8 @@ export default function SessionCompleteScreen() {
 
       let trainSessionPayload;
       let sessionDate = getLocalDateOnly();
+      const storedRunReview =
+        status === "completed" && hasLiveDraft ? compactRunReviewForStorage(runReview) : null;
 
       if (hasLiveDraft) {
         const payload = pendingSaveDraft?.payload || {};
@@ -897,6 +945,12 @@ export default function SessionCompleteScreen() {
 
         if (status === "completed" && runReview?.analysis) {
           trainSessionPayload.analysis = runReview.analysis;
+        }
+        if (status === "completed" && storedRunReview) {
+          trainSessionPayload.runReview = storedRunReview;
+        } else if (status !== "completed" && hasExistingTrainSession) {
+          trainSessionPayload.analysis = deleteField();
+          trainSessionPayload.runReview = deleteField();
         }
       } else {
         const plannedRecord = await loadPlannedSessionRecord(uid, encodedKey);
@@ -972,6 +1026,12 @@ export default function SessionCompleteScreen() {
         if (status === "completed" && trainSessionPayload?.analysis) {
           sessionLogPayload.analysis = trainSessionPayload.analysis;
         }
+        if (status === "completed" && trainSessionPayload?.runReview) {
+          sessionLogPayload.runReview = trainSessionPayload.runReview;
+        } else if (status !== "completed" && existingLogSnap.exists()) {
+          sessionLogPayload.analysis = deleteField();
+          sessionLogPayload.runReview = deleteField();
+        }
       }
 
       if (!existingLogSnap.exists()) {
@@ -1027,7 +1087,7 @@ export default function SessionCompleteScreen() {
     notes,
     pendingSaveDraft,
     router,
-    runReview?.analysis,
+    runReview,
     status,
   ]);
 

@@ -13,7 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { db } from "../../firebaseConfig";
 import { useAuth } from "../../providers/AuthProvider";
 import { useTheme } from "../../providers/ThemeProvider";
-import Footer from "../components/Footer";
+import Footer from "../../components/Footer";
 
 export default function ProtectedLayout() {
   const { user, loading } = useAuth();
@@ -92,8 +92,6 @@ export default function ProtectedLayout() {
     // ✅ Hide footer on Settings
     const isSettings = s0 === "(protected)" && s1 === "settings";
 
-    const iscolours = s0 === "(protected)" && s1 === "colours";
-    const isfonts = s0 === "(protected)" && s1 === "fonts";
     const isWelcome = s0 === "(protected)" && s1 === "welcome";
 
     // ✅ Hide footer on specific Nutrition screens
@@ -135,14 +133,16 @@ export default function ProtectedLayout() {
       s0 === "(protected)" && s1 === "me" && s2 === "activity";
     const isHistoryActivityDetail =
       s0 === "(protected)" && s1 === "history" && !!s2;
+    const isCameraScreen = s0 === "(protected)" && s1 === "camera";
+    const isHomeCalendar =
+      s0 === "(protected)" && s1 === "home" && s2 === "calendar";
+    const isProfileRoute = s0 === "(protected)" && s1 === "profile";
 
     return (
       isTrainOnboarding ||
       isAnyOnboarding ||
       isFullscreenNutrition ||
       isSettings ||
-      iscolours ||
-      isfonts ||
       isWelcome ||
       isTrainSession ||
       isTrainCoachPlans ||
@@ -150,6 +150,9 @@ export default function ProtectedLayout() {
       isTrainHistoryDetail ||
       isMeActivityDetail ||
       isHistoryActivityDetail ||
+      isCameraScreen ||
+      isProfileRoute ||
+      isHomeCalendar ||
       isTrainCreateFlow
     );
   }, [segments, isTrainCreateFlow]);

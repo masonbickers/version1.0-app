@@ -2,6 +2,7 @@
 import crypto from "crypto";
 import express from "express";
 import admin from "../admin.js";
+import { requireUser } from "../utils/requireUser.js";
 
 const router = express.Router();
 
@@ -101,26 +102,74 @@ async function safeJson(resp) {
   }
 }
 
+async function buildGarminAuthUrl({ uid, requestedReturnUrl }) {
+  const clientId = process.env.GARMIN_CLIENT_ID;
+  const redirectUri = process.env.GARMIN_REDIRECT_URI;
+
+  if (!clientId || !redirectUri) {
+    const error = new Error("Missing GARMIN_CLIENT_ID or GARMIN_REDIRECT_URI");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const safeRedirectToApp = pickBestReturnUrl(
+    requestedReturnUrl,
+    defaultDeepLinkOk()
+  );
+
+  const state = base64url(crypto.randomBytes(24));
+  const codeVerifier = randomString(64);
+  const codeChallenge = base64url(sha256(codeVerifier));
+
+  await putState(state, {
+    uid,
+    codeVerifier,
+    redirectToApp: safeRedirectToApp,
+  });
+
+  const params = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    code_challenge: codeChallenge,
+    code_challenge_method: "S256",
+    redirect_uri: redirectUri,
+    state,
+  });
+
+  return {
+    authUrl: `https://connect.garmin.com/oauth2Confirm?${params.toString()}`,
+    redirectUri,
+    returnUrl: safeRedirectToApp,
+  };
+}
+
+router.post("/start-url", requireUser, async (req, res) => {
+  try {
+    const uid = String(req.user?.uid || "").trim();
+    const requestedReturnUrl = String(req.body?.returnUrl || "").trim();
+    if (!uid) return res.status(401).json({ error: "Unauthenticated user" });
+
+    const result = await buildGarminAuthUrl({ uid, requestedReturnUrl });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    console.error("Garmin start-url error:", error?.message || error);
+    return res
+      .status(error?.statusCode || 500)
+      .json({ error: error?.message || "Failed to start Garmin OAuth" });
+  }
+});
+
 /**
- * GET /auth/garmin/start?uid=...&redirectToApp=...
+ * Local-development fallback. Production app builds use POST /auth/garmin/start-url.
  */
 router.get("/start", async (req, res) => {
   try {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(410).send("Use POST /auth/garmin/start-url.");
+    }
+
     const { uid, redirectToApp, returnUrl } = req.query;
     if (!uid) return res.status(400).send("Missing uid");
-
-    const clientId = process.env.GARMIN_CLIENT_ID;
-    const redirectUri = process.env.GARMIN_REDIRECT_URI;
-
-    if (!clientId || !redirectUri) {
-      console.error("Garmin start misconfig:", {
-        hasClientId: !!clientId,
-        hasRedirectUri: !!redirectUri,
-      });
-      return res
-        .status(500)
-        .send("Missing GARMIN_CLIENT_ID or GARMIN_REDIRECT_URI");
-    }
 
     const requestedReturnUrl =
       typeof redirectToApp === "string"
@@ -129,31 +178,11 @@ router.get("/start", async (req, res) => {
         ? returnUrl
         : "";
 
-    const safeRedirectToApp = pickBestReturnUrl(
-      requestedReturnUrl,
-      defaultDeepLinkOk()
-    );
-
-    const state = base64url(crypto.randomBytes(24));
-    const codeVerifier = randomString(64);
-    const codeChallenge = base64url(sha256(codeVerifier));
-
-    await putState(state, {
-      uid: String(uid),
-      codeVerifier,
-      redirectToApp: safeRedirectToApp,
-    });
-
-    const params = new URLSearchParams({
-      response_type: "code",
-      client_id: clientId,
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-      redirect_uri: redirectUri,
-      state,
-    });
-
-    const authUrl = `https://connect.garmin.com/oauth2Confirm?${params.toString()}`;
+    const { authUrl, redirectUri, returnUrl: safeRedirectToApp } =
+      await buildGarminAuthUrl({
+        uid: String(uid),
+        requestedReturnUrl,
+      });
 
     console.log("Garmin start:", {
       uid: String(uid),

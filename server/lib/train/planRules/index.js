@@ -827,6 +827,7 @@ function buildDecisionTrace({ profile, weeks, skeleton, targets }) {
 
   return {
     paceSource,
+    adaptation: profile?.adaptationTrace || null,
     phaseReason: buildPhaseReasonTrace(weeks, skeleton, targets),
     allocationReason: buildAllocationReasonTrace(weeks),
     repairsApplied: buildRepairsAppliedTrace(weeks),
@@ -974,7 +975,20 @@ export function buildRunPlanDraft(plan, athleteProfile) {
     taperLastNWeeks: p.taperLastNWeeks,
   });
 
-  const skeleton = skeletonOut;
+  const phaseOverrides = Array.isArray(p?.phaseOverrides) ? p.phaseOverrides : null;
+  const skeleton =
+    phaseOverrides && Array.isArray(skeletonOut?.weeks)
+      ? {
+          ...skeletonOut,
+          weeks: skeletonOut.weeks.map((week, index) => ({
+            ...week,
+            phase:
+              String(phaseOverrides[index] || "").toUpperCase().trim() ||
+              week?.phase ||
+              null,
+          })),
+        }
+      : skeletonOut;
   const spec = skeletonOut?.spec || null;
 
   // Phases from skeleton so progression agrees with skeleton
@@ -1075,6 +1089,9 @@ export function applyRunPlanRules(plan, athleteProfile) {
     paces: withFormattedPaces(profile),
     hrZones: profile?.hrZones || null,
     anchorTrace: profile?.anchorTrace || null,
+    adaptationTrace: profile?.adaptationTrace || null,
+    recentTrainingSummary: profile?.recentTrainingSummary || null,
+    recentReadinessSummary: profile?.recentReadinessSummary || null,
 
     recentRace: profile?.recentRace || null,
     difficulty: profile?.difficulty || null,

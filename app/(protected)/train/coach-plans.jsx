@@ -30,7 +30,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { auth, db } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
-import { MASON_COACH_TEMPLATE_DOCS } from "./data/coachTemplates";
+import { MASON_COACH_TEMPLATE_DOCS } from "../../../src/train/data/coachTemplates";
 
 const SPORT_ORDER = ["run", "strength", "hyrox", "hybrid", "training"];
 const LENGTH_OPTIONS = [
@@ -855,7 +855,7 @@ export default function CoachPlansPage() {
     [router]
   );
 
-  const useCoachPlan = useCallback(
+  const applyCoachPlan = useCallback(
     async (coachPlan) => {
       const uid = auth.currentUser?.uid;
       if (!uid) {
@@ -1454,7 +1454,7 @@ export default function CoachPlansPage() {
                         onPress={() =>
                           isLocalTemplate
                             ? router.push({ pathname: "/train/coach-plan-preview", params: { templateId: cp.id } })
-                            : useCoachPlan(cp)
+                            : applyCoachPlan(cp)
                         }
                         disabled={isUsing}
                         style={[

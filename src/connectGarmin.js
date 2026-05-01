@@ -1,3 +1,4 @@
+/* eslint-disable import/no-unresolved */
 import axios from "axios";
 import crypto from "crypto";
 import express from "express";

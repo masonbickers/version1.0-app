@@ -18,6 +18,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { auth, db } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
+import {
+  TRAINING_READINESS_COLLECTION,
+  buildTrainingReadinessEntryFromJournalEntry,
+} from "../../../src/lib/train/readinessModel";
 
 /* ---------------- helpers ---------------- */
 
@@ -261,6 +265,50 @@ export default function JournalCheckInPage() {
           stuckToPlan,
           // note
           eveningNote: eveningNote?.trim() || "",
+          updatedAt: Timestamp.now(),
+        },
+        { merge: true }
+      );
+
+      const readinessEntry = buildTrainingReadinessEntryFromJournalEntry(
+        {
+          dateKey,
+          date: new Date(dateKey),
+          sleepHours:
+            typeof sleepHours === "number" ? sleepHours : null,
+          sleepQuality:
+            typeof sleepQuality === "number" ? sleepQuality : null,
+          mood: typeof mood === "number" ? mood : null,
+          stress: typeof stress === "number" ? stress : null,
+          energy: typeof energy === "number" ? energy : null,
+          sorenessScore:
+            typeof soreness === "number" ? soreness : null,
+          alcohol,
+          caffeineLate,
+          screensLate,
+          travel,
+          illness,
+          painInjury,
+          workStress,
+          lifeStress,
+          trainedToday,
+          sessionRpe:
+            typeof sessionRpe === "number" ? sessionRpe : null,
+          stuckToPlan,
+          eveningNote: eveningNote?.trim() || "",
+        },
+        {
+          dateKey,
+          source: "journal",
+          updatedAtMs: Date.now(),
+          notes: eveningNote?.trim() || "",
+        }
+      );
+
+      await setDoc(
+        doc(db, "users", user.uid, TRAINING_READINESS_COLLECTION, dateKey),
+        {
+          ...readinessEntry,
           updatedAt: Timestamp.now(),
         },
         { merge: true }

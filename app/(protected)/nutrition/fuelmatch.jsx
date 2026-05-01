@@ -567,13 +567,7 @@ export default function FuelMatchPage() {
           <Text style={s.headerSub}>{dayLabel}</Text>
         </View>
 
-        <TouchableOpacity
-          onPress={() => router.push("/share")}
-          style={s.headerIcon}
-          activeOpacity={0.8}
-        >
-          <Feather name="share-2" size={18} color={colors.text} />
-        </TouchableOpacity>
+        <View style={s.headerIcon} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.scroll}>

@@ -20,6 +20,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { API_URL } from "../../../config/api";
+import {
+  createEmptyRecentTrainingSummary,
+  summariseRecentTraining,
+} from "../../../src/lib/train/adaptationModel";
 import { useTheme } from "../../../providers/ThemeProvider";
 
 import { onAuthStateChanged } from "firebase/auth";
@@ -174,6 +178,16 @@ function formatMessageTime(message) {
   }
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function splitReplyForTypewriter(text) {
+  // Return words only (no whitespace tokens) for true "word-by-word" typing.
+  // Preserve existing spacing by joining with a single space during rendering.
+  return String(text || "").trim().match(/\S+/g) || [];
+}
+
 // ------------------------------------------------------
 function removeUndefinedDeep(value) {
   if (Array.isArray(value)) {
@@ -210,6 +224,48 @@ function safeToDate(tsLike) {
     (tsLike instanceof Date ? tsLike : new Date(tsLike));
   if (!d || Number.isNaN(d.getTime())) return null;
   return d;
+}
+
+function parseDateLike(value) {
+  if (!value) return null;
+
+  try {
+    if (typeof value?.toDate === "function") {
+      const fromTimestamp = value.toDate();
+      if (fromTimestamp instanceof Date && !Number.isNaN(fromTimestamp.getTime())) {
+        fromTimestamp.setHours(0, 0, 0, 0);
+        return fromTimestamp;
+      }
+    }
+  } catch {}
+
+  const raw =
+    typeof value === "string" || typeof value === "number" || value instanceof Date
+      ? value
+      : null;
+
+  if (!raw) return null;
+
+  if (raw instanceof Date) {
+    const out = new Date(raw);
+    out.setHours(0, 0, 0, 0);
+    return Number.isNaN(out.getTime()) ? null : out;
+  }
+
+  const ymdMatch = String(raw).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymdMatch) {
+    const yyyy = Number(ymdMatch[1]);
+    const mm = Number(ymdMatch[2]);
+    const dd = Number(ymdMatch[3]);
+    const out = new Date(yyyy, mm - 1, dd);
+    out.setHours(0, 0, 0, 0);
+    return Number.isNaN(out.getTime()) ? null : out;
+  }
+
+  const out = new Date(raw);
+  if (Number.isNaN(out.getTime())) return null;
+  out.setHours(0, 0, 0, 0);
+  return out;
 }
 
 // keep system message small (LLMs hate massive blobs)
@@ -473,12 +529,14 @@ function normalisePlanWeeksForContext(weeks) {
 
         const days = orderedLabels.map((label, dayIndex) => {
           const rawDay = dayMap.get(label) || { day: label || `Day ${dayIndex + 1}` };
+          const fallbackDay = rawDays?.[dayIndex] || null;
           const sessions = normaliseList(rawDay?.sessions)
             .map(summariseSessionForContext)
             .filter(Boolean);
 
           return {
             day: label || rawDay?.day || `Day ${dayIndex + 1}`,
+            date: rawDay?.date || rawDay?.isoDate || fallbackDay?.date || fallbackDay?.isoDate || null,
             sessions,
           };
         });
@@ -489,6 +547,8 @@ function normalisePlanWeeksForContext(weeks) {
             typeof week?.weekIndex0 === "number" ? week.weekIndex0 : weekIndex,
           weekNumber:
             typeof week?.weekNumber === "number" ? week.weekNumber : weekIndex + 1,
+          weekStartDate: week?.weekStartDate || week?.startDate || null,
+          weekEndDate: week?.weekEndDate || week?.endDate || null,
           days,
         };
       }
@@ -506,6 +566,8 @@ function normalisePlanWeeksForContext(weeks) {
           typeof week?.weekIndex0 === "number" ? week.weekIndex0 : weekIndex,
         weekNumber:
           typeof week?.weekNumber === "number" ? week.weekNumber : weekIndex + 1,
+        weekStartDate: week?.weekStartDate || week?.startDate || null,
+        weekEndDate: week?.weekEndDate || week?.endDate || null,
         days: [{ day: weekLabel, sessions }],
       };
     });
@@ -593,12 +655,92 @@ function selectActivePlans(docs) {
   };
 }
 
-function buildMergedExactSchedule(plans, maxItems = 24) {
+function resolvePlanWeekZeroStart(planDoc, sessionLogMap = null) {
+  if (!planDoc) return null;
+
+  const planId = String(planDoc?.id || "").trim();
+  if (planId && sessionLogMap && typeof sessionLogMap === "object") {
+    const anchorVotes = new Map();
+    Object.values(sessionLogMap).forEach((log) => {
+      if (String(log?.planId || "").trim() !== planId) return;
+      const weekIndex = Number(log?.weekIndex);
+      const dayIndex = Number(log?.dayIndex);
+      if (!Number.isFinite(weekIndex) || !Number.isFinite(dayIndex)) return;
+
+      const logDate =
+        parseDateLike(log?.date) ||
+        parseDateLike(log?.statusAt) ||
+        parseDateLike(log?.completedAt) ||
+        parseDateLike(log?.updatedAt) ||
+        parseDateLike(log?.createdAt);
+      if (!logDate) return;
+
+      const anchor = addDays(logDate, -(Math.round(weekIndex) * 7 + Math.round(dayIndex)));
+      anchor.setHours(0, 0, 0, 0);
+      const key = toISODate(anchor);
+      const prev = anchorVotes.get(key) || 0;
+      anchorVotes.set(key, prev + 1);
+    });
+
+    if (anchorVotes.size) {
+      const sorted = [...anchorVotes.entries()].sort((a, b) => {
+        if (b[1] !== a[1]) return b[1] - a[1];
+        return String(a[0]).localeCompare(String(b[0]));
+      });
+      const parsed = parseDateLike(sorted[0]?.[0]);
+      if (parsed) return startOfISOWeek(parsed);
+    }
+  }
+
+  const weeks = Array.isArray(planDoc?.weeks) ? planDoc.weeks : [];
+  for (let idx = 0; idx < weeks.length; idx += 1) {
+    const week = weeks[idx];
+    const weekIndex0 = Number.isFinite(Number(week?.weekIndex0))
+      ? Number(week.weekIndex0)
+      : idx;
+    const explicitWeekStart = parseDateLike(week?.weekStartDate || week?.startDate);
+    if (explicitWeekStart) {
+      return startOfISOWeek(addDays(explicitWeekStart, -(weekIndex0 * 7)));
+    }
+
+    const days = Array.isArray(week?.days) ? week.days : [];
+    for (let dayIdx = 0; dayIdx < days.length; dayIdx += 1) {
+      const explicitDayDate = parseDateLike(days[dayIdx]?.date || days[dayIdx]?.isoDate);
+      if (explicitDayDate) {
+        return startOfISOWeek(addDays(explicitDayDate, -(weekIndex0 * 7 + dayIdx)));
+      }
+    }
+  }
+
+  const fallbackStart = parseDateLike(
+    planDoc?.startDate ||
+      planDoc?.plan?.startDate ||
+      planDoc?.meta?.startDate ||
+      planDoc?.weekStartDate ||
+      planDoc?.plan?.weekStartDate ||
+      planDoc?.rawDoc?.startDate ||
+      planDoc?.rawDoc?.plan?.startDate ||
+      planDoc?.rawDoc?.meta?.startDate ||
+      planDoc?.createdAt ||
+      planDoc?.updatedAt ||
+      planDoc?.rawDoc?.createdAt ||
+      planDoc?.rawDoc?.updatedAt
+  );
+
+  return fallbackStart ? startOfISOWeek(fallbackStart) : null;
+}
+
+function buildMergedExactSchedule(plans, maxItems = 24, sessionLogMap = null) {
   const items = [];
-  const currentWeekStart = startOfISOWeek(new Date());
+  const now = new Date();
+  const todayIso = toISODate(now);
+  const currentWeekStart = startOfISOWeek(now);
+  const currentWeekStartIso = toISODate(currentWeekStart);
 
   (Array.isArray(plans) ? plans : []).forEach((plan) => {
     const weeks = Array.isArray(plan?.weeks) ? plan.weeks : [];
+    const planWeekZeroStart = resolvePlanWeekZeroStart(plan, sessionLogMap) || currentWeekStart;
+
     weeks.forEach((week, weekIndex) => {
       const weekLabel =
         week?.title ||
@@ -610,7 +752,8 @@ function buildMergedExactSchedule(plans, maxItems = 24) {
         sessions.forEach((session, sessionIndex) => {
           const summary = summariseSessionForContext(session);
           if (!summary) return;
-          const date = addDays(currentWeekStart, weekIndex * 7 + dayIndex);
+          const date = addDays(planWeekZeroStart, weekIndex * 7 + dayIndex);
+          const isoDate = toISODate(date);
 
           items.push({
             planId: plan?.id || null,
@@ -620,9 +763,9 @@ function buildMergedExactSchedule(plans, maxItems = 24) {
             weekLabel,
             dayIndex,
             dayLabel: day?.day || `Day ${dayIndex + 1}`,
-            isoDate: toISODate(date),
+            isoDate,
             dateLabel: formatDayDate(date),
-            isToday: toISODate(date) === toISODate(new Date()),
+            isToday: isoDate === todayIso,
             sessionIndex,
             ...summary,
           });
@@ -633,107 +776,19 @@ function buildMergedExactSchedule(plans, maxItems = 24) {
 
   return items
     .sort((a, b) => {
+      if (a.isoDate !== b.isoDate) return String(a.isoDate).localeCompare(String(b.isoDate));
       if (a.weekIndex !== b.weekIndex) return a.weekIndex - b.weekIndex;
       if (a.dayIndex !== b.dayIndex) return a.dayIndex - b.dayIndex;
       if (a.planKind !== b.planKind) return String(a.planKind).localeCompare(String(b.planKind));
       return a.sessionIndex - b.sessionIndex;
     })
+    .filter((item) => String(item?.isoDate || "") >= currentWeekStartIso)
     .slice(0, maxItems);
 }
 
 function roundOrNull(value, digits = 1) {
   const n = Number(value);
   return Number.isFinite(n) ? Number(n.toFixed(digits)) : null;
-}
-
-function summariseRecentTraining(rows) {
-  const sessions = Array.isArray(rows) ? rows : [];
-  const now = new Date();
-  const sevenDaysAgo = new Date(now);
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-  const ordered = [...sessions].sort((a, b) => {
-    const aDate =
-      safeToDate(a?.completedAt) ||
-      safeToDate(a?.updatedAt) ||
-      safeToDate(a?.createdAt) ||
-      new Date(0);
-    const bDate =
-      safeToDate(b?.completedAt) ||
-      safeToDate(b?.updatedAt) ||
-      safeToDate(b?.createdAt) ||
-      new Date(0);
-    return bDate - aDate;
-  });
-
-  const recent = ordered.slice(0, 8).map((session) => {
-    const date =
-      safeToDate(session?.completedAt) ||
-      safeToDate(session?.updatedAt) ||
-      safeToDate(session?.createdAt);
-
-    return {
-      id: session?.id || "",
-      title: session?.title || session?.name || "Session",
-      type: session?.primaryActivity || session?.sessionType || session?.workout?.sport || "",
-      status: session?.status || "",
-      date: date ? date.toISOString() : null,
-      actualDurationMin: roundOrNull(
-        session?.actualDurationMin ??
-          (Number(session?.live?.durationSec || 0)
-            ? Number(session.live.durationSec) / 60
-            : null),
-        1
-      ),
-      actualDistanceKm: roundOrNull(
-        session?.actualDistanceKm ?? session?.live?.distanceKm ?? null,
-        2
-      ),
-      avgRPE: roundOrNull(session?.avgRPE ?? null, 1),
-      notes: String(session?.notes || "").trim(),
-    };
-  });
-
-  const last7dSessions = ordered.filter((session) => {
-    const date =
-      safeToDate(session?.completedAt) ||
-      safeToDate(session?.updatedAt) ||
-      safeToDate(session?.createdAt);
-    return date && date >= sevenDaysAgo;
-  });
-
-  const summary7d = last7dSessions.reduce(
-    (acc, session) => {
-      acc.count += 1;
-      acc.durationMin += Number(
-        session?.actualDurationMin ??
-          (Number(session?.live?.durationSec || 0)
-            ? Number(session.live.durationSec) / 60
-            : 0)
-      ) || 0;
-      acc.distanceKm += Number(session?.actualDistanceKm ?? session?.live?.distanceKm ?? 0) || 0;
-      const rpe = Number(session?.avgRPE || 0);
-      if (Number.isFinite(rpe) && rpe > 0) {
-        acc.rpeTotal += rpe;
-        acc.rpeCount += 1;
-      }
-      return acc;
-    },
-    { count: 0, durationMin: 0, distanceKm: 0, rpeTotal: 0, rpeCount: 0 }
-  );
-
-  return {
-    recent,
-    last7d: {
-      sessions: summary7d.count,
-      durationMin: Math.round(summary7d.durationMin),
-      distanceKm: roundOrNull(summary7d.distanceKm, 1),
-      avgRPE:
-        summary7d.rpeCount > 0
-          ? roundOrNull(summary7d.rpeTotal / summary7d.rpeCount, 1)
-          : null,
-    },
-  };
 }
 
 function summariseWeights(rows) {
@@ -787,6 +842,7 @@ export default function CoachChatPage() {
   const [messages, setMessages] = useState([createWelcomeMessage()]);
 
   const [memoryMessages, setMemoryMessages] = useState([]);
+  const memoryMessagesRef = useRef([]);
   const [isSending, setIsSending] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -796,19 +852,30 @@ export default function CoachChatPage() {
 
   const [nutritionSummary, setNutritionSummary] = useState(null);
   const [planPrefs, setPlanPrefs] = useState(null);
-  const [recentTrainSummary, setRecentTrainSummary] = useState({
-    recent: [],
-    last7d: { sessions: 0, durationMin: 0, distanceKm: 0, avgRPE: null },
-  });
+  const [recentTrainSummary, setRecentTrainSummary] = useState(() =>
+    createEmptyRecentTrainingSummary()
+  );
   const [weightSummary, setWeightSummary] = useState(null);
+  const [sessionLogMap, setSessionLogMap] = useState({});
 
   const [user, setUser] = useState(null);
 
   const scrollViewRef = useRef(null);
   const s = makeStyles();
+  const isDev = typeof __DEV__ !== "undefined" && __DEV__;
+  const devLog = useCallback(
+    (...args) => {
+      if (isDev) console.log(...args);
+    },
+    [isDev]
+  );
 
   const scrollToEnd = () =>
     scrollViewRef.current?.scrollToEnd?.({ animated: true });
+
+  useEffect(() => {
+    memoryMessagesRef.current = Array.isArray(memoryMessages) ? memoryMessages : [];
+  }, [memoryMessages]);
 
   useEffect(() => {
     scrollToEnd();
@@ -964,10 +1031,7 @@ export default function CoachChatPage() {
 
   useEffect(() => {
     if (!user) {
-      setRecentTrainSummary({
-        recent: [],
-        last7d: { sessions: 0, durationMin: 0, distanceKm: 0, avgRPE: null },
-      });
+      setRecentTrainSummary(createEmptyRecentTrainingSummary());
       return;
     }
 
@@ -982,10 +1046,7 @@ export default function CoachChatPage() {
       },
       (err) => {
         console.log("[coach-chat] recent train snapshot error:", err);
-        setRecentTrainSummary({
-          recent: [],
-          last7d: { sessions: 0, durationMin: 0, distanceKm: 0, avgRPE: null },
-        });
+        setRecentTrainSummary(createEmptyRecentTrainingSummary());
       }
     );
 
@@ -1169,7 +1230,7 @@ export default function CoachChatPage() {
 
       setNutritionSummary(hasAnything ? summary : null);
 
-      console.log(
+      devLog(
         "[coach-chat] nutrition linked:",
         hasAnything,
         "meals7d:",
@@ -1224,14 +1285,78 @@ export default function CoachChatPage() {
   );
 
   const planDocId = plan?.id || null;
-
-  const exactSchedule = useMemo(
-    () => buildMergedExactSchedule(activePlans, 28),
+  const activePlanIds = useMemo(
+    () =>
+      activePlans
+        .map((item) => String(item?.id || "").trim())
+        .filter(Boolean),
     [activePlans]
   );
 
+  useEffect(() => {
+    if (!user || !activePlanIds.length) {
+      setSessionLogMap({});
+      return;
+    }
+
+    const ref = collection(db, "users", user.uid, "sessionLogs");
+    const chunks = [];
+    for (let idx = 0; idx < activePlanIds.length; idx += 10) {
+      chunks.push(activePlanIds.slice(idx, idx + 10));
+    }
+
+    const partialMaps = {};
+    let closed = false;
+
+    const syncMergedMap = () => {
+      if (closed) return;
+      const merged = {};
+      Object.values(partialMaps).forEach((chunkMap) => {
+        Object.assign(merged, chunkMap || {});
+      });
+      setSessionLogMap(merged);
+    };
+
+    const unsubs = chunks.map((ids, chunkIdx) =>
+      onSnapshot(
+        query(ref, where("planId", "in", ids)),
+        (snap) => {
+          const nextMap = {};
+          snap.forEach((docSnap) => {
+            nextMap[docSnap.id] = docSnap.data() || {};
+          });
+          partialMaps[chunkIdx] = nextMap;
+          syncMergedMap();
+        },
+        (err) => {
+          console.log("[coach-chat] session logs snapshot error:", err);
+          partialMaps[chunkIdx] = {};
+          syncMergedMap();
+        }
+      )
+    );
+
+    return () => {
+      closed = true;
+      unsubs.forEach((unsub) => unsub?.());
+    };
+  }, [activePlanIds, user]);
+
+  const exactSchedule = useMemo(
+    () => buildMergedExactSchedule(activePlans, 28, sessionLogMap),
+    [activePlans, sessionLogMap]
+  );
+
   const currentWeekSchedule = useMemo(
-    () => exactSchedule.filter((item) => Number(item?.weekIndex) === 0),
+    () => {
+      const weekStartIso = toISODate(startOfISOWeek(new Date()));
+      const nextWeekStartIso = toISODate(addDays(startOfISOWeek(new Date()), 7));
+      return exactSchedule.filter(
+        (item) =>
+          String(item?.isoDate || "") >= weekStartIso &&
+          String(item?.isoDate || "") < nextWeekStartIso
+      );
+    },
     [exactSchedule]
   );
 
@@ -1453,7 +1578,8 @@ export default function CoachChatPage() {
     try {
       if (!API_URL) throw new Error("API_URL missing (check EXPO_PUBLIC_API_URL).");
 
-      const mem = [...memoryMessages, userMessage]
+      // Use a ref to avoid stale state when messages are sent quickly.
+      const mem = [...(memoryMessagesRef.current || []), userMessage]
         .filter((m) => m.role === "user" || m.role === "assistant")
         .slice(-40);
 
@@ -1463,13 +1589,14 @@ export default function CoachChatPage() {
       };
 
       const payload = {
-        messages: mem.map((m) => ({ role: m.role, content: m.content })),
+        // Send both user + assistant roles for coherent conversation state.
+        messages: mem.slice(-20).map((m) => ({ role: m.role, content: m.content })),
         nutrition: nutritionSummary || null,
         plan: plan?.rawDoc ? { id: plan.id, ...plan.rawDoc } : plan || null,
         context: requestContext,
       };
 
-      console.log(
+      devLog(
         "[coach-chat] sending payload context:",
         !!requestContext,
         "nutrition:",
@@ -1491,8 +1618,9 @@ export default function CoachChatPage() {
       });
 
       const rawText = await res.text();
-      console.log("[coach-chat] status:", res.status);
-      console.log("[coach-chat] raw response:", rawText);
+      devLog("[coach-chat] status:", res.status);
+      // Avoid logging raw responses in production (may contain user data).
+      devLog("[coach-chat] raw response:", rawText);
 
       if (!res.ok) {
         throw new Error(`coach-chat failed (${res.status}): ${rawText.slice(0, 200)}`);
@@ -1519,17 +1647,44 @@ export default function CoachChatPage() {
       const assistantMessage = {
         id: `assistant-${Date.now()}`,
         role: "assistant",
-        content: replyText,
+        content: "",
         createdAt: Date.now(),
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
-      setMemoryMessages((prev) => [...prev, assistantMessage]);
+
+      const parts = splitReplyForTypewriter(replyText);
+      let visibleReply = "";
+      for (const part of parts) {
+        visibleReply = visibleReply ? `${visibleReply} ${part}` : part;
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessage.id
+              ? { ...msg, content: visibleReply }
+              : msg
+          )
+        );
+        await wait(55);
+      }
+
+      const completedAssistantMessage = {
+        ...assistantMessage,
+        content: replyText,
+      };
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessage.id ? completedAssistantMessage : msg
+        )
+      );
+      setMemoryMessages((prev) => [...prev, completedAssistantMessage]);
 
       // plan update
       if (data.updatedPlan && planDocId && user) {
         try {
-          const planRef = doc(db, "users", user.uid, "plans", planDocId);
+          const planCollection =
+            String(plan?.sourceCollection || "").trim() || "plans";
+          const planRef = doc(db, "users", user.uid, planCollection, planDocId);
           const cleanedUpdates = removeUndefinedDeep({
             ...data.updatedPlan,
             updatedAt: serverTimestamp(),
@@ -1548,11 +1703,11 @@ export default function CoachChatPage() {
             })
           );
         } catch (err) {
-          console.log("[coach-chat] Failed to update plan:", err);
+          devLog("[coach-chat] Failed to update plan:", err);
         }
       }
     } catch (err) {
-      console.log("[coach-chat] error:", err);
+      devLog("[coach-chat] error:", err);
 
       const errorMessage = {
         id: `err-${Date.now()}`,
@@ -1568,15 +1723,14 @@ export default function CoachChatPage() {
     }
   }, [
     chatContext,
-    input,
     isSending,
-    memoryMessages,
     nutritionSummary,
     activePlans.length,
     exactSchedule.length,
     plan,
     planDocId,
     user,
+    devLog,
   ]);
 
   const handleSend = useCallback(() => {

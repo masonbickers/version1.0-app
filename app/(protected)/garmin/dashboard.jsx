@@ -40,6 +40,12 @@ async function safeJson(res) {
   }
 }
 
+async function authHeaders(user) {
+  const token = await user?.getIdToken?.();
+  if (!token) throw new Error("Please sign in again.");
+  return { Authorization: `Bearer ${token}` };
+}
+
 export default function SummaryScreen() {
   const { user } = useAuth();
   const uid = user?.uid;
@@ -64,39 +70,41 @@ export default function SummaryScreen() {
 
   const fetchDebug = useCallback(async () => {
     if (!uid) return null;
-    const r = await fetch(`${base}/garmin/health/debug?uid=${encodeURIComponent(uid)}`);
+    const r = await fetch(`${base}/garmin/health/debug`, {
+      headers: await authHeaders(user),
+    });
     const j = await safeJson(r);
     setDebug(j);
     setConnected(!!j?.connected);
     return j;
-  }, [base, uid]);
+  }, [base, uid, user]);
 
   const fetchDailies = useCallback(
     async (dateISO) => {
-      const url = `${base}/garmin/health/read?uid=${encodeURIComponent(uid)}&kind=dailies&date=${encodeURIComponent(
+      const url = `${base}/garmin/health/read?kind=dailies&date=${encodeURIComponent(
         dateISO
       )}`;
 
-      const r = await fetch(url);
+      const r = await fetch(url, { headers: await authHeaders(user) });
       const j = await safeJson(r);
       const day = j?.found ? j?.doc?.data || null : null;
       const isPending = !j?.found;
 
       return { j, day, isPending };
     },
-    [base, uid]
+    [base, user]
   );
 
   const triggerBackfill = useCallback(
     async (dateISO) => {
-      const url = `${base}/garmin/health/backfill/dailies?uid=${encodeURIComponent(uid)}&date=${encodeURIComponent(
+      const url = `${base}/garmin/health/backfill/dailies?date=${encodeURIComponent(
         dateISO
       )}`;
-      const r = await fetch(url);
+      const r = await fetch(url, { headers: await authHeaders(user) });
       const j = await safeJson(r);
       return j;
     },
-    [base, uid]
+    [base, user]
   );
 
   const runLoad = useCallback(

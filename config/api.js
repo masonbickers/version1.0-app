@@ -52,6 +52,11 @@ function resolveDevHost() {
 }
 
 function resolveApiUrl() {
+  const envDev = normalizeApiUrl(process.env.EXPO_PUBLIC_DEV_API_URL);
+  if (__DEV__ && envDev) {
+    return envDev;
+  }
+
   const envPrimary = normalizeApiUrl(process.env.EXPO_PUBLIC_API_URL);
   if (envPrimary) {
     const host = hostFromApiUrl(envPrimary);

@@ -236,13 +236,6 @@ export default function SignIn() {
     }
   };
 
-  const onGoogleLogin = () => {
-    Alert.alert(
-      "Google sign-in not wired yet",
-      "The Google button is now on the page, but the native Google auth flow is not configured in this build yet."
-    );
-  };
-
   return (
     <AuthScreenShell
       heroSource={LoginHero}
@@ -316,18 +309,8 @@ export default function SignIn() {
           </Text>
         </TouchableOpacity>
 
-        <View style={local.socialRow}>
-          <TouchableOpacity
-            style={[local.socialBtn, local.googleBtn, busy && local.socialBtnDisabled]}
-            onPress={onGoogleLogin}
-            disabled={busy}
-            activeOpacity={0.9}
-          >
-            <AntDesign name="google" size={16} color="#FFFFFF" />
-            <Text style={local.socialBtnText}>Google</Text>
-          </TouchableOpacity>
-
-          {appleAvailable && (
+        {appleAvailable && (
+          <View style={local.socialRow}>
             <TouchableOpacity
               style={[local.socialBtn, local.appleBtn, busy && local.socialBtnDisabled]}
               onPress={onAppleLogin}
@@ -337,8 +320,8 @@ export default function SignIn() {
               <AntDesign name="apple" size={16} color="#FFFFFF" />
               <Text style={local.socialBtnText}>Apple</Text>
             </TouchableOpacity>
-          )}
-        </View>
+          </View>
+        )}
       </View>
 
       <View style={s.footerRow}>
@@ -352,7 +335,7 @@ export default function SignIn() {
         </TouchableOpacity>
 
         <View style={s.footerMeta}>
-          <Text style={s.footerPrompt}>Don't have an account?</Text>
+          <Text style={s.footerPrompt}>Don&apos;t have an account?</Text>
           <Link href="/(auth)/signup" asChild>
             <TouchableOpacity activeOpacity={0.85}>
               <Text style={s.footerLink}>Sign up</Text>
@@ -381,11 +364,6 @@ function makeStyles(colors) {
       alignItems: "center",
       justifyContent: "center",
       gap: 8,
-    },
-    googleBtn: {
-      backgroundColor: "rgba(20,20,22,0.90)",
-      borderWidth: 1,
-      borderColor: "rgba(255,255,255,0.22)",
     },
     appleBtn: {
       backgroundColor: "rgba(20,20,22,0.90)",

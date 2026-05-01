@@ -390,7 +390,7 @@ export default function ViewPlanPage() {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (!u) {
-        router.replace("/login");
+        router.replace("/(auth)/login");
         return;
       }
       setUser(u);

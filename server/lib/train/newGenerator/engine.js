@@ -31,7 +31,20 @@ const THRESHOLD_LIBRARY = [
   { id: "2x3min_deload", reps: 2, workSec: 180, recoverSec: 60, label: "2x3 min (rec 1 min)" },
 ];
 
-function phaseForWeek(weekNumber, totalWeeks, cfg) {
+function normaliseExplicitPhase(value) {
+  const phase = String(value || "").trim().toLowerCase();
+  if (phase === "specific") return "build";
+  if (phase === "base" || phase === "build" || phase === "deload" || phase === "taper") {
+    return phase;
+  }
+  return null;
+}
+
+function phaseForWeek(weekNumber, totalWeeks, cfg, phaseOverrides = null) {
+  const explicit = Array.isArray(phaseOverrides)
+    ? normaliseExplicitPhase(phaseOverrides[weekNumber - 1] || phaseOverrides[weekNumber])
+    : null;
+  if (explicit) return explicit;
   const taperStart = Math.max(1, totalWeeks - cfg.phaseModel.taperWeeks + 1);
   if (weekNumber >= taperStart) return "taper";
   if (weekNumber <= cfg.phaseModel.baseWeeks) return "base";
@@ -64,6 +77,9 @@ function nextWeeklyTarget(prev, phase, cfg) {
 function buildWeekTargets(athleteProfile, config) {
   const totalWeeks = athleteProfile.goal.planLengthWeeks;
   const weeks = [];
+  const phaseOverrides = Array.isArray(athleteProfile?.phaseOverrides)
+    ? athleteProfile.phaseOverrides
+    : null;
 
   const firstWeeklyKm = round1(
     clamp(
@@ -77,7 +93,7 @@ function buildWeekTargets(athleteProfile, config) {
   let prevLongKm = athleteProfile.current.longestRunKm;
 
   for (let w = 1; w <= totalWeeks; w += 1) {
-    const phase = phaseForWeek(w, totalWeeks, config);
+    const phase = phaseForWeek(w, totalWeeks, config, phaseOverrides);
     const weeklyKm = w === 1 ? firstWeeklyKm : nextWeeklyTarget(prevWeeklyKm, phase, config);
 
     const desiredLong = weeklyKm * (config.distribution.longRunPctByPhase[phase] ?? 0.3);
@@ -710,4 +726,3 @@ export function generateRunPlanV2({ athleteProfile, generatorConfig }) {
     decisionTrace,
   };
 }
-

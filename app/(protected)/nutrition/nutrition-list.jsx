@@ -130,14 +130,6 @@ export default function NutritionStatsPage() {
             styles={s}
             colors={colors}
           />
-          <Row
-            title="Share"
-            subtitle="Export a summary card"
-            onPress={() => router.push("/share")}
-            styles={s}
-            colors={colors}
-            isLast
-          />
         </View>
       </ScrollView>
     </SafeAreaView>

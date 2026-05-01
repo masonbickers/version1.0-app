@@ -702,7 +702,7 @@ export default function LiveSessionPage() {
 
           {!isRun ? (
             <Text style={s.warnText}>
-              This session isn’t type="run". Live step mode still works, but runSteps are mainly for runs.
+              This session isn&apos;t type=&quot;run&quot;. Live step mode still works, but runSteps are mainly for runs.
             </Text>
           ) : !hasSteps ? (
             <Text style={s.warnText}>

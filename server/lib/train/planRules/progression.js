@@ -450,7 +450,15 @@ export function buildProgressionTargets({
       let longCandidate;
 
       if (w === 1) {
-        longCandidate = prevLongTarget;
+        if (isDeload && deloadAffectsLong) {
+          longCandidate =
+            prevLongTarget * (specDeloadMult != null ? specDeloadMult : (1 - deloadReducePct));
+        } else if (isTaper) {
+          const specCeil = specTaperMult != null ? specTaperMult : 1;
+          longCandidate = prevLongTarget * specCeil;
+        } else {
+          longCandidate = prevLongTarget;
+        }
       } else if (isDeload && deloadAffectsLong) {
         const base = prevBuildLongTarget != null ? prevBuildLongTarget : prevLongTarget;
         longCandidate = base * (specDeloadMult != null ? specDeloadMult : (1 - deloadReducePct));

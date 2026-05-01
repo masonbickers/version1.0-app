@@ -76,7 +76,7 @@ export default function PlansIndexPage() {
           <Text style={s.headerSub}>All saved training plans</Text>
         </View>
 
-        <TouchableOpacity onPress={() => router.push("/plans/builder")} style={s.iconBtn} activeOpacity={0.85}>
+        <TouchableOpacity onPress={() => router.push("/training/builder")} style={s.iconBtn} activeOpacity={0.85}>
           <Feather name="plus" size={20} color={colors.text} />
         </TouchableOpacity>
       </View>
@@ -95,7 +95,7 @@ export default function PlansIndexPage() {
             <TouchableOpacity
               style={s.primaryBtn}
               activeOpacity={0.9}
-              onPress={() => router.push("/plans/builder")}
+              onPress={() => router.push("/training/builder")}
             >
               <Feather name="zap" size={18} color="#111111" />
               <Text style={s.primaryBtnText}>Build plan</Text>

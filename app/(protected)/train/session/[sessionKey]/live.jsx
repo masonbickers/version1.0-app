@@ -37,6 +37,12 @@ import { API_URL } from "../../../../../config/api";
 import { auth, db } from "../../../../../firebaseConfig";
 import { useLiveActivity } from "../../../../../providers/LiveActivityProvider";
 import { useTheme } from "../../../../../providers/ThemeProvider";
+import {
+  hasLiveActivitySnapshot,
+  isLiveActivityStale,
+  normaliseLiveActivityStatus,
+  shouldPauseStaleLiveActivity,
+} from "../../../../../src/train/utils/liveActivityHelpers";
 import { decodeSessionKey, isAuxStrengthStep } from "../../../../../src/train/utils/sessionHelpers";
 
 /* ------------------------------------------------------------------ */
@@ -161,9 +167,7 @@ function clamp01(x) {
 }
 
 function normaliseRunState(state) {
-  const value = String(state || "").toLowerCase();
-  if (value === "running" || value === "paused" || value === "acquiring") return value;
-  return "idle";
+  return normaliseLiveActivityStatus(state);
 }
 
 /* ------------------------------------------------------------------ */
@@ -518,6 +522,12 @@ export default function LiveTrainSession() {
         ? `/train/session/${encodeURIComponent(encodedKey)}/live`
         : null,
     [encodedKey]
+  );
+  const matchesPersistedLiveSession = useMemo(
+    () =>
+      (liveRoute && String(liveActivity?.route || "") === String(liveRoute)) ||
+      (encodedKey && String(liveActivity?.sessionKey || "") === String(encodedKey)),
+    [encodedKey, liveActivity?.route, liveActivity?.sessionKey, liveRoute]
   );
 
   const watchRef = useRef(null);
@@ -1079,7 +1089,8 @@ export default function LiveTrainSession() {
     (statusOverride) => {
       if (!liveRoute || !encodedKey) return null;
 
-      const baseStatus = normaliseRunState(statusOverride ?? runState);
+      const rawStatus = normaliseRunState(statusOverride ?? runState);
+      const baseStatus = !isRun && rawStatus === "acquiring" ? "running" : rawStatus;
       if (baseStatus === "idle") return null;
 
       const snapCoords = Array.isArray(coords) ? coords.slice(-500) : [];
@@ -1163,44 +1174,86 @@ export default function LiveTrainSession() {
   useEffect(() => {
     if (!liveHydrated) return;
     if (restoredFromLiveRef.current) return;
+    if (!matchesPersistedLiveSession || !liveActivity?.isActive) return;
 
-    const sameRoute =
-      String(liveActivity?.route || "") === String(liveRoute || "") ||
-      String(liveActivity?.sessionKey || "") === String(encodedKey || "");
-
-    if (!sameRoute || !liveActivity?.isActive) return;
-
-    const snap = liveActivity?.snapshot;
-    if (!snap || typeof snap !== "object") return;
+    const snap = hasLiveActivitySnapshot(liveActivity) ? liveActivity.snapshot : null;
+    const persistedState = normaliseRunState(liveActivity?.status || snap?.runState);
+    if (persistedState === "idle") return;
 
     restoredFromLiveRef.current = true;
 
-    const restoredState = normaliseRunState(snap.runState);
+    const shouldForcePaused = shouldPauseStaleLiveActivity(liveActivity);
+    const restoredStateRaw = shouldForcePaused ? "paused" : persistedState;
+    const restoredState =
+      !isRun && restoredStateRaw === "acquiring" ? "running" : restoredStateRaw;
     const shouldKeepRunning =
-      restoredState === "running" || restoredState === "acquiring";
+      !shouldForcePaused &&
+      (restoredState === "running" || restoredState === "acquiring");
     const lastUpdatedAt = Number(liveActivity?.updatedAt || 0);
     const offscreenGapSec =
-      shouldKeepRunning && lastUpdatedAt > 0
+      snap && shouldKeepRunning && lastUpdatedAt > 0
         ? Math.max(0, Math.floor((Date.now() - lastUpdatedAt) / 1000))
         : 0;
 
-    const baseLiveSec = Math.max(0, Number(snap.liveDurationSec || 0));
-    const baseMovingSec = Math.max(0, Number(snap.movingDurationSec || 0));
+    const baseLiveSec = Math.max(0, Number(snap?.liveDurationSec || 0));
+    const baseMovingSec = Math.max(0, Number(snap?.movingDurationSec || 0));
+    const baseDistanceM = Math.max(0, Number(snap?.liveDistanceM || 0));
+    const restoredCoords = Array.isArray(snap?.coords)
+      ? snap.coords.slice(-MAX_COORD_HISTORY)
+      : [];
+    const restoredSplits = Array.isArray(snap?.splits) ? snap.splits : [];
+    const incomingStep = Math.max(0, Number(snap?.activeStepIndex || 0));
+    const safeActiveStepIndex = execSteps.length
+      ? Math.min(incomingStep, execSteps.length - 1)
+      : 0;
+    const fallbackSnapshot = {
+      runState: restoredState,
+      liveDurationSec: baseLiveSec,
+      movingDurationSec: baseMovingSec,
+      liveDistanceM: baseDistanceM,
+      gpsAcquired: !!snap?.gpsAcquired,
+      coords: restoredCoords,
+      splits: restoredSplits,
+      activeStepIndex: safeActiveStepIndex,
+      stepStartDurationSec: Math.max(0, Number(snap?.stepStartDurationSec || 0)),
+      stepStartDistanceM: Math.max(0, Number(snap?.stepStartDistanceM || 0)),
+      nextSplitKm: Math.max(1, Number(snap?.nextSplitKm || 1)),
+      lastSplitTimeSec: Math.max(0, Number(snap?.lastSplitTimeSec || 0)),
+      lastSplitDistanceM: Math.max(0, Number(snap?.lastSplitDistanceM || 0)),
+      lastFixAt: Math.max(0, Number(snap?.lastFixAt || 0)),
+      autoPauseEnabled:
+        typeof snap?.autoPauseEnabled === "boolean" ? snap.autoPauseEnabled : true,
+      beaconEnabled: typeof snap?.beaconEnabled === "boolean" ? snap.beaconEnabled : true,
+      followUser: typeof snap?.followUser === "boolean" ? snap.followUser : true,
+      cueFeedbackEnabled:
+        typeof snap?.cueFeedbackEnabled === "boolean" ? snap.cueFeedbackEnabled : true,
+      beaconLink: snap?.beaconLink || null,
+      beaconSessionId: snap?.beaconSessionId || null,
+      strengthEntryById:
+        snap?.strengthEntryById && typeof snap.strengthEntryById === "object"
+          ? snap.strengthEntryById
+          : null,
+      strengthNotes: typeof snap?.strengthNotes === "string" ? snap.strengthNotes : "",
+      strengthRestSecLeft:
+        typeof snap?.strengthRestSecLeft === "number"
+          ? Math.max(0, Math.round(snap.strengthRestSecLeft))
+          : 0,
+      strengthRestExerciseId: snap?.strengthRestExerciseId || null,
+    };
 
-    setRunState(restoredState === "idle" ? "paused" : restoredState);
+    setRunState(restoredState);
     setLiveDurationSec(baseLiveSec + offscreenGapSec);
     setMovingDurationSec(baseMovingSec + offscreenGapSec);
-    setLiveDistanceM(Math.max(0, Number(snap.liveDistanceM || 0)));
-    setGpsAcquired(!!snap.gpsAcquired);
-    const restoredCoords = Array.isArray(snap.coords) ? snap.coords.slice(-MAX_COORD_HISTORY) : [];
+    setLiveDistanceM(baseDistanceM);
+    setGpsAcquired(!!snap?.gpsAcquired);
     setCoords(restoredCoords);
-    setSplits(Array.isArray(snap.splits) ? snap.splits : []);
-    setBeaconLink(snap.beaconLink || null);
+    setSplits(restoredSplits);
+    setBeaconLink(snap?.beaconLink || null);
 
-    if (typeof snap.autoPauseEnabled === "boolean") setAutoPauseEnabled(snap.autoPauseEnabled);
-    if (typeof snap.beaconEnabled === "boolean") setBeaconEnabled(snap.beaconEnabled);
-    if (typeof snap.followUser === "boolean") setFollowUser(snap.followUser);
-    if (typeof snap.cueFeedbackEnabled === "boolean") setCueFeedbackEnabled(snap.cueFeedbackEnabled);
+    if (typeof snap?.autoPauseEnabled === "boolean") setAutoPauseEnabled(snap.autoPauseEnabled);
+    if (typeof snap?.beaconEnabled === "boolean") setBeaconEnabled(snap.beaconEnabled);
+    if (typeof snap?.followUser === "boolean") setFollowUser(snap.followUser);
+    if (typeof snap?.cueFeedbackEnabled === "boolean") setCueFeedbackEnabled(snap.cueFeedbackEnabled);
     if (snap?.strengthEntryById && typeof snap.strengthEntryById === "object") {
       setStrengthEntryById(snap.strengthEntryById);
     }
@@ -1215,20 +1268,26 @@ export default function LiveTrainSession() {
       setStrengthRestExerciseId(null);
     }
 
-    beaconSessionIdRef.current = snap.beaconSessionId || null;
+    beaconSessionIdRef.current = snap?.beaconSessionId || null;
     lastCoordRef.current = restoredCoords.length ? restoredCoords[restoredCoords.length - 1] : null;
-    lastFixAtRef.current = Math.max(0, Number(snap.lastFixAt || 0));
-    lastSplitTimeRef.current = Math.max(0, Number(snap.lastSplitTimeSec || 0));
-    lastSplitDistanceMRef.current = Math.max(0, Number(snap.lastSplitDistanceM || 0));
-    nextSplitKmRef.current = Math.max(1, Number(snap.nextSplitKm || 1));
-    stepStartTimeRef.current = Math.max(0, Number(snap.stepStartDurationSec || 0));
-    stepStartDistRef.current = Math.max(0, Number(snap.stepStartDistanceM || 0));
+    lastFixAtRef.current = Math.max(0, Number(snap?.lastFixAt || 0));
+    lastSplitTimeRef.current = Math.max(0, Number(snap?.lastSplitTimeSec || 0));
+    lastSplitDistanceMRef.current = Math.max(0, Number(snap?.lastSplitDistanceM || 0));
+    nextSplitKmRef.current = Math.max(1, Number(snap?.nextSplitKm || 1));
+    stepStartTimeRef.current = Math.max(0, Number(snap?.stepStartDurationSec || 0));
+    stepStartDistRef.current = Math.max(0, Number(snap?.stepStartDistanceM || 0));
+    setActiveStepIndex(safeActiveStepIndex);
 
-    const incomingStep = Math.max(0, Number(snap.activeStepIndex || 0));
-    if (execSteps.length) {
-      setActiveStepIndex(Math.min(incomingStep, execSteps.length - 1));
-    } else {
-      setActiveStepIndex(0);
+    if (shouldForcePaused || !snap || isLiveActivityStale(liveActivity)) {
+      setLiveActivity((prev) => {
+        if (!prev?.isActive) return prev;
+        return {
+          ...prev,
+          status: restoredState,
+          updatedAt: Date.now(),
+          snapshot: hasLiveActivitySnapshot(prev) ? prev.snapshot : fallbackSnapshot,
+        };
+      });
     }
   }, [
     encodedKey,
@@ -1236,6 +1295,8 @@ export default function LiveTrainSession() {
     liveActivity,
     liveHydrated,
     liveRoute,
+    matchesPersistedLiveSession,
+    setLiveActivity,
   ]);
 
   useEffect(() => {
@@ -1359,9 +1420,12 @@ export default function LiveTrainSession() {
   const onCloseLive = useCallback(() => {
     const draft = buildLiveActivityDraft(runState);
     if (draft) setLiveActivity(draft);
+    else if (matchesPersistedLiveSession) clearLiveActivity();
     router.back();
   }, [
     buildLiveActivityDraft,
+    clearLiveActivity,
+    matchesPersistedLiveSession,
     router,
     runState,
     setLiveActivity,
@@ -3157,7 +3221,7 @@ export default function LiveTrainSession() {
   /* NON-RUN MODE                                                    */
   /* -------------------------------------------------------------- */
 
-  const strengthRunning = runState === "running";
+  const strengthRunning = runState !== "idle" && runState !== "paused";
   const strengthPaused = runState === "paused";
 
   return (
@@ -3255,6 +3319,89 @@ export default function LiveTrainSession() {
               </TouchableOpacity>
             </View>
           ) : null}
+
+          <View style={sx.strengthHeroActions}>
+            {strengthRunning ? (
+              <View style={[sx.sheetButtonsRow, { marginTop: 0 }]}>
+                <TouchableOpacity
+                  onPress={onStrengthPause}
+                  style={[sx.sheetHalfBtn, { backgroundColor: theme.primaryBg }]}
+                  activeOpacity={0.9}
+                >
+                  <Feather name="pause" size={20} color={theme.primaryText} />
+                  <Text style={{ color: theme.primaryText, fontWeight: "900", fontSize: 15 }}>
+                    Pause
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={confirmFinishStrength}
+                  disabled={saving}
+                  style={[
+                    sx.sheetHalfBtn,
+                    { backgroundColor: theme.text, opacity: saving ? 0.7 : 1 },
+                  ]}
+                  activeOpacity={0.9}
+                >
+                  <Feather name="flag" size={18} color={theme.bg} />
+                  <Text style={{ color: theme.bg, fontWeight: "900", fontSize: 15 }}>
+                    {saving ? "Saving…" : "End & Save"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+
+            {strengthPaused ? (
+              <>
+                <View style={[sx.pauseSummaryCard, { marginTop: 0, backgroundColor: "transparent" }]}>
+                  <Text style={{ color: theme.subtext, fontWeight: "900", fontSize: 12 }}>
+                    Paused summary
+                  </Text>
+                  <Text style={{ color: theme.text, fontWeight: "900", marginTop: 3 }}>
+                    {secondsToMMSS(liveDurationSec)} elapsed · {strengthLoggedCount}/{strengthLoggableCount || strengthExercises.length} logged
+                  </Text>
+                </View>
+
+                <View style={sx.sheetButtonsRow}>
+                  <TouchableOpacity
+                    onPress={onStrengthResume}
+                    style={[sx.sheetHalfBtn, { backgroundColor: theme.primaryBg }]}
+                    activeOpacity={0.9}
+                  >
+                    <Feather name="play" size={20} color={theme.primaryText} />
+                    <Text style={{ color: theme.primaryText, fontWeight: "900", fontSize: 15 }}>
+                      Resume
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={confirmFinishStrength}
+                    disabled={saving}
+                    style={[
+                      sx.sheetHalfBtn,
+                      { backgroundColor: theme.text, opacity: saving ? 0.7 : 1 },
+                    ]}
+                    activeOpacity={0.9}
+                  >
+                    <Feather name="flag" size={18} color={theme.bg} />
+                    <Text style={{ color: theme.bg, fontWeight: "900", fontSize: 15 }}>
+                      {saving ? "Saving…" : "End & Save"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : null}
+
+            {(strengthRunning || strengthPaused) ? (
+              <TouchableOpacity
+                onPress={confirmDiscardSession}
+                style={sx.pauseDiscardBtn}
+                activeOpacity={0.85}
+              >
+                <Text style={{ color: theme.subtext, fontWeight: "800" }}>Discard session</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
 
         <View
@@ -3262,6 +3409,7 @@ export default function LiveTrainSession() {
             sx.card,
             {
               flex: 1,
+              minHeight: 0,
               marginTop: 12,
               backgroundColor: theme.card2,
             },
@@ -3270,7 +3418,7 @@ export default function LiveTrainSession() {
           <Text style={[sx.weekTitle, { color: theme.text }]}>Workout</Text>
 
           <ScrollView
-            style={{ marginTop: 10 }}
+            style={{ marginTop: 10, flex: 1 }}
             contentContainerStyle={{ gap: 8, paddingBottom: 8 }}
             showsVerticalScrollIndicator={false}
           >
@@ -3631,79 +3779,6 @@ export default function LiveTrainSession() {
           </ScrollView>
         </View>
 
-        {strengthPaused ? (
-          <View
-            style={[
-              sx.pauseSummaryCard,
-              {
-                marginTop: 12,
-                backgroundColor: "transparent",
-              },
-            ]}
-          >
-            <Text style={{ color: theme.subtext, fontWeight: "900", fontSize: 12 }}>
-              Paused summary
-            </Text>
-            <Text style={{ color: theme.text, fontWeight: "900", marginTop: 3 }}>
-              {secondsToMMSS(liveDurationSec)} elapsed · {strengthLoggedCount}/{strengthLoggableCount || strengthExercises.length} logged
-            </Text>
-          </View>
-        ) : null}
-
-        <View style={sx.sheetButtonsRow}>
-          {strengthRunning ? (
-            <TouchableOpacity
-              onPress={onStrengthPause}
-              style={[sx.sheetMainBtn, { backgroundColor: theme.primaryBg }]}
-              activeOpacity={0.9}
-            >
-              <Feather name="pause" size={20} color={theme.primaryText} />
-              <Text style={{ color: theme.primaryText, fontWeight: "900", fontSize: 15 }}>
-                Pause
-              </Text>
-            </TouchableOpacity>
-          ) : null}
-
-          {strengthPaused ? (
-            <>
-              <TouchableOpacity
-                onPress={onStrengthResume}
-                style={[sx.sheetHalfBtn, { backgroundColor: theme.primaryBg }]}
-                activeOpacity={0.9}
-              >
-                <Feather name="play" size={20} color={theme.primaryText} />
-                <Text style={{ color: theme.primaryText, fontWeight: "900", fontSize: 15 }}>
-                  Resume
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={confirmFinishStrength}
-                disabled={saving}
-                style={[
-                  sx.sheetHalfBtn,
-                  { backgroundColor: theme.text, opacity: saving ? 0.7 : 1 },
-                ]}
-                activeOpacity={0.9}
-              >
-                <Feather name="flag" size={18} color={theme.bg} />
-                <Text style={{ color: theme.bg, fontWeight: "900", fontSize: 15 }}>
-                  {saving ? "Saving…" : "End & Save"}
-                </Text>
-              </TouchableOpacity>
-            </>
-          ) : null}
-        </View>
-
-        {strengthPaused ? (
-          <TouchableOpacity
-            onPress={confirmDiscardSession}
-            style={sx.pauseDiscardBtn}
-            activeOpacity={0.85}
-          >
-            <Text style={{ color: theme.subtext, fontWeight: "800" }}>Discard session</Text>
-          </TouchableOpacity>
-        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -4154,6 +4229,10 @@ const sx = StyleSheet.create({
   strengthMetaPillText: {
     fontSize: 12,
     fontWeight: "800",
+  },
+  strengthHeroActions: {
+    marginTop: 12,
+    gap: 10,
   },
   strengthExerciseCard: {
     borderRadius: 14,
