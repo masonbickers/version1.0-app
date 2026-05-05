@@ -333,6 +333,17 @@ function activitySortMs(activity = {}) {
   );
 }
 
+function tinyActivityPreview(activity = {}) {
+  return {
+    id: activity.id || activity.activityId || null,
+    source: activity.source || null,
+    name: activity.name || activity.activityName || null,
+    startTime: activity.startTime || activity.startDate || null,
+    type: activity.type || activity.activityType || null,
+    distanceMeters: activity.distanceMeters ?? null,
+  };
+}
+
 async function loadStoredGarminActivities(uid, max = 100) {
   const db = admin.firestore();
   const items = [];
@@ -368,6 +379,78 @@ async function loadStoredGarminActivities(uid, max = 100) {
       .sort((a, b) => Number(b.sortMs || 0) - Number(a.sortMs || 0))
       .slice(0, max),
   };
+}
+
+async function loadRecentGarminWebhookDiagnostics(uid, garminUserId) {
+  const diagnostics = {
+    garminUserId: garminUserId || null,
+    recentWebhookCount: 0,
+    recentActivityWebhookCount: 0,
+    matchingUserWebhookCount: 0,
+    latestWebhooks: [],
+    latestErrors: [],
+  };
+
+  try {
+    const snap = await admin
+      .firestore()
+      .collection("garmin_webhooks")
+      .orderBy("receivedAt", "desc")
+      .limit(25)
+      .get();
+
+    diagnostics.recentWebhookCount = snap.size;
+    diagnostics.latestWebhooks = snap.docs.map((docSnap) => {
+      const data = docSnap.data() || {};
+      const results = Array.isArray(data.results) ? data.results : [];
+      const isActivity = data.kind === "activities";
+      const matchesUser =
+        (uid && data.uid === uid) ||
+        (garminUserId && data.garminUserId === garminUserId);
+
+      if (isActivity) diagnostics.recentActivityWebhookCount += 1;
+      if (matchesUser) diagnostics.matchingUserWebhookCount += 1;
+
+      return {
+        id: docSnap.id,
+        kind: data.kind || null,
+        test: data.test === true,
+        processed: data.processed === true,
+        uid: data.uid || null,
+        garminUserId: data.garminUserId || null,
+        receivedAtMs:
+          typeof data.receivedAt?.toMillis === "function"
+            ? data.receivedAt.toMillis()
+            : null,
+        results,
+      };
+    });
+  } catch (e) {
+    diagnostics.webhookReadError = e?.message || String(e);
+  }
+
+  try {
+    const errorSnap = await admin
+      .firestore()
+      .collection("garmin_errors")
+      .orderBy("at", "desc")
+      .limit(10)
+      .get();
+
+    diagnostics.latestErrors = errorSnap.docs.map((docSnap) => {
+      const data = docSnap.data() || {};
+      return {
+        id: docSnap.id,
+        context: data.context || null,
+        error: data.error || null,
+        atMs: typeof data.at?.toMillis === "function" ? data.at.toMillis() : null,
+      };
+    });
+  } catch (e) {
+    diagnostics.errorReadError = e?.message || String(e);
+  }
+
+  return diagnostics;
 }
 
 router.get("/status", requireUser, async (req, res) => {
@@ -417,6 +500,42 @@ router.get("/", requireUser, async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: e?.message || "Failed to load Garmin activities",
+    });
+  }
+});
+
+router.get("/debug", requireUser, async (req, res) => {
+  try {
+    const uid = String(req.user?.uid || "").trim();
+    if (!uid) {
+      return res.status(401).json({ ok: false, error: "Unauthenticated user" });
+    }
+
+    const userSnap = await admin.firestore().collection("users").doc(uid).get();
+    const garmin = pickGarminActivityIntegration(userSnap.data());
+    const max = Math.max(1, Math.min(25, Number(req.query.limit || 10)));
+    const { sources, items } = await loadStoredGarminActivities(uid, max);
+    const webhookDiagnostics = await loadRecentGarminWebhookDiagnostics(
+      uid,
+      garmin?.garminUserId || null
+    );
+
+    return res.json({
+      ok: true,
+      uid,
+      connected: garmin?.connected === true,
+      garminUserId: garmin?.garminUserId || null,
+      credentialProfile: garmin?.credentialProfile || null,
+      storedActivityCount: items.length,
+      storedActivitySources: sources,
+      latestStoredActivities: items.slice(0, max).map(tinyActivityPreview),
+      webhookDiagnostics,
+    });
+  } catch (e) {
+    console.error("Garmin activities debug error:", e);
+    return res.status(500).json({
+      ok: false,
+      error: e?.message || "Failed to load Garmin activities debug data",
     });
   }
 });

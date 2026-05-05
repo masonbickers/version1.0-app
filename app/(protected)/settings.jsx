@@ -91,6 +91,7 @@ export default function SettingsPage() {
   const [garminConnecting, setGarminConnecting] = React.useState(false);
   const [garminConnected, setGarminConnected] = React.useState(false);
   const [garminStatusChecking, setGarminStatusChecking] = React.useState(false);
+  const [garminDebugChecking, setGarminDebugChecking] = React.useState(false);
   const [garminSyncing, setGarminSyncing] = React.useState(false);
 
   const handleClose = React.useCallback(() => {
@@ -368,9 +369,35 @@ export default function SettingsPage() {
 
       setGarminConnecting(true);
 
-      const startUrl = `${API_BASE}/auth/garmin/start?uid=${encodeURIComponent(
-        user.uid
-      )}&redirectToApp=${encodeURIComponent(GARMIN_RETURN_URL)}`;
+      const idToken = await user.getIdToken();
+
+      const startResp = await fetch(`${API_BASE}/auth/garmin/start-url`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ returnUrl: GARMIN_RETURN_URL }),
+      });
+
+      const startText = await startResp.text();
+      let startJson = {};
+      try {
+        startJson = startText ? JSON.parse(startText) : {};
+      } catch {
+        startJson = {};
+      }
+
+      console.log("Garmin start-url status =", startResp.status);
+      console.log("Garmin start-url response =", startJson || startText);
+
+      if (!startResp.ok || startJson?.ok !== true || !startJson?.authUrl) {
+        throw new Error(
+          startJson?.error || startText || "Could not start Garmin connection."
+        );
+      }
+
+      const startUrl = String(startJson.authUrl);
 
       console.log("Garmin connect:");
       console.log("GARMIN_RETURN_URL =", GARMIN_RETURN_URL);
@@ -517,10 +544,43 @@ export default function SettingsPage() {
         },
       });
 
-      const json = await res.json().catch(() => ({}));
+      const text = await res.text();
+
+      let json = {};
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        json = {};
+      }
+
+      console.log("Garmin sync API_BASE =", API_BASE);
+      console.log("Garmin sync response status =", res.status);
+      console.log("Garmin sync response text =", text);
+      console.log("Garmin sync response json =", json);
 
       if (!res.ok || json?.ok !== true) {
-        throw new Error(json?.error || "Could not request Garmin sync.");
+        const details =
+          typeof json?.details === "string"
+            ? json.details
+            : json?.details
+            ? JSON.stringify(json.details, null, 2)
+            : text;
+
+        Alert.alert(
+          "Garmin Sync Debug",
+          JSON.stringify(
+            {
+              apiBase: API_BASE,
+              status: res.status,
+              error: json?.error || null,
+              details: details || null,
+            },
+            null,
+            2
+          )
+        );
+
+        throw new Error(json?.error || text || "Could not request Garmin sync.");
       }
 
       Alert.alert("Garmin Sync", json?.message || "Garmin sync requested.");
@@ -529,6 +589,57 @@ export default function SettingsPage() {
       Alert.alert("Garmin", e?.message || "Could not sync Garmin activities.");
     } finally {
       setGarminSyncing(false);
+    }
+  };
+
+  const handleCheckGarminActivitiesDebug = async () => {
+    try {
+      const user = auth.currentUser;
+
+      if (!user?.uid) {
+        Alert.alert("Garmin", "Please sign in again.");
+        return;
+      }
+
+      if (!API_BASE) {
+        Alert.alert(
+          "Garmin",
+          "API is not configured for this build. Set EXPO_PUBLIC_API_URL in EAS environment variables."
+        );
+        return;
+      }
+
+      setGarminDebugChecking(true);
+
+      const idToken = await user.getIdToken();
+
+      const res = await fetch(`${API_BASE}/garmin/activities/debug`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      });
+
+      const text = await res.text();
+      let json = {};
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        json = { raw: text };
+      }
+
+      console.log("Garmin debug response status =", res.status);
+      console.log("Garmin debug response json =", json);
+
+      Alert.alert(
+        "Garmin Webhook Debug",
+        JSON.stringify({ apiBase: API_BASE, status: res.status, ...json }, null, 2)
+      );
+    } catch (e) {
+      console.log("Garmin activities debug error", e);
+      Alert.alert("Garmin", e?.message || "Could not check Garmin debug data.");
+    } finally {
+      setGarminDebugChecking(false);
     }
   };
 
@@ -727,6 +838,36 @@ export default function SettingsPage() {
                 accentFill={accentFill}
                 right={
                   garminStatusChecking ? (
+                    <ActivityIndicator size="small" />
+                  ) : (
+                    <Feather
+                      name="chevron-right"
+                      size={18}
+                      color={colors.subtext}
+                    />
+                  )
+                }
+              />
+
+              <Divider colors={colors} />
+
+              <Row
+                icon="database"
+                label={
+                  garminDebugChecking
+                    ? "Checking Garmin Webhooks…"
+                    : "Check Garmin Webhook Debug"
+                }
+                onPress={
+                  garminDebugChecking
+                    ? undefined
+                    : handleCheckGarminActivitiesDebug
+                }
+                colors={colors}
+                isDark={isDark}
+                accentFill={accentFill}
+                right={
+                  garminDebugChecking ? (
                     <ActivityIndicator size="small" />
                   ) : (
                     <Feather
