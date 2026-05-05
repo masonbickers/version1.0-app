@@ -70,6 +70,40 @@ const APP_SCHEME = guessAppScheme();
 const STRAVA_RETURN_URL = Linking.createURL("strava-linked");
 const GARMIN_RETURN_URL = Linking.createURL("garmin-linked");
 
+async function triggerGarminInitialSync() {
+  const user = auth.currentUser;
+  if (!user?.uid) throw new Error("No authenticated user");
+  if (!API_BASE) throw new Error("API is not configured for this build.");
+
+  const idToken = await user.getIdToken();
+  const res = await fetch(`${API_BASE}/garmin/activities/sync`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      reason: "initial_garmin_connection",
+      days: 90,
+    }),
+  });
+
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!res.ok || data?.ok !== true) {
+    console.log("Garmin initial sync failed", data);
+    throw new Error(data?.error || "Garmin initial sync failed");
+  }
+
+  return data;
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const { theme, setTheme, colors, isDark } = useTheme();
@@ -420,7 +454,19 @@ export default function SettingsPage() {
       if (success === "1" || success === 1) {
         await AsyncStorage.multiSet([["garmin_connected", "1"]]);
         setGarminConnected(true);
-        Alert.alert("Garmin", "Garmin account connected.");
+        try {
+          await triggerGarminInitialSync();
+          Alert.alert(
+            "Garmin",
+            "Garmin account connected. Recent activity import has started."
+          );
+        } catch (syncError) {
+          console.log("Garmin initial sync after connect failed", syncError);
+          Alert.alert(
+            "Garmin",
+            "Garmin account connected. Initial activity import could not start automatically; try Sync Garmin Activities."
+          );
+        }
       } else {
         const reason = parsed?.queryParams?.reason;
         Alert.alert(

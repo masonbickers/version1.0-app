@@ -146,7 +146,7 @@ function toUnixSeconds(date) {
 function boundedBackfillWindow(body = {}) {
   const maxDays = Math.max(
     1,
-    Math.min(730, Number(process.env.GARMIN_ACTIVITY_BACKFILL_MAX_DAYS || 7))
+    Math.min(90, Number(process.env.GARMIN_ACTIVITY_BACKFILL_MAX_DAYS || 90))
   );
   const requestedDays = Number(body.days || process.env.GARMIN_ACTIVITY_BACKFILL_DAYS || 7);
   const days = Math.max(1, Math.min(maxDays, Number.isFinite(requestedDays) ? requestedDays : 7));

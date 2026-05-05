@@ -3,6 +3,43 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
 
+import { API_URL } from "../config/api";
+import { auth } from "../firebaseConfig";
+
+async function triggerGarminInitialSync() {
+  const user = auth.currentUser;
+  if (!user?.uid) throw new Error("No authenticated user");
+  if (!API_URL) throw new Error("API is not configured for this build.");
+
+  const idToken = await user.getIdToken();
+  const res = await fetch(`${API_URL}/garmin/activities/sync`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      reason: "initial_garmin_connection",
+      days: 90,
+    }),
+  });
+
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!res.ok || data?.ok !== true) {
+    console.log("Garmin initial sync failed", data);
+    throw new Error(data?.error || "Garmin initial sync failed");
+  }
+
+  return data;
+}
+
 export default function GarminLinked() {
   const params = useLocalSearchParams();
   const router = useRouter();
@@ -22,6 +59,13 @@ export default function GarminLinked() {
         }
 
         await AsyncStorage.setItem("garmin_connected", "1");
+        try {
+          if (active) setStatus("Garmin connected. Importing recent activities...");
+          await triggerGarminInitialSync();
+        } catch (syncError) {
+          console.log("Garmin initial sync after link failed", syncError);
+        }
+
         if (!active) return;
         setStatus("Garmin connected.");
         setTimeout(() => router.replace("/(protected)/settings"), 500);
