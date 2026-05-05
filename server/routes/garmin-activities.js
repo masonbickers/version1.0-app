@@ -178,11 +178,57 @@ function pickBackfillType(body = {}) {
   const requested = String(
     body.backfillType ||
       body.type ||
+      process.env.GARMIN_BACKFILL_TYPE ||
       process.env.GARMIN_ACTIVITY_BACKFILL_TYPE ||
       "activityDetails"
   ).trim();
 
   return BACKFILL_TYPES.has(requested) ? requested : "activityDetails";
+}
+
+function responseMessage(body) {
+  if (typeof body === "string") return body;
+  if (body && typeof body === "object") {
+    return String(body.errorMessage || body.message || body.error || "");
+  }
+  return "";
+}
+
+function endpointNotEnabledSummaryType(body) {
+  const message = responseMessage(body);
+  const match = message.match(/Endpoint not enabled for summary type:\s*([A-Z_]+)/i);
+  return match?.[1] || null;
+}
+
+function provisioningErrorForSummaryType(summaryType, backfillType) {
+  if (!summaryType) return null;
+
+  if (summaryType === "ACTIVITY_DETAIL") {
+    return {
+      code: "GARMIN_ACTIVITY_DETAIL_BACKFILL_NOT_ENABLED",
+      error:
+        "Garmin app is not enabled for Activity Detail backfill (ACTIVITY_DETAIL). Activity API may appear enabled, but Garmin must also enable the Activity Detail backfill data feed for this app.",
+      action:
+        "Ask Garmin Developer Support to enable ACTIVITY_DETAIL backfill/activity detail delivery for this app.",
+    };
+  }
+
+  if (summaryType === "CONNECT_ACTIVITY") {
+    return {
+      code: "GARMIN_CONNECT_ACTIVITY_BACKFILL_NOT_ENABLED",
+      error:
+        "Garmin app is not enabled for Activity Summary backfill (CONNECT_ACTIVITY). Activity API may appear enabled, but Garmin must also enable the Activity Summary backfill data feed for this app.",
+      action:
+        "Ask Garmin Developer Support to enable CONNECT_ACTIVITY backfill/activity summary delivery for this app, or configure GARMIN_BACKFILL_TYPE=activityDetails if Activity Detail backfill is enabled.",
+    };
+  }
+
+  return {
+    code: "GARMIN_BACKFILL_ENDPOINT_NOT_ENABLED",
+    error: `Garmin app is not enabled for ${summaryType} backfill.`,
+    action: `Ask Garmin Developer Support to enable ${summaryType} backfill for this app.`,
+    backfillType,
+  };
 }
 
 function buildBackfillRequest({ backfillType, startSec, endSec }) {
@@ -243,6 +289,7 @@ async function requestActivitiesBackfill({ accessToken, startSec, endSec, backfi
     pending: resp.status === 202,
     status: resp.status,
     retryAfter: resp.headers.get("retry-after") || null,
+    endpointNotEnabledSummaryType: endpointNotEnabledSummaryType(body),
     request,
     body,
   };
@@ -459,13 +506,24 @@ router.post("/sync", requireUser, async (req, res) => {
 
     if (!backfillResult.ok) {
       const isRateLimited = backfillResult.status === 429;
+      const provisioningError = provisioningErrorForSummaryType(
+        backfillResult.endpointNotEnabledSummaryType,
+        backfillType
+      );
       return res.status(backfillResult.status || 502).json({
         ok: false,
-        error: isRateLimited
-          ? rateLimitMessage(backfillResult.retryAfter)
-          : "Garmin activity backfill request failed",
+        error:
+          provisioningError?.error ||
+          (isRateLimited
+            ? rateLimitMessage(backfillResult.retryAfter)
+            : "Garmin activity backfill request failed"),
+        code: provisioningError?.code || null,
+        action: provisioningError?.action || null,
         status: backfillResult.status,
         retryAfter: backfillResult.retryAfter,
+        backfillType,
+        endpointNotEnabledSummaryType:
+          backfillResult.endpointNotEnabledSummaryType || null,
         garminRequest: backfillResult.request,
         details: backfillResult.body,
       });
