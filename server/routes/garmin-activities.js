@@ -13,6 +13,7 @@ const TOKEN_ENDPOINT =
   process.env.GARMIN_TOKEN_ENDPOINT ||
   "https://diauth.garmin.com/di-oauth2-service/oauth/token";
 const SYNC_COOLDOWN_MS = 75 * 1000;
+const BACKFILL_TYPES = new Set(["activityDetails", "activities"]);
 
 function pickGarminActivityIntegrationEntry(userData = {}) {
   const integrations = userData.integrations || {};
@@ -173,10 +174,48 @@ function boundedBackfillWindow(body = {}) {
   };
 }
 
-async function requestActivitiesBackfill({ accessToken, startSec, endSec }) {
-  const url = `${ACTIVITY_BASE}/backfill/activities?summaryStartTimeInSeconds=${startSec}&summaryEndTimeInSeconds=${endSec}`;
-  const resp = await fetch(url, {
+function pickBackfillType(body = {}) {
+  const requested = String(
+    body.backfillType ||
+      body.type ||
+      process.env.GARMIN_ACTIVITY_BACKFILL_TYPE ||
+      "activityDetails"
+  ).trim();
+
+  return BACKFILL_TYPES.has(requested) ? requested : "activityDetails";
+}
+
+function buildBackfillRequest({ backfillType, startSec, endSec }) {
+  const params = new URLSearchParams({
+    summaryStartTimeInSeconds: String(startSec),
+    summaryEndTimeInSeconds: String(endSec),
+  });
+
+  return {
     method: "GET",
+    url: `${ACTIVITY_BASE}/backfill/${backfillType}?${params.toString()}`,
+    body: null,
+    params: {
+      summaryStartTimeInSeconds: startSec,
+      summaryEndTimeInSeconds: endSec,
+    },
+    backfillType,
+  };
+}
+
+async function requestActivitiesBackfill({ accessToken, startSec, endSec, backfillType }) {
+  const request = buildBackfillRequest({ backfillType, startSec, endSec });
+
+  console.log("[garmin-activities] backfill request", {
+    url: request.url,
+    method: request.method,
+    body: request.body,
+    params: request.params,
+    backfillType: request.backfillType,
+  });
+
+  const resp = await fetch(request.url, {
+    method: request.method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
@@ -191,12 +230,20 @@ async function requestActivitiesBackfill({ accessToken, startSec, endSec }) {
     body = text || {};
   }
 
+  console.log("[garmin-activities] backfill response", {
+    url: request.url,
+    method: request.method,
+    status: resp.status,
+    body,
+    backfillType: request.backfillType,
+  });
+
   return {
     ok: resp.status >= 200 && resp.status < 300,
     pending: resp.status === 202,
     status: resp.status,
     retryAfter: resp.headers.get("retry-after") || null,
-    url,
+    request,
     body,
   };
 }
@@ -380,11 +427,13 @@ router.post("/sync", requireUser, async (req, res) => {
         error: window.error,
       });
     }
+    const backfillType = pickBackfillType(req.body || {});
 
     const backfillResult = await requestActivitiesBackfill({
       accessToken: tokenResult.accessToken,
       startSec: window.startSec,
       endSec: window.endSec,
+      backfillType,
     });
 
     await userRef.collection("garmin_sync_requests").add({
@@ -395,10 +444,12 @@ router.post("/sync", requireUser, async (req, res) => {
       status: backfillResult.ok ? "requested" : "failed",
       httpStatus: backfillResult.status,
       retryAfter: backfillResult.retryAfter,
+      garminRequest: backfillResult.request,
       garminResponse: backfillResult.body ?? null,
       garminUserId: garmin?.garminUserId || null,
       credentialProfile: garmin?.credentialProfile || null,
       integrationKey,
+      backfillType,
       refreshedToken: !!tokenResult.refreshed,
       summaryStartTimeInSeconds: window.startSec,
       summaryEndTimeInSeconds: window.endSec,
@@ -415,6 +466,7 @@ router.post("/sync", requireUser, async (req, res) => {
           : "Garmin activity backfill request failed",
         status: backfillResult.status,
         retryAfter: backfillResult.retryAfter,
+        garminRequest: backfillResult.request,
         details: backfillResult.body,
       });
     }
@@ -427,6 +479,8 @@ router.post("/sync", requireUser, async (req, res) => {
       from: window.start.toISOString().slice(0, 10),
       to: window.end.toISOString().slice(0, 10),
       status: backfillResult.status,
+      backfillType,
+      garminRequest: backfillResult.request,
     });
   } catch (e) {
     console.error("Garmin manual sync error:", e);
