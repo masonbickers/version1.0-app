@@ -540,8 +540,10 @@ export default function SettingsPage() {
       const res = await fetch(`${API_BASE}/garmin/activities/sync`, {
         method: "POST",
         headers: {
+          "Content-Type": "application/json",
           Authorization: `Bearer ${idToken}`,
         },
+        body: JSON.stringify({ days: 7 }),
       });
 
       const text = await res.text();

@@ -486,18 +486,15 @@ function ActivityLogTab({ activities, profile, router }) {
 
   return (
     <View style={s.activityPage}>
-      <DashboardCard eyebrow="Activity log" title="Recent sessions">
-        <Text style={s.cardBody}>
-          {hasActivities
-            ? "Clean session summaries, without the social feed framing."
-            : "Your logged and synced sessions will appear here."}
-        </Text>
-      </DashboardCard>
-
       {hasActivities ? (
         <View style={s.activityList}>
           {activities.map((activity) => (
-            <ActivityFeedItem key={activity.id} activity={activity} profile={profile} />
+            <ActivityFeedItem
+              key={activity.id}
+              activity={activity}
+              profile={profile}
+              router={router}
+            />
           ))}
         </View>
       ) : (
@@ -539,10 +536,32 @@ function EmptyActivityState({ router }) {
   );
 }
 
-function ActivityFeedItem({ activity, profile }) {
+function ActivityFeedItem({ activity, profile, router }) {
   const { c, s } = useYouTheme();
+  const canOpen = Boolean(activity.detailId && activity.detailSource);
+  const hasRoutePreview =
+    Array.isArray(activity.routeCoordinates) && activity.routeCoordinates.length > 1;
+  const usefulStats = (Array.isArray(activity.stats) ? activity.stats : []).filter(
+    ([label, value]) => value && String(label).toLowerCase() !== "type"
+  );
+
+  const openActivity = () => {
+    if (!canOpen) return;
+    router.push({
+      pathname: "/me/activity/[id]",
+      params: {
+        id: String(activity.detailId),
+        source: String(activity.detailSource),
+      },
+    });
+  };
+
   return (
-    <View style={s.activityCard}>
+    <TouchableOpacity
+      style={s.activityCard}
+      activeOpacity={canOpen ? 0.86 : 1}
+      onPress={canOpen ? openActivity : undefined}
+    >
       <View style={s.activityTop}>
         <View style={s.activityIdentity}>
           <View style={s.activityAvatarWrap}>
@@ -555,27 +574,51 @@ function ActivityFeedItem({ activity, profile }) {
           <View style={s.activityHeaderCopy}>
             <Text style={s.activityHeaderName}>{profile?.name || "You"}</Text>
             <Text style={s.activityHeaderMeta} numberOfLines={1}>
-              {activity.whenLabel}
+              {[activity.whenLabel, activity.deviceLabel].filter(Boolean).join(" · ")}
             </Text>
+            {!!activity.locationLabel && (
+              <View style={s.activityLocationRow}>
+                <Feather name={activity.locationIcon || "map-pin"} size={15} color={c.text} />
+                <Text style={s.activityLocationText} numberOfLines={1}>
+                  {activity.locationLabel}
+                </Text>
+              </View>
+            )}
           </View>
-        </View>
-
-        <View style={s.activityTypePill}>
-          <Feather name={activity.icon} size={15} color={c.orange} />
-          <Text style={s.activityTypePillText}>{activity.typeLabel}</Text>
         </View>
       </View>
 
       <Text style={s.activityTitle}>{activity.title}</Text>
       {!!activity.note && <Text style={s.activityNote}>{activity.note}</Text>}
 
-      <View style={s.activityStatsRow}>
-        {activity.stats.map(([label, value]) => (
-          <View key={label} style={s.activityStatTile}>
-            <Text style={s.activityStatValue}>{value}</Text>
-            <Text style={s.activityStatLabel}>{label}</Text>
-          </View>
-        ))}
+      {!!usefulStats.length && (
+        <View style={s.activityStatsRow}>
+          {usefulStats.slice(0, 4).map(([label, value]) => (
+            <View key={label} style={s.activityStatColumn}>
+              <Text style={s.activityStatLabel}>{label}</Text>
+              <Text style={s.activityStatValue}>{value}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {hasRoutePreview && <ActivityRoutePreview points={activity.routeCoordinates} />}
+    </TouchableOpacity>
+  );
+}
+
+function ActivityRoutePreview({ points }) {
+  const { c, s } = useYouTheme();
+  const route = routePreviewPoints(points, 320, 160);
+  if (!route.length) return null;
+
+  return (
+    <View style={s.activityMapPreview}>
+      <Svg width="100%" height="100%" viewBox="0 0 320 160">
+        <Path d={linePath(route)} fill="none" stroke={c.orange} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+      </Svg>
+      <View style={s.activityMapBadge}>
+        <Text style={s.activityMapBadgeText}>Start and end hidden</Text>
       </View>
     </View>
   );
@@ -760,6 +803,18 @@ function buildActivityFeed(recentActivities, garminWorkoutSyncs) {
         : `${type} session`);
     const averageHr = toNum(activity.average_heartrate || activity.averageHeartRate, 0);
     const calories = toNum(activity.calories || activity.kilojoules, 0);
+    const deviceLabel =
+      activity.deviceName ||
+      activity.device_name ||
+      activity.rawGarminActivity?.deviceName ||
+      activity.rawGarminActivity?.device_name ||
+      activity.rawGarminActivity?.device?.name ||
+      (provider === "garmin" ? "Garmin" : "");
+    const locationLabel =
+      activity.location ||
+      activity.rawGarminActivity?.location ||
+      activity.rawGarminActivity?.startLocation ||
+      "";
     const stats = isStrength
       ? [
           minutes > 0 ? ["Time", formatLongDuration(minutes)] : null,
@@ -774,15 +829,34 @@ function buildActivityFeed(recentActivities, garminWorkoutSyncs) {
 
     return {
       id: activity.id || `activity-${index}`,
+      detailId: activity.id || activity.activityId || "",
+      detailSource:
+        activity.provider === "garmin"
+          ? activity.source || "garmin_activities"
+          : "stravaActivities",
       icon: provider === "garmin" ? "watch" : isStrength ? "zap" : type === "Walk" ? "map-pin" : "activity",
       typeLabel: provider === "garmin" ? "Garmin" : isStrength ? "Strength" : type,
       note: activity.description || activity.note || "",
       stats: stats.length ? stats : [["Type", isStrength ? "Strength" : type]],
       title,
+      deviceLabel,
+      locationLabel,
+      locationIcon: isStrength ? "dumbbell" : "map-pin",
+      routeCoordinates: activity.routeCoordinates || [],
       whenLabel:
         activity.whenLabel ||
-        formatActivityDate(activity.startDateMs || activity.startDate || activity.when),
-      sortMs: toMillis(activity.startDateMs || activity.startDate || activity.when),
+        formatActivityDate(
+          activity.startDateMs ||
+            activity.startDate ||
+            activity.when ||
+            activity.createdAtMs
+        ),
+      sortMs: toMillis(
+        activity.startDateMs ||
+          activity.startDate ||
+          activity.when ||
+          activity.createdAtMs
+      ),
     };
   });
 
@@ -799,6 +873,8 @@ function buildActivityFeed(recentActivities, garminWorkoutSyncs) {
 
       return {
         id: `garmin-sync-${sync.id || workoutId || index}`,
+        detailId: sync.id || workoutId || "",
+        detailSource: "garmin_workout_syncs",
         icon: "watch",
         typeLabel: "Garmin",
         note: "Sent to Garmin via Training API",
@@ -861,6 +937,50 @@ function pointsFor(values, width, height, pad = 10, forcedMax) {
 
 function linePath(points) {
   return points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+}
+
+function normaliseRoutePoint(point) {
+  if (!point) return null;
+  const lat = toNum(
+    point.lat ??
+      point.latitude ??
+      point.positionLat ??
+      point.startLatitude,
+    NaN
+  );
+  const lon = toNum(
+    point.lon ??
+      point.lng ??
+      point.longitude ??
+      point.positionLong ??
+      point.positionLng ??
+      point.startLongitude,
+    NaN
+  );
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return { lat, lon };
+}
+
+function routePreviewPoints(points, width, height) {
+  const coords = (Array.isArray(points) ? points : [])
+    .map(normaliseRoutePoint)
+    .filter(Boolean);
+
+  if (coords.length < 2) return [];
+
+  const minLat = Math.min(...coords.map((p) => p.lat));
+  const maxLat = Math.max(...coords.map((p) => p.lat));
+  const minLon = Math.min(...coords.map((p) => p.lon));
+  const maxLon = Math.max(...coords.map((p) => p.lon));
+  const latSpan = Math.max(0.000001, maxLat - minLat);
+  const lonSpan = Math.max(0.000001, maxLon - minLon);
+  const pad = 16;
+
+  return coords.map((p) => ({
+    x: pad + ((p.lon - minLon) / lonSpan) * (width - pad * 2),
+    y: pad + (1 - (p.lat - minLat) / latSpan) * (height - pad * 2),
+  }));
 }
 
 function formatKm(value) {
@@ -1480,7 +1600,7 @@ function makeStyles(c) {
       fontWeight: "800",
     },
     activityPage: {
-      gap: 16,
+      gap: 0,
     },
     activityList: {
       gap: 14,
@@ -1547,28 +1667,27 @@ function makeStyles(c) {
       fontWeight: "800",
     },
     activityCard: {
-      padding: 18,
-      borderRadius: 24,
+      padding: 20,
+      borderRadius: 28,
       backgroundColor: c.surface,
       gap: 16,
+      borderWidth: 1,
+      borderColor: c.faintLine,
     },
     activityTop: {
       flexDirection: "row",
-      justifyContent: "space-between",
-      gap: 12,
+      gap: 14,
     },
     activityIdentity: {
       flex: 1,
       flexDirection: "row",
-      gap: 12,
+      gap: 14,
     },
     activityAvatarWrap: {
-      width: 48,
-      height: 48,
-      borderRadius: 16,
-      borderWidth: 1.5,
-      borderColor: c.orange,
-      backgroundColor: c.surfaceAlt,
+      width: 54,
+      height: 54,
+      borderRadius: 999,
+      backgroundColor: c.panel,
       alignItems: "center",
       justifyContent: "center",
       overflow: "hidden",
@@ -1589,64 +1708,79 @@ function makeStyles(c) {
     },
     activityHeaderName: {
       color: c.text,
-      fontSize: 15,
-      fontWeight: "800",
+      fontSize: 18,
+      lineHeight: 22,
+      fontWeight: "900",
     },
     activityHeaderMeta: {
       color: c.muted,
-      fontSize: 12,
+      fontSize: 14,
+      lineHeight: 18,
     },
-    activityTypePill: {
-      paddingHorizontal: 10,
-      paddingVertical: 8,
-      borderRadius: 999,
-      backgroundColor: c.surfaceAlt,
+    activityLocationRow: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 6,
+      gap: 8,
+      paddingTop: 2,
     },
-    activityTypePillText: {
-      color: c.text,
-      fontSize: 11,
-      fontWeight: "800",
-      textTransform: "uppercase",
-      letterSpacing: 0.7,
+    activityLocationText: {
+      color: c.muted,
+      fontSize: 14,
+      lineHeight: 18,
     },
     activityTitle: {
       color: c.text,
-      fontSize: 26,
-      lineHeight: 30,
+      fontSize: 30,
+      lineHeight: 35,
       fontWeight: "900",
-      letterSpacing: -0.8,
     },
     activityNote: {
       color: c.muted,
-      fontSize: 14,
-      lineHeight: 20,
-      marginTop: -6,
+      fontSize: 15,
+      lineHeight: 21,
+      marginTop: -8,
     },
     activityStatsRow: {
       flexDirection: "row",
-      gap: 10,
+      justifyContent: "space-between",
+      gap: 16,
     },
-    activityStatTile: {
+    activityStatColumn: {
       flex: 1,
-      padding: 12,
-      borderRadius: 18,
-      backgroundColor: c.surfaceAlt,
       gap: 6,
     },
     activityStatValue: {
       color: c.text,
-      fontSize: 18,
+      fontSize: 23,
+      lineHeight: 28,
       fontWeight: "900",
     },
     activityStatLabel: {
       color: c.muted,
-      fontSize: 11,
-      fontWeight: "700",
-      textTransform: "uppercase",
-      letterSpacing: 0.7,
+      fontSize: 14,
+      lineHeight: 18,
+    },
+    activityMapPreview: {
+      height: 190,
+      borderRadius: 12,
+      overflow: "hidden",
+      backgroundColor: c.surfaceAlt,
+      borderWidth: 1,
+      borderColor: c.faintLine,
+    },
+    activityMapBadge: {
+      position: "absolute",
+      left: 12,
+      top: 12,
+      paddingHorizontal: 10,
+      paddingVertical: 7,
+      borderRadius: 6,
+      backgroundColor: c.panel,
+    },
+    activityMapBadgeText: {
+      color: c.text,
+      fontSize: 13,
+      fontWeight: "900",
     },
   });
 }

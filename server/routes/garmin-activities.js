@@ -146,10 +146,10 @@ function toUnixSeconds(date) {
 function boundedBackfillWindow(body = {}) {
   const maxDays = Math.max(
     1,
-    Math.min(730, Number(process.env.GARMIN_ACTIVITY_BACKFILL_MAX_DAYS || 30))
+    Math.min(730, Number(process.env.GARMIN_ACTIVITY_BACKFILL_MAX_DAYS || 7))
   );
-  const requestedDays = Number(body.days || process.env.GARMIN_ACTIVITY_BACKFILL_DAYS || 30);
-  const days = Math.max(1, Math.min(maxDays, Number.isFinite(requestedDays) ? requestedDays : 30));
+  const requestedDays = Number(body.days || process.env.GARMIN_ACTIVITY_BACKFILL_DAYS || 7);
+  const days = Math.max(1, Math.min(maxDays, Number.isFinite(requestedDays) ? requestedDays : 7));
   const start = body.from ? new Date(`${body.from}T00:00:00.000Z`) : dateDaysAgo(days);
   const end = body.to ? new Date(`${body.to}T23:59:59.999Z`) : endOfTodayUtc();
 
@@ -192,6 +192,10 @@ function responseMessage(body) {
     return String(body.errorMessage || body.message || body.error || "");
   }
   return "";
+}
+
+function isDuplicateBackfill(body) {
+  return /duplicate backfill processed/i.test(responseMessage(body));
 }
 
 function endpointNotEnabledSummaryType(body) {
@@ -286,6 +290,7 @@ async function requestActivitiesBackfill({ accessToken, startSec, endSec, backfi
 
   return {
     ok: resp.status >= 200 && resp.status < 300,
+    duplicate: resp.status === 409 && isDuplicateBackfill(body),
     pending: resp.status === 202,
     status: resp.status,
     retryAfter: resp.headers.get("retry-after") || null,
@@ -607,7 +612,11 @@ router.post("/sync", requireUser, async (req, res) => {
       mode: "activity_backfill",
       requestedAt: admin.firestore.FieldValue.serverTimestamp(),
       requestedAtMs: Date.now(),
-      status: backfillResult.ok ? "requested" : "failed",
+      status: backfillResult.duplicate
+        ? "duplicate"
+        : backfillResult.ok
+        ? "requested"
+        : "failed",
       httpStatus: backfillResult.status,
       retryAfter: backfillResult.retryAfter,
       garminRequest: backfillResult.request,
@@ -622,6 +631,22 @@ router.post("/sync", requireUser, async (req, res) => {
       from: window.start.toISOString().slice(0, 10),
       to: window.end.toISOString().slice(0, 10),
     });
+
+    if (backfillResult.duplicate) {
+      return res.json({
+        ok: true,
+        duplicate: true,
+        message:
+          "Garmin already processed this backfill window. Wait for webhook delivery or choose a different date range.",
+        garminUserId: garmin?.garminUserId || null,
+        from: window.start.toISOString().slice(0, 10),
+        to: window.end.toISOString().slice(0, 10),
+        status: backfillResult.status,
+        backfillType,
+        garminRequest: backfillResult.request,
+        details: backfillResult.body,
+      });
+    }
 
     if (!backfillResult.ok) {
       const isRateLimited = backfillResult.status === 429;

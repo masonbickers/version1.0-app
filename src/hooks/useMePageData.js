@@ -142,7 +142,7 @@ function deriveProgress(activities) {
 }
 
 function deriveRecentActivities(activities) {
-  return activities.slice(0, 2).map((activity) => {
+  return activities.map((activity) => {
     const whenMs = toMillis(activity.startDateMs || activity.startDate || activity.when);
     const distanceKm = toNum(
       activity.distanceKm ??
@@ -176,6 +176,9 @@ function readActivitySortMs(activity) {
       activity.startedAt ||
       activity.summaryStartTimeInSeconds * 1000 ||
       activity.startTimeInSeconds * 1000 ||
+      activity.createdAtMs ||
+      activity.updatedAtMs ||
+      activity.fetchedAtMs ||
       activity.when
   );
 }
@@ -200,10 +203,32 @@ function normalizeGarminActivity(activity, source, index) {
     type: activity.activityType || activity.type || activity.sport || "Garmin activity",
     name: activity.activityName || activity.name || activity.title || "Garmin activity",
     startDateMs: sortMs,
+    createdAtMs: toMillis(activity.createdAtMs),
     distanceKm: distanceMeters > 0 ? distanceMeters / 1000 : 0,
     movingTimeMin: durationSec > 0 ? durationSec / 60 : 0,
     averageHeartRate: activity.averageHeartRateInBeatsPerMinute || activity.avgHr || activity.averageHeartRate,
     calories: activity.activeKilocalories || activity.calories,
+    deviceName:
+      activity.deviceName ||
+      activity.device_name ||
+      activity.rawGarminActivity?.deviceName ||
+      activity.rawGarminActivity?.device_name ||
+      activity.rawGarminActivity?.device?.name ||
+      "",
+    location:
+      activity.location ||
+      activity.rawGarminActivity?.location ||
+      activity.rawGarminActivity?.startLocation ||
+      "",
+    routeCoordinates:
+      activity.routeCoordinates ||
+      activity.coordinates ||
+      activity.trackPoints ||
+      activity.rawGarminActivity?.routeCoordinates ||
+      activity.rawGarminActivity?.coordinates ||
+      activity.rawGarminActivity?.trackPoints ||
+      activity.rawGarminActivity?.samples ||
+      [],
     rawGarminActivity: activity,
   };
 }
@@ -286,7 +311,13 @@ export function useMePageData() {
               limit(40)
             )
           ),
-          getDocs(query(collection(db, "users", uid, "garmin_activities"), limit(100))),
+          getDocs(
+            query(
+              collection(db, "users", uid, "garmin_activities"),
+              orderBy("createdAtMs", "desc"),
+              limit(100)
+            )
+          ),
           getDocs(query(collection(db, "users", uid, "garminActivities"), limit(100))),
           getDocs(
             query(
@@ -322,7 +353,9 @@ export function useMePageData() {
 
       const nextIntegrations = {
         stravaConnected: stravaConnectedRaw === "1",
-        garminConnected: userData?.integrations?.garmin?.connected === true,
+        garminConnected:
+          userData?.integrations?.garminActivity?.connected === true ||
+          userData?.integrations?.garmin?.connected === true,
         lastStravaSyncMs:
           toMillis(userData?.lastStravaSyncAt) || cachedSyncMs || 0,
       };
