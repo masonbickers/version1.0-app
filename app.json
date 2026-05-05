@@ -68,13 +68,6 @@
           "cameraPermission": "Allow Be to use your camera to scan meals.",
           "photosPermission": "Allow Be to choose photos for nutrition logging and your profile."
         }
-      ],
-      [
-        "@react-native-voice/voice",
-        {
-          "microphonePermission": "Allow Be to use your microphone for voice meal logging.",
-          "speechRecognitionPermission": "Allow Be to convert your speech into meal logs."
-        }
       ]
     ],
     "experiments": {
