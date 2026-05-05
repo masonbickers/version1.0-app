@@ -198,7 +198,9 @@ export function useProfilePageData() {
 
       setIntegrations({
         stravaConnected: stravaConnectedRaw === "1",
-        garminConnected: userData?.integrations?.garmin?.connected === true,
+        garminConnected:
+          userData?.integrations?.garminActivity?.connected === true ||
+          userData?.integrations?.garmin?.connected === true,
         lastStravaSyncMs: toMillis(userData?.lastStravaSyncAt) || cachedSyncMs || 0,
       });
     } catch (error) {

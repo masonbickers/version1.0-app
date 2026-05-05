@@ -95,6 +95,48 @@ function decodePolyline(encoded) {
   return coordinates;
 }
 
+function normaliseCoordinate(point) {
+  if (!point) return null;
+
+  if (Array.isArray(point) && point.length >= 2) {
+    const latitude = Number(point[0]);
+    const longitude = Number(point[1]);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+      return { latitude, longitude };
+    }
+  }
+
+  if (typeof point === "object") {
+    const latitude = Number(
+      point.latitude ??
+        point.lat ??
+        point.latitudeInDegree ??
+        point.latitudeInDegrees ??
+        point.positionLat
+    );
+    const longitude = Number(
+      point.longitude ??
+        point.lng ??
+        point.lon ??
+        point.longitudeInDegree ??
+        point.longitudeInDegrees ??
+        point.positionLong ??
+        point.positionLng
+    );
+
+    if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+      return { latitude, longitude };
+    }
+  }
+
+  return null;
+}
+
+function normaliseCoordinateArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map(normaliseCoordinate).filter(Boolean);
+}
+
 const STRENGTH_ACTIVITY_TYPES = new Set([
   "WeightTraining",
   "StrengthTraining",
@@ -140,9 +182,180 @@ function toDateOnly(iso) {
   return raw.slice(0, 10);
 }
 
+const STORED_ACTIVITY_SOURCES = new Set([
+  "garmin_activities",
+  "garminActivities",
+  "stravaActivities",
+  "garmin_workout_syncs",
+]);
+
+function finiteNumber(...values) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
+function storedActivityType(value) {
+  const raw =
+    typeof value === "object"
+      ? value?.typeKey || value?.typeName || value?.name || value?.displayName
+      : value;
+  const text = String(raw || "").trim();
+  const lower = text.toLowerCase();
+  if (lower.includes("run")) return "Run";
+  if (lower.includes("ride") || lower.includes("bike") || lower.includes("cycling")) return "Ride";
+  if (lower.includes("swim")) return "Swim";
+  if (lower.includes("walk")) return "Walk";
+  if (lower.includes("strength") || lower.includes("weight") || lower.includes("gym")) return "WeightTraining";
+  return text || "Workout";
+}
+
+function isoFromStoredTime(...values) {
+  for (const value of values) {
+    if (!value) continue;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return new Date(value).toISOString();
+    }
+    if (typeof value?.toMillis === "function") {
+      return new Date(value.toMillis()).toISOString();
+    }
+    if (value?.seconds != null) {
+      return new Date(Number(value.seconds) * 1000).toISOString();
+    }
+    const t = new Date(value).getTime();
+    if (Number.isFinite(t)) return new Date(t).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function pickStoredPolyline(data, raw) {
+  return String(
+    data?.summaryPolyline ||
+      data?.polyline ||
+      data?.map?.summary_polyline ||
+      data?.map?.polyline ||
+      raw?.summaryPolyline ||
+      raw?.polyline ||
+      raw?.map?.summary_polyline ||
+      raw?.map?.polyline ||
+      ""
+  ).trim();
+}
+
+function pickStoredCoordinates(data, raw) {
+  const candidates = [
+    data?.routeCoordinates,
+    data?.coordinates,
+    data?.trackPoints,
+    data?.samples,
+    raw?.routeCoordinates,
+    raw?.coordinates,
+    raw?.trackPoints,
+    raw?.samples,
+    raw?.activitySamples,
+  ];
+
+  for (const candidate of candidates) {
+    const points = normaliseCoordinateArray(candidate);
+    if (points.length > 1) return points;
+  }
+
+  return [];
+}
+
+function mapStoredActivityToHistoryShape(docId, data, source) {
+  const raw = data?.rawGarminActivity || data || {};
+  const type = storedActivityType(data?.activityType || data?.type || data?.sport || raw?.activityType || raw?.sport);
+  const start = isoFromStoredTime(
+    data?.startTime,
+    data?.startDate,
+    data?.startedAt,
+    data?.when,
+    raw?.startTime,
+    raw?.startTimeInSeconds ? Number(raw.startTimeInSeconds) * 1000 : null,
+    data?.uploadedAtMs,
+    data?.uploadedAt,
+    data?.syncedAt,
+    data?.createdAtMs
+  );
+  const distance = finiteNumber(
+    data?.distanceMeters,
+    data?.distanceInMeters,
+    raw?.distanceInMeters,
+    raw?.distanceMeters,
+    data?.distance,
+    data?.distanceKm ? Number(data.distanceKm) * 1000 : null
+  );
+  const movingTime = finiteNumber(
+    data?.durationSeconds,
+    data?.durationInSeconds,
+    raw?.durationInSeconds,
+    raw?.movingDurationInSeconds,
+    raw?.elapsedDurationInSeconds,
+    data?.moving_time,
+    data?.movingTime,
+    data?.movingTimeMin ? Number(data.movingTimeMin) * 60 : null
+  );
+  const avgHr = finiteNumber(
+    data?.averageHeartRate,
+    data?.averageHeartRateInBeatsPerMinute,
+    data?.average_heartrate,
+    raw?.averageHeartRateInBeatsPerMinute
+  );
+  const maxHr = finiteNumber(data?.maxHeartRate, data?.max_heartrate, raw?.maxHeartRateInBeatsPerMinute);
+  const elevation = finiteNumber(data?.elevationGain, data?.total_elevation_gain, raw?.totalElevationGainInMeters);
+  const summaryPolyline = pickStoredPolyline(data, raw);
+  const routeCoordinates = pickStoredCoordinates(data, raw);
+
+  return {
+    id: data?.activityId || docId,
+    name: data?.activityName || data?.name || raw?.activityName || raw?.name || type,
+    type,
+    sport_type: type,
+    start_date: start,
+    start_date_local: start,
+    distance: distance || 0,
+    moving_time: movingTime || 0,
+    elapsed_time: movingTime || 0,
+    average_heartrate: avgHr || undefined,
+    max_heartrate: maxHr || undefined,
+    total_elevation_gain: elevation || undefined,
+    kilojoules: finiteNumber(data?.kilojoules, raw?.kilojoules) || undefined,
+    calories: finiteNumber(data?.calories, raw?.calories, raw?.activeKilocalories) || undefined,
+    device_name: source?.startsWith("garmin") ? "Garmin" : data?.device_name,
+    description: data?.description || data?.note || "",
+    map: summaryPolyline ? { summary_polyline: summaryPolyline } : undefined,
+    routeCoordinates: routeCoordinates.length > 1 ? routeCoordinates : undefined,
+    source,
+    storedData: data,
+  };
+}
+
+async function loadStoredActivity(uid, id, source) {
+  const requestedSource = STORED_ACTIVITY_SOURCES.has(source) ? source : "garmin_activities";
+  const sources =
+    requestedSource === "garmin_activities"
+      ? ["garmin_activities", "garminActivities"]
+      : requestedSource === "garminActivities"
+      ? ["garminActivities", "garmin_activities"]
+      : [requestedSource];
+
+  for (const collectionName of sources) {
+    const snap = await getDoc(doc(db, "users", uid, collectionName, String(id)));
+    if (snap.exists()) {
+      return mapStoredActivityToHistoryShape(snap.id, snap.data() || {}, collectionName);
+    }
+  }
+
+  return null;
+}
+
 export default function ActivityDetailPage() {
   const params = useLocalSearchParams();
   const id = Array.isArray(params?.id) ? params.id[0] : params?.id;
+  const source = Array.isArray(params?.source) ? params.source[0] : params?.source;
   const router = useRouter();
   const { colors, isDark } = useTheme();
   const accentFill =
@@ -220,6 +433,23 @@ export default function ActivityDetailPage() {
           grade: [],
           time: [],
         });
+
+        if (source) {
+          const uid = auth.currentUser?.uid;
+          if (!uid) {
+            setErr("Please sign in again.");
+            return;
+          }
+
+          const stored = await loadStoredActivity(uid, String(id), String(source));
+          if (!stored) {
+            setErr("Activity not found.");
+            return;
+          }
+
+          setActivity(stored);
+          return;
+        }
 
         const token = await AsyncStorage.getItem("strava_access_token");
         if (!token) {
@@ -309,7 +539,7 @@ export default function ActivityDetailPage() {
     };
 
     loadActivity();
-  }, [id]);
+  }, [id, source]);
 
   const s = useMemo(
     () => makeStyles(colors, isDark, accentFill, accentText),
@@ -428,8 +658,28 @@ export default function ActivityDetailPage() {
   // Map coords from Strava summary polyline
   const coords = useMemo(() => {
     const poly =
-      activity?.map?.summary_polyline || activity?.map?.polyline || "";
-    return decodePolyline(poly);
+      activity?.map?.summary_polyline ||
+      activity?.map?.polyline ||
+      activity?.summaryPolyline ||
+      "";
+    const decoded = decodePolyline(poly);
+    if (decoded.length > 1) return decoded;
+
+    const storedCoordinates = normaliseCoordinateArray(
+      activity?.routeCoordinates ||
+        activity?.coordinates ||
+        activity?.storedData?.routeCoordinates ||
+        activity?.storedData?.coordinates ||
+        activity?.storedData?.trackPoints ||
+        activity?.storedData?.samples ||
+        activity?.storedData?.rawGarminActivity?.routeCoordinates ||
+        activity?.storedData?.rawGarminActivity?.coordinates ||
+        activity?.storedData?.rawGarminActivity?.trackPoints ||
+        activity?.storedData?.rawGarminActivity?.samples ||
+        []
+    );
+
+    return storedCoordinates.length > 1 ? storedCoordinates : [];
   }, [activity]);
 
   const region = useMemo(() => {
@@ -1590,6 +1840,24 @@ export default function ActivityDetailPage() {
     return !!ref && ref === String(activity?.id || "");
   }, [activity?.id, targetTrainSession?.linkedActivity?.reference]);
 
+  const isStoredActivity = Boolean(activity?.source);
+  const hasPaceAnalytics =
+    workoutBars.length > 1 ||
+    paceLinePoints.length > 1 ||
+    gapLinePoints.length > 1 ||
+    paceZones.length > 0 ||
+    (Number.isFinite(Number(paceSecPerKm)) && Number(paceSecPerKm) > 0);
+  const hasHeartAnalytics =
+    hrLinePoints.length > 1 ||
+    hrZones.length > 0 ||
+    avgHrValue != null ||
+    maxHrValue != null;
+  const hasTerrainAnalytics =
+    elevationLinePoints.length > 1 ||
+    activity?.total_elevation_gain != null ||
+    maxAltValue != null ||
+    minAltValue != null;
+
   const handleLinkPlanSession = async (option) => {
     try {
       const uid = auth.currentUser?.uid;
@@ -2132,7 +2400,7 @@ export default function ActivityDetailPage() {
             </View>
           ) : null}
 
-          {!targetPlanSessionKey ? (
+          {!targetPlanSessionKey && !isStoredActivity ? (
             <View style={s.linkPlanCard}>
               <View style={s.linkPlanHeader}>
                 <Text style={s.linkPlanEyebrow}>Plan Link</Text>
@@ -2445,20 +2713,19 @@ export default function ActivityDetailPage() {
             </>
           ) : (
             <>
+              {hasPaceAnalytics ? (
               <AnalyticsGroup title="Pace" colors={colors} isDark={isDark}>
+                {workoutBars.length > 1 ? (
                 <View style={s.analyticsItem}>
                   <Text style={s.sectionTitle}>Workout Analysis</Text>
-                  {workoutBars.length > 1 ? (
-                    <WorkoutAnalysisChart
-                      data={workoutBars}
-                      colors={colors}
-                      isDark={isDark}
-                      accent={isDark ? "#60A5FA" : "#2563EB"}
-                    />
-                  ) : (
-                    <Text style={s.centerText}>No split data available for workout analysis.</Text>
-                  )}
+                  <WorkoutAnalysisChart
+                    data={workoutBars}
+                    colors={colors}
+                    isDark={isDark}
+                    accent={isDark ? "#60A5FA" : "#2563EB"}
+                  />
                 </View>
+                ) : null}
 
                 <View style={s.analyticsItem}>
                   <Text style={s.sectionTitle}>Pace</Text>
@@ -2469,9 +2736,7 @@ export default function ActivityDetailPage() {
                       isDark={isDark}
                       accent={isDark ? "#3B82F6" : "#2563EB"}
                     />
-                  ) : (
-                    <Text style={s.centerText}>No pace stream available for this activity.</Text>
-                  )}
+                  ) : null}
                   <View style={s.metricInlineRow}>
                     <MetricInline label="Avg Pace" value={formatPace(paceSecPerKm)} colors={colors} />
                     <MetricInline
@@ -2491,6 +2756,7 @@ export default function ActivityDetailPage() {
                   </View>
                 </View>
 
+                {gapLinePoints.length > 1 || avgGapPaceSec ? (
                 <View style={s.analyticsItem}>
                   <Text style={s.sectionTitle}>Grade Adjusted Pace</Text>
                   {gapLinePoints.length > 1 ? (
@@ -2500,9 +2766,7 @@ export default function ActivityDetailPage() {
                       isDark={isDark}
                       accent={isDark ? "#60A5FA" : "#3B82F6"}
                     />
-                  ) : (
-                    <Text style={s.centerText}>No GAP stream available for this activity.</Text>
-                  )}
+                  ) : null}
                   <View style={s.metricInlineRowSingle}>
                     <MetricInline
                       label="Avg GAP"
@@ -2511,27 +2775,26 @@ export default function ActivityDetailPage() {
                     />
                   </View>
                 </View>
+                ) : null}
 
+                {paceZones.length > 0 ? (
                 <View style={s.analyticsItemLast}>
                   <Text style={s.sectionTitle}>Pace Zones</Text>
-                  {paceZones.length > 0 ? (
-                    <>
-                      <ZoneDistribution
-                        rows={paceZones}
-                        colors={colors}
-                        isDark={isDark}
-                        accent={isDark ? "#3B82F6" : "#2563EB"}
-                      />
-                      {paceZonesSummary ? (
-                        <Text style={s.metricSummaryText}>{paceZonesSummary}</Text>
-                      ) : null}
-                    </>
-                  ) : (
-                    <Text style={s.centerText}>Not enough pace data to calculate zones.</Text>
-                  )}
+                  <ZoneDistribution
+                    rows={paceZones}
+                    colors={colors}
+                    isDark={isDark}
+                    accent={isDark ? "#3B82F6" : "#2563EB"}
+                  />
+                  {paceZonesSummary ? (
+                    <Text style={s.metricSummaryText}>{paceZonesSummary}</Text>
+                  ) : null}
                 </View>
+                ) : null}
               </AnalyticsGroup>
+              ) : null}
 
+              {hasHeartAnalytics ? (
               <AnalyticsGroup title="Heart Rate" colors={colors} isDark={isDark}>
                 <View style={s.analyticsItem}>
                   <Text style={s.sectionTitle}>Heart Rate</Text>
@@ -2542,9 +2805,7 @@ export default function ActivityDetailPage() {
                       isDark={isDark}
                       accent={isDark ? "#EF4444" : "#DC2626"}
                     />
-                  ) : (
-                    <Text style={s.centerText}>No heart-rate stream available for this activity.</Text>
-                  )}
+                  ) : null}
                   <View style={s.metricInlineRow}>
                     <MetricInline
                       label="Avg Heart Rate"
@@ -2570,25 +2831,22 @@ export default function ActivityDetailPage() {
                   </View>
                 </View>
 
+                {hrZones.length > 0 ? (
                 <View style={s.analyticsItemLast}>
                   <Text style={s.sectionTitle}>Heart Rate Zones</Text>
-                  {hrZones.length > 0 ? (
-                    <>
-                      <ZoneDistribution
-                        rows={hrZones}
-                        colors={colors}
-                        isDark={isDark}
-                        accent={isDark ? "#EF4444" : "#DC2626"}
-                      />
-                      {hrZonesSummary ? (
-                        <Text style={s.metricSummaryText}>{hrZonesSummary}</Text>
-                      ) : null}
-                    </>
-                  ) : (
-                    <Text style={s.centerText}>Not enough heart-rate data to calculate zones.</Text>
-                  )}
+                  <ZoneDistribution
+                    rows={hrZones}
+                    colors={colors}
+                    isDark={isDark}
+                    accent={isDark ? "#EF4444" : "#DC2626"}
+                  />
+                  {hrZonesSummary ? (
+                    <Text style={s.metricSummaryText}>{hrZonesSummary}</Text>
+                  ) : null}
                 </View>
+                ) : null}
               </AnalyticsGroup>
+              ) : null}
 
               {(powerLinePoints.length > 1 ||
                 avgPowerValue != null ||
@@ -2703,6 +2961,7 @@ export default function ActivityDetailPage() {
                 </AnalyticsGroup>
               ) : null}
 
+              {hasTerrainAnalytics ? (
               <AnalyticsGroup title="Terrain" colors={colors} isDark={isDark}>
                 <View style={s.analyticsItemLast}>
                   <Text style={s.sectionTitle}>Elevation</Text>
@@ -2713,9 +2972,7 @@ export default function ActivityDetailPage() {
                       isDark={isDark}
                       accent={isDark ? "#22D3EE" : "#0284C7"}
                     />
-                  ) : (
-                    <Text style={s.centerText}>No elevation stream available for this activity.</Text>
-                  )}
+                  ) : null}
                   <View style={s.metricInlineRow}>
                     <MetricInline
                       label="Elevation Gain"
@@ -2753,7 +3010,9 @@ export default function ActivityDetailPage() {
                   ) : null}
                 </View>
               </AnalyticsGroup>
+              ) : null}
 
+              {lapsLoading || splitRows.length > 0 ? (
               <View style={s.sectionBlock}>
                 <Text style={s.sectionTitle}>Splits</Text>
                 {lapsLoading ? (
@@ -2767,11 +3026,11 @@ export default function ActivityDetailPage() {
                     colors={colors}
                     formatPace={formatPace}
                   />
-                ) : (
-                  <Text style={s.centerText}>No split/lap data available for this activity.</Text>
-                )}
+                ) : null}
               </View>
+              ) : null}
 
+              {lapsLoading || classifiedLapRows.length > 0 ? (
               <View style={s.sectionBlock}>
                 <Text style={s.sectionTitle}>Laps</Text>
                 {lapsLoading ? (
@@ -2785,9 +3044,7 @@ export default function ActivityDetailPage() {
                     colors={colors}
                     formatPace={formatPace}
                   />
-                ) : (
-                  <Text style={s.centerText}>No lap data available for this activity.</Text>
-                )}
+                ) : null}
 
                 <View style={s.lapsAiPanel}>
                   <View style={s.lapsAiHeader}>
@@ -2869,6 +3126,7 @@ export default function ActivityDetailPage() {
                   </View>
                 </View>
               </View>
+              ) : null}
             </>
           )}
 
