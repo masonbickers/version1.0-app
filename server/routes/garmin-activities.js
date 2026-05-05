@@ -12,6 +12,7 @@ const ACTIVITY_BASE =
 const TOKEN_ENDPOINT =
   process.env.GARMIN_TOKEN_ENDPOINT ||
   "https://diauth.garmin.com/di-oauth2-service/oauth/token";
+const SYNC_COOLDOWN_MS = 75 * 1000;
 
 function pickGarminActivityIntegrationEntry(userData = {}) {
   const integrations = userData.integrations || {};
@@ -144,10 +145,10 @@ function toUnixSeconds(date) {
 function boundedBackfillWindow(body = {}) {
   const maxDays = Math.max(
     1,
-    Math.min(730, Number(process.env.GARMIN_ACTIVITY_BACKFILL_MAX_DAYS || 365))
+    Math.min(730, Number(process.env.GARMIN_ACTIVITY_BACKFILL_MAX_DAYS || 30))
   );
-  const requestedDays = Number(body.days || process.env.GARMIN_ACTIVITY_BACKFILL_DAYS || 365);
-  const days = Math.max(1, Math.min(maxDays, Number.isFinite(requestedDays) ? requestedDays : 365));
+  const requestedDays = Number(body.days || process.env.GARMIN_ACTIVITY_BACKFILL_DAYS || 30);
+  const days = Math.max(1, Math.min(maxDays, Number.isFinite(requestedDays) ? requestedDays : 30));
   const start = body.from ? new Date(`${body.from}T00:00:00.000Z`) : dateDaysAgo(days);
   const end = body.to ? new Date(`${body.to}T23:59:59.999Z`) : endOfTodayUtc();
 
@@ -194,9 +195,26 @@ async function requestActivitiesBackfill({ accessToken, startSec, endSec }) {
     ok: resp.status >= 200 && resp.status < 300,
     pending: resp.status === 202,
     status: resp.status,
+    retryAfter: resp.headers.get("retry-after") || null,
     url,
     body,
   };
+}
+
+async function getRecentSyncRequest(userRef) {
+  const snap = await userRef
+    .collection("garmin_sync_requests")
+    .orderBy("requestedAtMs", "desc")
+    .limit(1)
+    .get();
+
+  if (snap.empty) return null;
+  return snap.docs[0].data() || null;
+}
+
+function rateLimitMessage(retryAfter) {
+  const retryText = retryAfter ? ` Wait ${retryAfter} seconds and try again.` : " Wait a minute and try again.";
+  return `Garmin rate limit reached.${retryText}`;
 }
 
 function toMillis(value) {
@@ -332,6 +350,20 @@ router.post("/sync", requireUser, async (req, res) => {
       });
     }
 
+    const recentRequest = await getRecentSyncRequest(userRef);
+    const recentRequestedAtMs = Number(recentRequest?.requestedAtMs || 0);
+    const msSinceRecent = Date.now() - recentRequestedAtMs;
+    if (recentRequestedAtMs && msSinceRecent >= 0 && msSinceRecent < SYNC_COOLDOWN_MS) {
+      return res.status(429).json({
+        ok: false,
+        error: `Garmin sync was just requested. Wait ${Math.ceil(
+          (SYNC_COOLDOWN_MS - msSinceRecent) / 1000
+        )} seconds and try again.`,
+        cooldownSeconds: Math.ceil((SYNC_COOLDOWN_MS - msSinceRecent) / 1000),
+        lastStatus: recentRequest?.httpStatus || null,
+      });
+    }
+
     const tokenResult = await refreshAccessTokenIfNeeded(uid, integrationKey, garmin);
     if (!tokenResult.ok) {
       return res.status(tokenResult.status || 401).json({
@@ -362,6 +394,7 @@ router.post("/sync", requireUser, async (req, res) => {
       requestedAtMs: Date.now(),
       status: backfillResult.ok ? "requested" : "failed",
       httpStatus: backfillResult.status,
+      retryAfter: backfillResult.retryAfter,
       garminResponse: backfillResult.body ?? null,
       garminUserId: garmin?.garminUserId || null,
       credentialProfile: garmin?.credentialProfile || null,
@@ -374,10 +407,14 @@ router.post("/sync", requireUser, async (req, res) => {
     });
 
     if (!backfillResult.ok) {
+      const isRateLimited = backfillResult.status === 429;
       return res.status(backfillResult.status || 502).json({
         ok: false,
-        error: "Garmin activity backfill request failed",
+        error: isRateLimited
+          ? rateLimitMessage(backfillResult.retryAfter)
+          : "Garmin activity backfill request failed",
         status: backfillResult.status,
+        retryAfter: backfillResult.retryAfter,
         details: backfillResult.body,
       });
     }

@@ -82,12 +82,54 @@ async function deleteStateByRef(ref) {
   }
 }
 
+const TOKEN_ENDPOINT = "https://diauth.garmin.com/di-oauth2-service/oauth/token";
+const USER_ID_ENDPOINT = "https://apis.garmin.com/wellness-api/rest/user/id";
+
+function hasAnyActivityCredentialEnv() {
+  return !!(
+    process.env.GARMIN_ACTIVITY_CLIENT_ID ||
+    process.env.GARMIN_ACTIVITY_CLIENT_SECRET ||
+    process.env.GARMIN_ACTIVITY_REDIRECT_URI
+  );
+}
+
+function getGarminOAuthConfig(profile = "activity") {
+  const useActivity = profile === "activity" && hasAnyActivityCredentialEnv();
+
+  const config = useActivity
+    ? {
+        profile: "activity",
+        integrationKey: "garminActivity",
+        clientId: process.env.GARMIN_ACTIVITY_CLIENT_ID,
+        clientSecret: process.env.GARMIN_ACTIVITY_CLIENT_SECRET,
+        redirectUri:
+          process.env.GARMIN_ACTIVITY_REDIRECT_URI ||
+          process.env.GARMIN_REDIRECT_URI,
+        missingClientMessage:
+          "Missing GARMIN_ACTIVITY_CLIENT_ID or GARMIN_ACTIVITY_REDIRECT_URI",
+        missingSecretMessage:
+          "Missing GARMIN_ACTIVITY_CLIENT_ID, GARMIN_ACTIVITY_CLIENT_SECRET, or GARMIN_ACTIVITY_REDIRECT_URI",
+      }
+    : {
+        profile: "default",
+        integrationKey: "garmin",
+        clientId: process.env.GARMIN_CLIENT_ID,
+        clientSecret: process.env.GARMIN_CLIENT_SECRET,
+        redirectUri: process.env.GARMIN_REDIRECT_URI,
+        missingClientMessage: "Missing GARMIN_CLIENT_ID or GARMIN_REDIRECT_URI",
+        missingSecretMessage:
+          "Missing GARMIN_CLIENT_ID, GARMIN_CLIENT_SECRET, or GARMIN_REDIRECT_URI",
+      };
+
+  return config;
+}
+
 /** Save tokens under user */
-async function saveGarminIntegration(uid, integration) {
+async function saveGarminIntegration(uid, integration, integrationKey = "garmin") {
   const db = admin.firestore();
   await db.collection("users").doc(uid).set(
     {
-      integrations: { garmin: integration },
+      integrations: { [integrationKey]: integration },
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     { merge: true }
@@ -103,11 +145,11 @@ async function safeJson(resp) {
 }
 
 async function buildGarminAuthUrl({ uid, requestedReturnUrl }) {
-  const clientId = process.env.GARMIN_CLIENT_ID;
-  const redirectUri = process.env.GARMIN_REDIRECT_URI;
+  const oauthConfig = getGarminOAuthConfig("activity");
+  const { clientId, redirectUri } = oauthConfig;
 
   if (!clientId || !redirectUri) {
-    const error = new Error("Missing GARMIN_CLIENT_ID or GARMIN_REDIRECT_URI");
+    const error = new Error(oauthConfig.missingClientMessage);
     error.statusCode = 500;
     throw error;
   }
@@ -124,6 +166,8 @@ async function buildGarminAuthUrl({ uid, requestedReturnUrl }) {
   await putState(state, {
     uid,
     codeVerifier,
+    credentialProfile: oauthConfig.profile,
+    integrationKey: oauthConfig.integrationKey,
     redirectToApp: safeRedirectToApp,
   });
 
@@ -138,6 +182,7 @@ async function buildGarminAuthUrl({ uid, requestedReturnUrl }) {
 
   return {
     authUrl: `https://connect.garmin.com/oauth2Confirm?${params.toString()}`,
+    credentialProfile: oauthConfig.profile,
     redirectUri,
     returnUrl: safeRedirectToApp,
   };
@@ -272,12 +317,14 @@ router.get("/callback", async (req, res) => {
       );
     }
 
-    const clientId = process.env.GARMIN_CLIENT_ID;
-    const clientSecret = process.env.GARMIN_CLIENT_SECRET;
-    const redirectUri = process.env.GARMIN_REDIRECT_URI;
+    const oauthConfig = getGarminOAuthConfig(
+      stateData?.credentialProfile || "default"
+    );
+    const { clientId, clientSecret, redirectUri } = oauthConfig;
 
     if (!clientId || !clientSecret || !redirectUri) {
       console.error("Garmin callback misconfig:", {
+        credentialProfile: oauthConfig.profile,
         hasClientId: !!clientId,
         hasClientSecret: !!clientSecret,
         hasRedirectUri: !!redirectUri,
@@ -287,6 +334,7 @@ router.get("/callback", async (req, res) => {
         withQuery(appReturnUrl, {
           success: "0",
           reason: "server_misconfig",
+          profile: oauthConfig.profile,
         })
       );
     }
@@ -304,7 +352,7 @@ router.get("/callback", async (req, res) => {
     const t = setTimeout(() => controller.abort(), 10000);
 
     const tokenResp = await fetch(
-      "https://diauth.garmin.com/di-oauth2-service/oauth/token",
+      TOKEN_ENDPOINT,
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -340,7 +388,7 @@ router.get("/callback", async (req, res) => {
       const idT = setTimeout(() => idCtrl.abort(), 10000);
 
       const idResp = await fetch(
-        "https://apis.garmin.com/wellness-api/rest/user/id",
+        USER_ID_ENDPOINT,
         {
           headers: { Authorization: `Bearer ${tokenJson.access_token}` },
           signal: idCtrl.signal,
@@ -371,11 +419,12 @@ router.get("/callback", async (req, res) => {
       tokenType: tokenJson.token_type || "bearer",
       expiresAtMs,
       refreshTokenExpiresIn: tokenJson.refresh_token_expires_in || null,
+      credentialProfile: oauthConfig.profile,
+      apiProduct: oauthConfig.profile === "activity" ? "activity" : "default",
       linkedAtMs: now,
-      tokenEndpoint: "https://diauth.garmin.com/di-oauth2-service/oauth/token",
-      userIdEndpointAttempted:
-        "https://apis.garmin.com/wellness-api/rest/user/id",
-    });
+      tokenEndpoint: TOKEN_ENDPOINT,
+      userIdEndpointAttempted: USER_ID_ENDPOINT,
+    }, stateData.integrationKey || oauthConfig.integrationKey);
 
     if (stateRef) await deleteStateByRef(stateRef);
 

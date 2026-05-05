@@ -52,14 +52,23 @@ function isTestPayload(payload) {
 
 async function findUidByGarminUserId(garminUserId) {
   if (!garminUserId) return null;
-  const snap = await admin
-    .firestore()
-    .collection("users")
-    .where("integrations.garmin.garminUserId", "==", garminUserId)
-    .limit(1)
-    .get();
+  const db = admin.firestore();
+  const fields = [
+    "integrations.garminActivity.garminUserId",
+    "integrations.garmin.garminUserId",
+  ];
 
-  return snap.empty ? null : snap.docs[0].id;
+  for (const field of fields) {
+    const snap = await db
+      .collection("users")
+      .where(field, "==", garminUserId)
+      .limit(1)
+      .get();
+
+    if (!snap.empty) return snap.docs[0].id;
+  }
+
+  return null;
 }
 
 function pickUsefulHeaders(req) {
@@ -198,6 +207,7 @@ function mapGarminActivity(item, { garminUserId, rawWebhookDocId, index }) {
     createdAtMs: Date.now(),
     garminUserId,
     rawWebhookDocId,
+    rawGarminActivity: stripUndefinedDeep(item),
     updatedAt: getServerTimestamp(),
   };
 
