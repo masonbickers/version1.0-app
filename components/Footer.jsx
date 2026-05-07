@@ -67,7 +67,9 @@ function FooterInner() {
   const liveStatus = normaliseLiveActivityStatus(liveActivity?.status);
   const liveSessionKey = String(liveActivity?.sessionKey || "").trim();
   const isFreshLiveState = !isLiveActivityStale(liveActivity);
-  const hasLiveRouteShape = /^\/train\/session\/.+\/live$/.test(liveRouteForMatch);
+  const hasLiveRouteShape = /^\/train\/session\/.+\/(?:live|log-strength)$/.test(
+    liveRouteForMatch
+  );
   const hasValidLiveState =
     !!liveActivity?.isActive &&
     !!liveSessionKey &&

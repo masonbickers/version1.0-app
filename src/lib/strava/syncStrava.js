@@ -3,11 +3,15 @@ import {
     Timestamp,
     collection,
     doc,
+    getDocs,
+    limit,
+    query,
     serverTimestamp,
     setDoc,
     writeBatch,
 } from "firebase/firestore";
 import { db } from "../../../firebaseConfig";
+import { activityDedupeKey, likelySameActivity } from "../activities/activityDedupe";
   
   function startOfDay(d) {
     const x = new Date(d);
@@ -35,6 +39,25 @@ import { db } from "../../../firebaseConfig";
   
     const batch = writeBatch(db);
     const baseRef = collection(db, "users", uid, "stravaActivities");
+    const garminCollections = ["garmin_activities", "garminActivities"];
+    const existingGarminActivities = (
+      await Promise.all(
+        garminCollections.map(async (collectionName) => {
+          try {
+            const snap = await getDocs(
+              query(collection(db, "users", uid, collectionName), limit(250))
+            );
+            return snap.docs.map((d) => ({
+              id: d.id,
+              source: collectionName,
+              ...(d.data() || {}),
+            }));
+          } catch {
+            return [];
+          }
+        })
+      )
+    ).flat();
   
     safeActs.forEach((a) => {
       const start = new Date(a.start_date_local || a.start_date);
@@ -53,31 +76,58 @@ import { db } from "../../../firebaseConfig";
       const averageHeartrate =
         averageHeartrateRaw > 0 ? Math.round(averageHeartrateRaw) : null;
       const summaryPolyline = String(a?.map?.summary_polyline || "").trim();
+      const nextActivity = {
+        id: String(a.id),
+        activityId: String(a.id),
+        type: a.type || "Other",
+        name: a.name || "",
+        startDate: Timestamp.fromDate(start),
+        day: Timestamp.fromDate(startOfDay(start)),
+        startDateMs: start.getTime(),
+        distanceKm,
+        distanceM: Math.round(distanceMeters),
+        movingTimeSec,
+        movingTimeMin,
+        elevGainM: Math.round(a.total_elevation_gain || 0),
+        averageSpeedMps: Number(a.average_speed || 0) || 0,
+        maxSpeedMps: Number(a.max_speed || 0) || 0,
+        averageHeartrate,
+        avgPaceMinPerKm,
+        calories: Number(a.kilojoules || 0) || 0,
+        summaryPolyline: summaryPolyline || null,
+        device: a.device_name || "",
+        source: "strava",
+        activityDedupeKey: activityDedupeKey({
+          source: "strava",
+          id: String(a.id),
+          startDateMs: start.getTime(),
+          distanceM: Math.round(distanceMeters),
+          movingTimeSec,
+          type: a.type || "Other",
+        }),
+        updatedAt: serverTimestamp(),
+      };
+      const duplicate = existingGarminActivities.find((candidate) =>
+        likelySameActivity(nextActivity, candidate)
+      );
+      if (duplicate) {
+        nextActivity.hiddenDuplicate = true;
+        nextActivity.duplicateOf = {
+          provider: "garmin",
+          source: duplicate.source || "garmin_activities",
+          id: duplicate.id || duplicate.activityId || null,
+          activityId: duplicate.activityId || duplicate.id || null,
+        };
+        nextActivity.duplicateCheckedAt = serverTimestamp();
+      } else {
+        nextActivity.hiddenDuplicate = false;
+        nextActivity.duplicateOf = null;
+        nextActivity.duplicateCheckedAt = serverTimestamp();
+      }
 
       batch.set(
         ref,
-        {
-          id: String(a.id),
-          type: a.type || "Other",
-          name: a.name || "",
-          startDate: Timestamp.fromDate(start),
-          day: Timestamp.fromDate(startOfDay(start)),
-          startDateMs: start.getTime(),
-          distanceKm,
-          distanceM: Math.round(distanceMeters),
-          movingTimeSec,
-          movingTimeMin,
-          elevGainM: Math.round(a.total_elevation_gain || 0),
-          averageSpeedMps: Number(a.average_speed || 0) || 0,
-          maxSpeedMps: Number(a.max_speed || 0) || 0,
-          averageHeartrate,
-          avgPaceMinPerKm,
-          calories: Number(a.kilojoules || 0) || 0,
-          summaryPolyline: summaryPolyline || null,
-          device: a.device_name || "",
-          source: "strava",
-          updatedAt: serverTimestamp(),
-        },
+        nextActivity,
         { merge: true }
       );
     });

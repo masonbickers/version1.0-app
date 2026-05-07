@@ -39,8 +39,15 @@ import Feather from "../../../components/LucideFeather";
 
 import { API_URL } from "../../../config/api";
 import { auth, db } from "../../../firebaseConfig";
+import { useLiveActivity } from "../../../providers/LiveActivityProvider";
 import { useTheme } from "../../../providers/ThemeProvider";
-import { MASON_COACH_TEMPLATE_DOCS } from "../../../src/train/data/coachTemplates";
+import { dedupeActivities } from "../../../src/lib/activities/activityDedupe";
+import {
+  ACTIVE_LIVE_ACTIVITY_STATUSES,
+  isLiveActivityStale,
+  normaliseLiveActivityStatus,
+} from "../../../src/train/utils/liveActivityHelpers";
+import { linkExternalActivityToPlannedSession } from "../../../src/train/utils/sessionRecordHelpers";
 
 /* ──────────────────────────────────────────────────────────────
    Helpers + constants
@@ -64,8 +71,6 @@ const TRAIN_INDEX_SCREEN_CACHE = {
   sessionLogsReadyKey: "",
   scrollOffsetY: 0,
   weekStripWidth: 0,
-  coachPlans: [],
-  coachPlansLoaded: false,
 };
 
 const SAMPLE_WORKOUTS = [
@@ -140,51 +145,6 @@ const SAMPLE_WORKOUTS = [
     distanceKm: null,
     rpe: 2,
     notes: "Mobility, breathing, and light core. Reset for the next hard day.",
-  },
-];
-
-const QUICK_CREATE_TILES = [
-  {
-    sampleKey: "run_easy_35",
-    label: "Easy Run",
-    kicker: "Aerobic",
-    icon: "activity",
-    colors: ["#A4D53A", "#6E9722"],
-  },
-  {
-    sampleKey: "run_intervals_intro",
-    label: "Intervals",
-    kicker: "Quality",
-    icon: "zap",
-    colors: ["#F3BE37", "#D66A1E"],
-  },
-  {
-    sampleKey: "strength_40",
-    label: "Strength",
-    kicker: "Gym",
-    icon: "bar-chart-2",
-    colors: ["#6F8E54", "#435A33"],
-  },
-  {
-    sampleKey: "bodyweight_20",
-    label: "Bodyweight",
-    kicker: "No kit",
-    icon: "user",
-    colors: ["#4C86D7", "#365BA6"],
-  },
-  {
-    sampleKey: "hybrid_engine_30",
-    label: "Hybrid",
-    kicker: "Run + work",
-    icon: "shuffle",
-    colors: ["#31A68D", "#1E6D66"],
-  },
-  {
-    sampleKey: "recovery_flow_25",
-    label: "Recovery",
-    kicker: "Reset",
-    icon: "moon",
-    colors: ["#8B909B", "#555B67"],
   },
 ];
 
@@ -467,16 +427,6 @@ function sampleIconName(type) {
   if (t.includes("recovery")) return "moon";
   if (t.includes("bodyweight")) return "user";
   return "layers";
-}
-
-function sampleEffortLabel(rpe) {
-  const x = Number(rpe || 0);
-  if (!x) return "Unspecified";
-  if (x <= 3) return "Very easy";
-  if (x <= 5) return "Easy";
-  if (x <= 7) return "Moderate";
-  if (x <= 8) return "Hard";
-  return "Very hard";
 }
 
 function sampleSecondaryMeta(sample) {
@@ -1243,6 +1193,327 @@ function completedTrainSessionMeta(session) {
   return parts.join(" · ");
 }
 
+function readExternalActivityTimeMs(activity = {}) {
+  const raw = activity?.rawGarminActivity || activity?.raw || {};
+  const seconds = Number(
+    activity?.startTimeInSeconds ??
+      activity?.activityStartTimeInSeconds ??
+      raw?.startTimeInSeconds ??
+      raw?.activityStartTimeInSeconds
+  );
+  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+
+  return (
+    timestampMs(activity?.startTime) ||
+    timestampMs(activity?.startDate) ||
+    timestampMs(activity?.startedAt) ||
+    timestampMs(activity?.start_date_local) ||
+    timestampMs(activity?.start_date) ||
+    timestampMs(raw?.startTime) ||
+    timestampMs(raw?.startDate) ||
+    timestampMs(raw?.start_date_local) ||
+    timestampMs(raw?.start_date) ||
+    timestampMs(activity?.createdAtMs) ||
+    timestampMs(activity?.createdAt)
+  );
+}
+
+function normaliseExternalActivity(docSnap, source) {
+  const data = docSnap?.data ? docSnap.data() || {} : docSnap || {};
+  const raw = data?.rawGarminActivity || data?.raw || {};
+  const startMs = readExternalActivityTimeMs(data);
+  const distanceMeters = Number(
+    data?.distanceMeters ??
+      data?.distance ??
+      data?.distanceInMeters ??
+      raw?.distanceMeters ??
+      raw?.distanceInMeters ??
+      raw?.distance
+  );
+  const durationSeconds = Number(
+    data?.durationSeconds ??
+      data?.movingTime ??
+      data?.moving_time ??
+      data?.elapsedTime ??
+      raw?.durationInSeconds ??
+      raw?.movingDurationInSeconds ??
+      raw?.elapsedDurationInSeconds
+  );
+  const provider = source?.toLowerCase().includes("strava") ? "Strava" : "Garmin";
+  const title =
+    data?.name ||
+    data?.title ||
+    data?.activityName ||
+    raw?.activityName ||
+    raw?.activityNameOriginal ||
+    `${provider} activity`;
+  const type = data?.type || data?.activityType || raw?.activityType || raw?.sport || "";
+  const device =
+    data?.deviceName ||
+    data?.device_name ||
+    raw?.deviceName ||
+    raw?.device_name ||
+    raw?.device?.name ||
+    "";
+  const averageHeartRate = Number(
+    data?.averageHeartRate ??
+      data?.average_heartrate ??
+      data?.averageHeartRateInBeatsPerMinute ??
+      raw?.averageHeartRate ??
+      raw?.averageHeartRateInBeatsPerMinute
+  );
+  const calories = Number(data?.calories ?? data?.activeKilocalories ?? raw?.calories ?? raw?.activeKilocalories);
+  const paceSecPerKm = Number(
+    data?.averagePaceSecPerKm ??
+      data?.paceSecPerKm ??
+      raw?.averagePaceSecPerKm ??
+      raw?.averagePaceInMinutesPerKilometer * 60
+  );
+
+  return {
+    id: String(docSnap?.id || data?.id || data?.activityId || raw?.activityId || ""),
+    upstreamId: String(data?.activityId || data?.id || raw?.activityId || docSnap?.id || ""),
+    source,
+    provider,
+    title,
+    type,
+    device,
+    startMs,
+    isoDate: startMs ? toISODate(new Date(startMs)) : "",
+    distanceMeters: Number.isFinite(distanceMeters) && distanceMeters > 0 ? distanceMeters : null,
+    durationSeconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : null,
+    averageHeartRate: Number.isFinite(averageHeartRate) && averageHeartRate > 0 ? averageHeartRate : null,
+    calories: Number.isFinite(calories) && calories > 0 ? calories : null,
+    paceSecPerKm: Number.isFinite(paceSecPerKm) && paceSecPerKm > 0 ? paceSecPerKm : null,
+    linkedSessionKey: String(data?.linkedSessionKey || raw?.linkedSessionKey || "").trim(),
+    linkedTrainSessionId: String(data?.linkedTrainSessionId || raw?.linkedTrainSessionId || "").trim(),
+    linkStatus: String(data?.linkStatus || raw?.linkStatus || "").trim(),
+  };
+}
+
+function plannedSessionTargetDistanceKm(session = {}) {
+  const value =
+    session?.workout?.totalDistanceKm ??
+    session?.targetDistanceKm ??
+    session?.plannedDistanceKm ??
+    session?.distanceKm ??
+    session?.totalDistanceKm ??
+    (Number(session?.workout?.totalDistanceMeters) > 0
+      ? Number(session.workout.totalDistanceMeters) / 1000
+      : null);
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function plannedSessionTargetDurationMin(session = {}) {
+  const value =
+    session?.workout?.totalDurationSec != null
+      ? Number(session.workout.totalDurationSec) / 60
+      : session?.targetDurationMin ?? session?.durationMin ?? session?.totalDurationMin;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function activitySportKind(activity = {}) {
+  const text = `${activity?.type || ""} ${activity?.title || ""}`.toLowerCase();
+  if (/\b(run|running|trail|treadmill|walk|walking)\b/.test(text)) return "run";
+  if (/\b(strength|weight|weights|gym|cardio|fitness|training)\b/.test(text)) return "strength";
+  if (Number(activity?.distanceMeters || 0) > 1000) return "run";
+  return "other";
+}
+
+function matchImportedActivityToSession(activity, plannedSession) {
+  if (!activity || !plannedSession?.key || !plannedSession?.sess) return null;
+  if (activity?.linkedSessionKey || activity?.linkedTrainSessionId) return null;
+  if (String(activity?.linkStatus || "").toLowerCase() === "ignored") return null;
+  if (plannedSession?.status === "completed" || plannedSession?.status === "skipped") return null;
+  if (plannedSession?.isoDate && activity?.isoDate && plannedSession.isoDate !== activity.isoDate) {
+    return null;
+  }
+
+  const plannedSport = sessionSportKind(plannedSession.sess);
+  const activitySport = activitySportKind(activity);
+  let score = 0;
+
+  if (plannedSport === activitySport) score += 38;
+  else if (plannedSport === "run" && activitySport === "other" && Number(activity?.distanceMeters || 0) > 0) {
+    score += 18;
+  } else if (plannedSport === "strength" && activitySport === "other" && !activity?.distanceMeters) {
+    score += 14;
+  } else {
+    return null;
+  }
+
+  const plannedDistanceKm = plannedSessionTargetDistanceKm(plannedSession.sess);
+  const actualDistanceKm = Number(activity?.distanceMeters || 0) / 1000;
+  if (plannedDistanceKm && actualDistanceKm > 0) {
+    const diffRatio = Math.abs(actualDistanceKm - plannedDistanceKm) / Math.max(plannedDistanceKm, 0.1);
+    if (diffRatio <= 0.08) score += 32;
+    else if (diffRatio <= 0.18) score += 24;
+    else if (diffRatio <= 0.35) score += 10;
+    else score -= 18;
+  }
+
+  const plannedDurationMin = plannedSessionTargetDurationMin(plannedSession.sess);
+  const actualDurationMin = Number(activity?.durationSeconds || 0) / 60;
+  if (plannedDurationMin && actualDurationMin > 0) {
+    const diffRatio = Math.abs(actualDurationMin - plannedDurationMin) / Math.max(plannedDurationMin, 1);
+    if (diffRatio <= 0.12) score += 24;
+    else if (diffRatio <= 0.25) score += 16;
+    else if (diffRatio <= 0.45) score += 6;
+    else score -= 10;
+  }
+
+  if (activity?.provider === "Garmin" || activity?.provider === "Strava") score += 8;
+
+  if (score < 44) return null;
+  return {
+    score,
+    activity,
+    sessionCard: plannedSession,
+    provider: activity.provider || "Imported",
+  };
+}
+
+function formatPaceShort(secPerKm) {
+  const value = Number(secPerKm);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const mins = Math.floor(value / 60);
+  const secs = Math.round(value % 60).toString().padStart(2, "0");
+  return `${mins}:${secs}/km`;
+}
+
+function externalActivityMeta(activity) {
+  const parts = [];
+  if (activity?.startMs) {
+    parts.push(
+      new Date(activity.startMs).toLocaleTimeString("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    );
+  }
+  if (activity?.distanceMeters) {
+    parts.push(`${(Number(activity.distanceMeters) / 1000).toFixed(1)} km`);
+  }
+  if (activity?.durationSeconds) {
+    parts.push(`${Math.round(Number(activity.durationSeconds) / 60)} min`);
+  }
+  if (activity?.device) parts.push(activity.device);
+  return parts.join(" · ");
+}
+
+function externalActivityStats(activity) {
+  const stats = [];
+  if (activity?.distanceMeters) {
+    stats.push({ key: "distance", label: "Distance", value: `${(Number(activity.distanceMeters) / 1000).toFixed(1)} km` });
+  }
+  if (activity?.paceSecPerKm) {
+    stats.push({ key: "pace", label: "Pace", value: formatPaceShort(activity.paceSecPerKm) });
+  }
+  if (activity?.durationSeconds) {
+    stats.push({ key: "time", label: "Time", value: `${Math.round(Number(activity.durationSeconds) / 60)} min` });
+  }
+  if (activity?.averageHeartRate) {
+    stats.push({ key: "hr", label: "Avg HR", value: `${Math.round(Number(activity.averageHeartRate))} bpm` });
+  }
+  if (activity?.calories) {
+    stats.push({ key: "cal", label: "Cal", value: `${Math.round(Number(activity.calories))}` });
+  }
+  return stats.slice(0, 4);
+}
+
+function activityBenefit(activity) {
+  const text = `${activity?.title || ""} ${activity?.type || ""}`.toLowerCase();
+  const km = Number(activity?.distanceMeters || 0) / 1000;
+  const minutes = Number(activity?.durationSeconds || 0) / 60;
+
+  if (/race|time trial|test/.test(text)) {
+    return {
+      label: "Race",
+      title: "Performance check",
+      body: "This gives a clear benchmark for current fitness and pacing under pressure.",
+      icon: "target",
+    };
+  }
+  if (/vo2|interval|repeat|speed|1k|800|400/.test(text)) {
+    return {
+      label: "VO2 Max",
+      title: "Top-end engine",
+      body: "This works high-end aerobic power and teaches you to hold pace when the effort bites.",
+      icon: "zap",
+    };
+  }
+  if (/tempo|threshold|progression/.test(text)) {
+    return {
+      label: "Threshold",
+      title: "Sustained strength",
+      body: "This builds the ability to run faster for longer without tipping too far into fatigue.",
+      icon: "activity",
+    };
+  }
+  if (/strength|weight|gym|lifting/.test(text)) {
+    return {
+      label: "Strength",
+      title: "Durability",
+      body: "This supports stronger mechanics, better resilience and more robust running.",
+      icon: "bar-chart-2",
+    };
+  }
+  if (/recovery|walk|easy/.test(text) || minutes <= 35) {
+    return {
+      label: "Recovery",
+      title: "Low-stress volume",
+      body: "This adds movement and consistency without taking too much from the next session.",
+      icon: "refresh-cw",
+    };
+  }
+  if (/long/.test(text) || km >= 12 || minutes >= 75) {
+    return {
+      label: "Endurance",
+      title: "Long aerobic base",
+      body: "This builds the endurance base that lets harder sessions and races feel more controlled.",
+      icon: "map",
+    };
+  }
+  return {
+    label: "Base",
+    title: "Aerobic base",
+    body: "This builds aerobic fitness and keeps the week moving without needing maximal effort.",
+    icon: "activity",
+  };
+}
+
+function dayActivitySuggestion(activities, nextSession) {
+  const benefits = activities.map(activityBenefit);
+  const labels = new Set(benefits.map((item) => item.label));
+  const nextTitle = nextSession?.title ? `${nextSession.dayLabel} · ${nextSession.title}` : "";
+
+  if (labels.has("VO2 Max") || labels.has("Race") || labels.has("Threshold")) {
+    return nextTitle
+      ? `Keep the next one controlled: ${nextTitle}. Avoid stacking another hard effort immediately.`
+      : "Next best move: easy aerobic work, mobility, or a rest day before another hard session.";
+  }
+  if (labels.has("Endurance")) {
+    return nextTitle
+      ? `Recover first, then build into ${nextTitle}. Keep intensity low for the next 24 hours.`
+      : "Next best move: recovery, food, sleep and a low-stress session tomorrow.";
+  }
+  if (labels.has("Strength")) {
+    return nextTitle
+      ? `Pair this with easy running before ${nextTitle}, so legs are ready for quality work.`
+      : "Next best move: easy aerobic work or mobility to absorb the strength load.";
+  }
+  if (labels.has("Recovery")) {
+    return nextTitle
+      ? `Good low-stress work. You should be fresher for ${nextTitle}.`
+      : "Next best move: you can handle a normal planned session if sleep and soreness are good.";
+  }
+  return nextTitle
+    ? `This is useful base work. Next up: ${nextTitle}.`
+    : "Next best move: keep the next session purposeful, not just more volume.";
+}
+
 function isResolvedSessionStatus(status) {
   return status === "completed" || status === "skipped";
 }
@@ -1286,143 +1557,6 @@ function summariseCardStatuses(cards) {
     pending,
     resolved: completed + skipped,
   };
-}
-
-function extractWeeksFromPlanDoc(data) {
-  if (!data || typeof data !== "object") return [];
-  const cands = [
-    data?.weeks,
-    data?.plan?.weeks,
-    data?.planData?.weeks,
-    data?.generatedPlan?.weeks,
-    data?.activePlan?.weeks,
-    data?.template?.weeks,
-    data?.payload?.weeks,
-  ];
-  for (const item of cands) {
-    if (Array.isArray(item) && item.length) return item;
-  }
-  return [];
-}
-
-function countSessionsInWeeks(weeks) {
-  let total = 0;
-  for (const week of Array.isArray(weeks) ? weeks : []) {
-    const days = Array.isArray(week?.days) ? week.days : [];
-    for (const day of days) {
-      total += Array.isArray(day?.sessions) ? day.sessions.length : 0;
-    }
-    if (!days.length && Array.isArray(week?.sessions)) {
-      total += week.sessions.length;
-    }
-  }
-  return total;
-}
-
-function getCoachNameFromDoc(data) {
-  return (
-    normaliseStr(data?.coachName) ||
-    normaliseStr(data?.coach?.name) ||
-    normaliseStr(data?.meta?.coachName) ||
-    normaliseStr(data?.authorName) ||
-    normaliseStr(data?.createdByName)
-  );
-}
-
-function isCoachSetPlanDoc(data) {
-  if (!data || typeof data !== "object") return false;
-
-  if (
-    data?.isCoachPlan ||
-    data?.isPublished ||
-    data?.published ||
-    data?.public === true ||
-    data?.visibility === "public" ||
-    data?.meta?.isCoachPlan ||
-    data?.meta?.published
-  ) {
-    return true;
-  }
-
-  const source = String(data?.source || data?.plan?.source || "").toLowerCase();
-  if (source.includes("coach") || source.includes("stock-template")) return true;
-
-  const role = String(
-    data?.createdByRole || data?.authorRole || data?.meta?.createdByRole || ""
-  ).toLowerCase();
-  if (role.includes("coach")) return true;
-
-  return !!getCoachNameFromDoc(data);
-}
-
-function normaliseCoachPlanCandidate({ sourceCollection, docData, currentUid }) {
-  if (!docData || typeof docData !== "object") return null;
-
-  const ownerUid = String(
-    docData?.uid || docData?.userId || docData?.ownerId || docData?.createdByUid || ""
-  );
-  if (currentUid && ownerUid && ownerUid === currentUid) return null;
-
-  if (!isCoachSetPlanDoc(docData)) return null;
-
-  const weeksRaw = extractWeeksFromPlanDoc(docData);
-  if (!weeksRaw.length) return null;
-
-  const weeks = normaliseWeeksForClient(weeksRaw);
-  if (!weeks.length) return null;
-
-  const kind = inferPlanKindFromDoc(docData);
-  const name =
-    normaliseStr(docData?.meta?.name) ||
-    normaliseStr(docData?.plan?.name) ||
-    normaliseStr(docData?.planName) ||
-    normaliseStr(docData?.name) ||
-    "Coach plan";
-
-  const description =
-    normaliseStr(docData?.description) ||
-    normaliseStr(docData?.summary) ||
-    normaliseStr(docData?.meta?.summary) ||
-    normaliseStr(docData?.primaryFocus) ||
-    "";
-
-  const primaryActivity =
-    normaliseStr(docData?.primaryActivity) ||
-    normaliseStr(docData?.meta?.primaryActivity) ||
-    (kind === "strength" ? "Strength" : kind === "run" ? "Run" : "Training");
-
-  const sortMs = Math.max(timestampMs(docData?.updatedAt), timestampMs(docData?.createdAt));
-
-  return {
-    id: String(docData.id),
-    sourceCollection,
-    name,
-    description,
-    coachName: getCoachNameFromDoc(docData) || "Coach set",
-    kind,
-    primaryActivity,
-    weekCount: weeks.length,
-    sessionCount: countSessionsInWeeks(weeks),
-    sortMs,
-    weeks,
-    raw: { ...docData },
-  };
-}
-
-function findFirstSessionKeyFromWeeks(planId, weeks) {
-  if (!planId) return null;
-  const list = Array.isArray(weeks) ? weeks : [];
-  for (let wi = 0; wi < list.length; wi += 1) {
-    const week = list[wi];
-    const days = Array.isArray(week?.days) ? week.days : [];
-    for (let di = 0; di < days.length; di += 1) {
-      const sessions = Array.isArray(days[di]?.sessions) ? days[di].sessions : [];
-      if (sessions.length) {
-        return buildSessionKey(planId, wi, di, 0);
-      }
-    }
-  }
-  return null;
 }
 
 function DayPill({ theme, item, onPress }) {
@@ -1502,6 +1636,11 @@ export default function TrainIndex() {
   const sectionRuleColor = theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(17,17,17,0.08)";
   const router = useRouter();
   const {
+    hydrated: liveHydrated,
+    liveActivity,
+    clearLiveActivity,
+  } = useLiveActivity();
+  const {
     returnWeekIndex: returnWeekIndexParam,
     returnDayIndex: returnDayIndexParam,
     returnToken: returnTokenParam,
@@ -1564,19 +1703,15 @@ export default function TrainIndex() {
   const [recordSeedSampleKey, setRecordSeedSampleKey] = useState("");
   const [savingQuick, setSavingQuick] = useState(false);
   const [sendingToWatch, setSendingToWatch] = useState(false);
-  const [coachPlansLoading, setCoachPlansLoading] = useState(false);
-  const [coachPlans, setCoachPlans] = useState(() =>
-    hasWarmCache && Array.isArray(TRAIN_INDEX_SCREEN_CACHE.coachPlans)
-      ? TRAIN_INDEX_SCREEN_CACHE.coachPlans
-      : []
-  );
-  const [usingCoachPlanId, setUsingCoachPlanId] = useState("");
   const [sessionLogMap, setSessionLogMap] = useState(() =>
     hasWarmCache && TRAIN_INDEX_SCREEN_CACHE.sessionLogMap
       ? TRAIN_INDEX_SCREEN_CACHE.sessionLogMap
       : {}
   );
   const [completedTrainSessions, setCompletedTrainSessions] = useState([]);
+  const [completedExternalActivities, setCompletedExternalActivities] = useState([]);
+  const [ignoredSuggestedMatchKeys, setIgnoredSuggestedMatchKeys] = useState({});
+  const [linkingSuggestedMatch, setLinkingSuggestedMatch] = useState(false);
   const [sessionLogsReady, setSessionLogsReady] = useState(() =>
     hasWarmCache ? !!TRAIN_INDEX_SCREEN_CACHE.sessionLogsReady : false
   );
@@ -1585,7 +1720,7 @@ export default function TrainIndex() {
   );
   const [sampleCategory, setSampleCategory] = useState("all");
   const [tipsOpen, setTipsOpen] = useState(false);
-  const [tipTopicKey, setTipTopicKey] = useState("gut-training");
+  const [tipTopicKey] = useState("gut-training");
   const [weekStripWidth, setWeekStripWidth] = useState(() => {
     const cachedWidth = Number(TRAIN_INDEX_SCREEN_CACHE.weekStripWidth || 0);
     if (cachedWidth > 0) return cachedWidth;
@@ -1688,6 +1823,24 @@ export default function TrainIndex() {
         pathname: "/train/history/[sessionId]",
         params: {
           sessionId: String(sessionId),
+          returnWeekIndex: String(currentWeekIndex),
+          returnDayIndex: String(selectedDayIndex),
+          returnToken: String(Date.now()),
+        },
+      });
+    },
+    [currentWeekIndex, router, selectedDayIndex]
+  );
+
+  const openExternalActivityFromTrain = useCallback(
+    (activity) => {
+      if (!activity?.id || !activity?.source) return;
+      router.push({
+        pathname: "/me/activity/[id]",
+        params: {
+          id: String(activity.id),
+          source: String(activity.source),
+          from: "train",
           returnWeekIndex: String(currentWeekIndex),
           returnDayIndex: String(selectedDayIndex),
           returnToken: String(Date.now()),
@@ -1884,179 +2037,6 @@ export default function TrainIndex() {
     }
   }, [hasExplicitTrainReturn, normalisePlanDoc]);
 
-  const loadCoachPlans = useCallback(async () => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
-      setCoachPlans([]);
-      return;
-    }
-
-    setCoachPlansLoading(true);
-    try {
-      const fetchTopLevelPlanDocs = async (colName) => {
-        const colRef = collection(db, colName);
-        const attempts = [
-          () => getDocs(query(colRef, orderBy("updatedAt", "desc"), limit(40))),
-          () => getDocs(query(colRef, orderBy("createdAt", "desc"), limit(40))),
-          () => getDocs(query(colRef, limit(40))),
-        ];
-
-        for (const runAttempt of attempts) {
-          try {
-            const snap = await runAttempt();
-            if (snap?.empty) continue;
-            return snap.docs.map((d) => ({
-              sourceCollection: colName,
-              docData: { id: d.id, ...d.data() },
-            }));
-          } catch {}
-        }
-
-        return [];
-      };
-
-      const [runCandidates, planCandidates] = await Promise.all([
-        fetchTopLevelPlanDocs("runPlans"),
-        fetchTopLevelPlanDocs("plans"),
-      ]);
-
-      const localCandidates = MASON_COACH_TEMPLATE_DOCS.map((docData) => ({
-        sourceCollection: "localTemplates",
-        docData,
-      }));
-
-      const merged = [...localCandidates, ...runCandidates, ...planCandidates];
-      const deduped = [];
-      const seen = new Set();
-
-      for (const item of merged) {
-        const key = `${item.sourceCollection}:${item.docData?.id || ""}`;
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(item);
-      }
-
-      const normalised = deduped
-        .map((x) =>
-          normaliseCoachPlanCandidate({
-            sourceCollection: x.sourceCollection,
-            docData: x.docData,
-            currentUid: uid,
-          })
-        )
-        .filter(Boolean)
-        .sort((a, b) => b.sortMs - a.sortMs)
-        .slice(0, 8);
-
-      setCoachPlans(normalised);
-    } catch (e) {
-      console.log("[train] load coach plans error:", e);
-      setCoachPlans([]);
-    } finally {
-      setCoachPlansLoading(false);
-    }
-  }, []);
-
-  const activateCoachPlan = useCallback(
-    async (coachPlan) => {
-      const uid = auth.currentUser?.uid;
-      if (!uid) {
-        Alert.alert("Sign in required", "Please sign in before adding a coach plan.");
-        return;
-      }
-      if (!coachPlan?.id) return;
-
-      setUsingCoachPlanId(String(coachPlan.id));
-      try {
-        const source = coachPlan.raw || {};
-        const weeks = normaliseWeeksForClient(extractWeeksFromPlanDoc(source));
-        if (!weeks.length) throw new Error("This coach plan has no sessions.");
-
-        const kind = source?.kind || inferPlanKindFromDoc(source) || "training";
-        const name = coachPlan.name || "Coach plan";
-        const primaryActivity =
-          source?.primaryActivity ||
-          source?.meta?.primaryActivity ||
-          coachPlan.primaryActivity ||
-          (kind === "strength" ? "Strength" : "Run");
-
-        const basePlanObj =
-          source?.plan && typeof source.plan === "object"
-            ? { ...source.plan, weeks }
-            : { name, primaryActivity, weeks };
-
-        const payload = {
-          name,
-          kind,
-          primaryActivity,
-          source: "coach-library",
-          plan: basePlanObj,
-          weeks,
-          coachPlanRef: {
-            id: coachPlan.id,
-            sourceCollection: coachPlan.sourceCollection,
-            coachName: coachPlan.coachName || null,
-            name,
-          },
-          meta: {
-            ...(source?.meta || {}),
-            importedFromCoachPlan: true,
-            coachName: coachPlan.coachName || source?.meta?.coachName || null,
-            name,
-            primaryActivity,
-          },
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        };
-
-        const ref = await addDoc(collection(db, "users", uid, "plans"), payload);
-        await loadLatestPlan();
-
-        const firstKey = findFirstSessionKeyFromWeeks(ref.id, weeks);
-        Alert.alert(
-          "Coach plan added",
-          "You can view it or start the first session now.",
-          [
-            {
-              text: "View",
-              onPress: () =>
-                router.push({ pathname: "/train/view-plan", params: { planId: ref.id } }),
-            },
-            firstKey
-              ? {
-                  text: "Start",
-                  onPress: () => goToSession(firstKey),
-                }
-              : { text: "Done", style: "cancel" },
-          ]
-        );
-      } catch (e) {
-        Alert.alert("Couldn’t add coach plan", e?.message || "Try again.");
-      } finally {
-        setUsingCoachPlanId("");
-      }
-    },
-    [goToSession, loadLatestPlan, router]
-  );
-
-  const viewCoachPlan = useCallback(
-    (coachPlan) => {
-      if (!coachPlan?.id) return;
-      if (coachPlan.sourceCollection === "localTemplates") {
-        router.push({
-          pathname: "/train/coach-plan-preview",
-          params: { templateId: coachPlan.id },
-        });
-        return;
-      }
-      router.push({
-        pathname: "/train/view-plan",
-        params: { planId: coachPlan.id },
-      });
-    },
-    [router]
-  );
-
   const activePlanIds = useMemo(
     () => [...new Set([plan?.id, companionPlan?.id].filter(Boolean).map(String))],
     [companionPlan?.id, plan?.id]
@@ -2073,9 +2053,9 @@ export default function TrainIndex() {
 
   useEffect(() => {
     (async () => {
-      await Promise.all([loadLatestPlan(), loadCoachPlans()]);
+      await loadLatestPlan();
     })();
-  }, [loadLatestPlan, loadCoachPlans]);
+  }, [loadLatestPlan]);
 
   useEffect(() => {
     if (!currentUid) {
@@ -2092,8 +2072,6 @@ export default function TrainIndex() {
         sessionLogsReadyKey: "",
         scrollOffsetY: 0,
         weekStripWidth: 0,
-        coachPlans: [],
-        coachPlansLoaded: false,
       });
       return;
     }
@@ -2113,12 +2091,9 @@ export default function TrainIndex() {
       sessionLogsReadyKey,
       scrollOffsetY: latestScrollOffsetYRef.current,
       weekStripWidth,
-      coachPlans,
-      coachPlansLoaded: true,
     });
   }, [
     calendarNow,
-    coachPlans,
     companionPlan,
     currentUid,
     currentWeekIndex,
@@ -2224,6 +2199,71 @@ export default function TrainIndex() {
       try {
         unsub?.();
       } catch {}
+    };
+  }, [currentUid]);
+
+  useEffect(() => {
+    const uid = currentUid;
+    if (!uid) {
+      setCompletedExternalActivities([]);
+      return;
+    }
+
+    const sourceQueries = [
+      { source: "garmin_activities", orderField: "startTimeMs" },
+      { source: "garmin_activities", orderField: "startTime" },
+      { source: "garmin_activities", orderField: "createdAtMs" },
+      { source: "garmin_activities", orderField: null },
+      { source: "garminActivities", orderField: "startTimeMs" },
+      { source: "garminActivities", orderField: "startTime" },
+      { source: "garminActivities", orderField: "createdAtMs" },
+      { source: "garminActivities", orderField: null },
+      { source: "stravaActivities", orderField: "startDateMs" },
+      { source: "stravaActivities", orderField: "startDate" },
+      { source: "stravaActivities", orderField: null },
+    ];
+    const partial = {};
+    let closed = false;
+
+    const sync = () => {
+      if (closed) return;
+      setCompletedExternalActivities(
+        dedupeActivities(Object.values(partial).flat())
+          .filter((activity) => activity?.id && activity?.isoDate)
+          .sort((a, b) => Number(b.startMs || 0) - Number(a.startMs || 0))
+      );
+    };
+
+    const unsubs = sourceQueries.map(({ source, orderField }) => {
+      const partialKey = `${source}:${orderField || "fallback"}`;
+      const collectionRef = collection(db, "users", uid, source);
+      const activityQuery = orderField
+        ? query(collectionRef, orderBy(orderField, "desc"), limit(80))
+        : query(collectionRef, limit(160));
+
+      return onSnapshot(
+        activityQuery,
+        (snap) => {
+          partial[partialKey] = snap.docs
+            .map((docSnap) => normaliseExternalActivity(docSnap, source))
+            .filter((activity) => activity.id && activity.isoDate);
+          sync();
+        },
+        (e) => {
+          console.log(`[train] ${source}${orderField ? ` ${orderField}` : ""} snapshot error:`, e);
+          partial[partialKey] = [];
+          sync();
+        }
+      );
+    });
+
+    return () => {
+      closed = true;
+      unsubs.forEach((unsub) => {
+        try {
+          unsub?.();
+        } catch {}
+      });
     };
   }, [currentUid]);
 
@@ -2679,10 +2719,42 @@ export default function TrainIndex() {
     () => weekGrid?.[selectedDayIndex] || today || weekGrid?.[0] || null,
     [weekGrid, selectedDayIndex, today]
   );
+  const focusedDayActivities = useMemo(() => {
+    const isoDate = String(focusedDay?.isoDate || "");
+    if (!isoDate) return [];
+    return completedExternalActivities
+      .filter((activity) => activity.isoDate === isoDate)
+      .sort((a, b) => Number(b.startMs || 0) - Number(a.startMs || 0));
+  }, [completedExternalActivities, focusedDay?.isoDate]);
   const focusedDayCards = useMemo(
     () => (Array.isArray(focusedDay?.cards) ? focusedDay.cards : []),
     [focusedDay]
   );
+  const suggestedActivityMatch = useMemo(() => {
+    if (!focusedDay?.isoDate || !focusedDayActivities.length || !focusedDayCards.length) {
+      return null;
+    }
+
+    const plannedCards = focusedDayCards
+      .filter((card) => card?.key && !card?.isExtraCompletedSession)
+      .map((card) => ({
+        ...card,
+        isoDate: focusedDay.isoDate,
+      }));
+
+    let best = null;
+    for (const activity of focusedDayActivities) {
+      for (const card of plannedCards) {
+        const match = matchImportedActivityToSession(activity, card);
+        if (!match) continue;
+        const ignoreKey = `${activity.source}:${activity.id}:${card.key}`;
+        if (ignoredSuggestedMatchKeys[ignoreKey]) continue;
+        if (!best || match.score > best.score) best = { ...match, ignoreKey };
+      }
+    }
+
+    return best;
+  }, [focusedDay?.isoDate, focusedDayActivities, focusedDayCards, ignoredSuggestedMatchKeys]);
   const focusedDayPriority = useMemo(() => pickPriorityCard(focusedDayCards), [focusedDayCards]);
   const todayFirst = focusedDayPriority.card;
   const todayFirstIndex = focusedDayPriority.index;
@@ -2795,11 +2867,15 @@ export default function TrainIndex() {
 
   const nextSession = useMemo(() => {
     if (!hasPlan || !focusedDay) return null;
-    const todayIdx = typeof focusedDay.dayIdx === "number" ? focusedDay.dayIdx : 0;
+    const baseDayIdx = typeof focusedDay.dayIdx === "number" ? focusedDay.dayIdx : 0;
+    const baseAbsoluteDay = currentWeekIndex * 7 + baseDayIdx;
+    const finalAbsoluteDay = Math.max(0, visibleWeeksCount * 7 - 1);
 
-    for (let offset = 1; offset < 7; offset += 1) {
-      const idx = (todayIdx + offset) % 7;
-      const day = weekGrid[idx];
+    for (let absoluteDay = baseAbsoluteDay + 1; absoluteDay <= finalAbsoluteDay; absoluteDay += 1) {
+      const weekIndex = Math.floor(absoluteDay / 7);
+      const dayIndex = absoluteDay % 7;
+      const sourceWeek = weekIndex === currentWeekIndex ? week : mergeWeekAtIndex(weekIndex);
+      const day = buildWeekGrid(sourceWeek, weekIndex)?.[dayIndex];
       const { card } = pickPriorityCard(day?.cards);
       if (card && !isResolvedSessionStatus(card?.status)) {
         return {
@@ -2812,7 +2888,43 @@ export default function TrainIndex() {
       }
     }
     return null;
-  }, [hasPlan, focusedDay, weekGrid]);
+  }, [
+    buildWeekGrid,
+    currentWeekIndex,
+    focusedDay,
+    hasPlan,
+    mergeWeekAtIndex,
+    visibleWeeksCount,
+    week,
+  ]);
+
+  const focusedDayCompletionInsight = useMemo(() => {
+    if (!focusedDayActivities.length) return null;
+    const benefits = focusedDayActivities.map(activityBenefit);
+    const priority = ["Race", "VO2 Max", "Threshold", "Endurance", "Strength", "Base", "Recovery"];
+    const primary =
+      [...benefits].sort((a, b) => priority.indexOf(a.label) - priority.indexOf(b.label))[0] ||
+      benefits[0];
+    const totalKm = focusedDayActivities.reduce(
+      (sum, activity) => sum + Number(activity.distanceMeters || 0) / 1000,
+      0
+    );
+    const totalMin = focusedDayActivities.reduce(
+      (sum, activity) => sum + Number(activity.durationSeconds || 0) / 60,
+      0
+    );
+    const summaryBits = [
+      `${focusedDayActivities.length} completed`,
+      totalKm > 0 ? `${totalKm.toFixed(1)} km` : null,
+      totalMin > 0 ? `${Math.round(totalMin)} min` : null,
+    ].filter(Boolean);
+
+    return {
+      benefit: primary,
+      summary: summaryBits.join(" · "),
+      suggestion: dayActivitySuggestion(focusedDayActivities, nextSession),
+    };
+  }, [focusedDayActivities, nextSession]);
 
   const planProgress = useMemo(() => {
     if (!visibleWeeksCount) return 0;
@@ -3005,15 +3117,6 @@ export default function TrainIndex() {
       accent: theme.primaryBg,
     };
   }, [selectedRecordSample, theme.isDark, theme.primaryBg]);
-  const quickCreateCards = useMemo(
-    () =>
-      QUICK_CREATE_TILES.map((tile) => {
-        const sample = SAMPLE_WORKOUTS.find((item) => item.key === tile.sampleKey);
-        if (!sample) return null;
-        return { ...tile, sample };
-      }).filter(Boolean),
-    []
-  );
   const activeTipTopic = useMemo(
     () => TRAINING_TIP_TOPICS.find((t) => t.key === tipTopicKey) || TRAINING_TIP_TOPICS[0],
     [tipTopicKey]
@@ -3223,6 +3326,67 @@ export default function TrainIndex() {
   }, [plan?.id, router]);
 
   const activeDay = useMemo(() => weekGrid?.[daySheetIndex] || null, [weekGrid, daySheetIndex]);
+  const activeLiveSession = useMemo(() => {
+    if (!liveHydrated || !liveActivity?.isActive) return null;
+    const route = String(liveActivity?.route || "").trim();
+    const sessionKey = String(liveActivity?.sessionKey || "").trim();
+    const status = normaliseLiveActivityStatus(liveActivity?.status);
+    if (!route || !sessionKey || !ACTIVE_LIVE_ACTIVITY_STATUSES.has(status)) return null;
+    if (isLiveActivityStale(liveActivity)) return null;
+
+    const snapshot = liveActivity?.snapshot || {};
+    const durationSec =
+      Number(snapshot?.liveDurationSec || 0) ||
+      (Number(liveActivity?.startedAt || 0) > 0
+        ? Math.max(0, Math.round((Date.now() - Number(liveActivity.startedAt)) / 1000))
+        : 0);
+    const mode = String(liveActivity?.mode || "").toLowerCase();
+    const title = String(liveActivity?.title || "Training session").trim();
+    const summaryParts = [
+      mode.includes("strength") ? "Strength" : "Run",
+      status === "paused" ? "paused" : "in progress",
+      durationSec > 0 ? `${Math.floor(durationSec / 60)}m ${String(durationSec % 60).padStart(2, "0")}s` : null,
+    ].filter(Boolean);
+
+    return {
+      route,
+      sessionKey,
+      status,
+      mode,
+      title,
+      summary: summaryParts.join(" · "),
+      canFinish: !!liveActivity?.pendingSaveDraft?.payload,
+    };
+  }, [liveActivity, liveHydrated]);
+
+  const resumeActiveLiveSession = useCallback(() => {
+    if (!activeLiveSession?.route) return;
+    router.push(activeLiveSession.route);
+  }, [activeLiveSession?.route, router]);
+
+  const finishActiveLiveSession = useCallback(() => {
+    if (!activeLiveSession?.canFinish || !activeLiveSession?.sessionKey) {
+      resumeActiveLiveSession();
+      return;
+    }
+    router.push(`/train/session/${encodeURIComponent(activeLiveSession.sessionKey)}/complete`);
+  }, [activeLiveSession?.canFinish, activeLiveSession?.sessionKey, resumeActiveLiveSession, router]);
+
+  const confirmDiscardActiveLiveSession = useCallback(() => {
+    Alert.alert(
+      "Discard active session?",
+      "This removes the in-progress session from this device.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => clearLiveActivity(),
+        },
+      ]
+    );
+  }, [clearLiveActivity]);
+
   const openPlannedCard = useCallback(
     (card, fallbackDayIdx = null) => {
       if (card?.savedTrainSessionId && card?.status === "completed") {
@@ -3239,6 +3403,99 @@ export default function TrainIndex() {
     },
     [goToSession, openDaySheet, openHistorySessionFromTrain]
   );
+
+  const ignoreSuggestedActivityMatch = useCallback(() => {
+    if (!suggestedActivityMatch?.ignoreKey) return;
+    setIgnoredSuggestedMatchKeys((prev) => ({
+      ...prev,
+      [suggestedActivityMatch.ignoreKey]: true,
+    }));
+  }, [suggestedActivityMatch?.ignoreKey]);
+
+  const linkSuggestedActivityMatch = useCallback(async () => {
+    if (!suggestedActivityMatch?.activity || !suggestedActivityMatch?.sessionCard?.key) return;
+
+    try {
+      setLinkingSuggestedMatch(true);
+      const uid = auth.currentUser?.uid;
+      if (!uid) {
+        Alert.alert("Not signed in", "Please sign in again.");
+        return;
+      }
+
+      const { activity, sessionCard } = suggestedActivityMatch;
+      const linkedActivity = {
+        provider: activity.provider || "Imported",
+        reference: String(activity.id),
+        type: String(activity.type || ""),
+        title: String(activity.title || "Workout"),
+        startDate: activity.startMs ? new Date(activity.startMs).toISOString() : null,
+        startDateLocal: activity.startMs ? new Date(activity.startMs).toISOString() : null,
+        deviceName: activity.device || null,
+        distanceKm:
+          Number(activity.distanceMeters) > 0
+            ? Number((Number(activity.distanceMeters) / 1000).toFixed(3))
+            : null,
+        movingTimeMin:
+          Number(activity.durationSeconds) > 0
+            ? Number((Number(activity.durationSeconds) / 60).toFixed(1))
+            : null,
+        elapsedTimeMin:
+          Number(activity.durationSeconds) > 0
+            ? Number((Number(activity.durationSeconds) / 60).toFixed(1))
+            : null,
+        averageHeartrate:
+          Number(activity.averageHeartRate) > 0 ? Math.round(Number(activity.averageHeartRate)) : null,
+      };
+
+      const { trainSessionId } = await linkExternalActivityToPlannedSession({
+        uid,
+        encodedKey: sessionCard.key,
+        linkedActivity,
+        payloadOverrides: {
+          date: activity.isoDate || focusedDay?.isoDate || null,
+          actualDurationMin: linkedActivity.movingTimeMin,
+          actualDistanceKm: linkedActivity.distanceKm,
+        },
+        sessionLogOverrides: {
+          matchStatus: "linked",
+          matchConfidence: Math.round(Number(suggestedActivityMatch.score || 0)),
+        },
+      });
+
+      if (activity.source && activity.id) {
+        await setDoc(
+          doc(db, "users", uid, activity.source, String(activity.id)),
+          {
+            linkedSessionKey: sessionCard.key,
+            linkedTrainSessionId: trainSessionId,
+            linkStatus: "linked",
+            linkedAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
+      setIgnoredSuggestedMatchKeys((prev) => ({
+        ...prev,
+        [suggestedActivityMatch.ignoreKey]: true,
+      }));
+
+      Alert.alert("Activity linked", "This activity now completes the planned session.", [
+        {
+          text: "View session",
+          onPress: () => openHistorySessionFromTrain(trainSessionId),
+        },
+        { text: "OK", style: "cancel" },
+      ]);
+    } catch (e) {
+      console.log("[train] suggested activity link error:", e);
+      Alert.alert("Link failed", e?.message || "Could not link this activity.");
+    } finally {
+      setLinkingSuggestedMatch(false);
+    }
+  }, [focusedDay?.isoDate, openHistorySessionFromTrain, suggestedActivityMatch]);
 
   const todayHeroPrimaryLabel = useMemo(() => {
     if (todayHero?.status === "completed" && todayHero?.savedTrainSessionId) return "View session";
@@ -3276,9 +3533,23 @@ export default function TrainIndex() {
         <View style={s.header}>
           <View style={s.headerTopRow}>
             <Text style={[s.headerTitle, { color: theme.headerTitle }]}>Train</Text>
-            <View style={[s.headerContextChip, { backgroundColor: theme.card2, borderColor: theme.border }]}>
+            <TouchableOpacity
+              onPress={openPrimaryPlan}
+              disabled={!showResolvedPlanState}
+              style={[
+                s.headerContextChip,
+                {
+                  backgroundColor: theme.card2,
+                  borderColor: theme.border,
+                  opacity: showResolvedPlanState ? 1 : 0.7,
+                },
+              ]}
+              activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel="Open active training plan"
+            >
               <Text style={[s.headerContextChipText, { color: theme.text }]}>{headerContextChip}</Text>
-            </View>
+            </TouchableOpacity>
           </View>
           <Text style={[s.headerSubtitle, { color: theme.headerSubtitle }]}>{dynamicSubtitle}</Text>
           <View style={s.headerMetaRow}>
@@ -3482,6 +3753,101 @@ export default function TrainIndex() {
             </View>
           ) : null}
         </View>
+
+        {activeLiveSession ? (
+          <View
+            style={[
+              s.flowStateCard,
+              { backgroundColor: quietSectionSurface, borderColor: quietBorder },
+            ]}
+          >
+            <View style={s.flowStateTopRow}>
+              <View style={[s.flowStateIcon, { backgroundColor: theme.primaryBg }]}>
+                <Feather name="activity" size={16} color={theme.primaryText} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.flowStateTitle, { color: theme.text }]}>
+                  Active session found
+                </Text>
+                <Text style={[s.flowStateBody, { color: theme.subtext }]}>
+                  {activeLiveSession.title}
+                  {activeLiveSession.summary ? ` · ${activeLiveSession.summary}` : ""}
+                </Text>
+              </View>
+            </View>
+            <View style={s.flowStateActions}>
+              <TouchableOpacity
+                onPress={resumeActiveLiveSession}
+                style={[s.flowStatePrimaryBtn, { backgroundColor: theme.primaryBg }]}
+                activeOpacity={0.9}
+              >
+                <Text style={[s.flowStatePrimaryText, { color: theme.primaryText }]}>Resume</Text>
+              </TouchableOpacity>
+              {activeLiveSession.canFinish ? (
+                <TouchableOpacity
+                  onPress={finishActiveLiveSession}
+                  style={[s.flowStateSecondaryBtn, { borderColor: theme.border }]}
+                  activeOpacity={0.85}
+                >
+                  <Text style={[s.flowStateSecondaryText, { color: theme.text }]}>Finish</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                onPress={confirmDiscardActiveLiveSession}
+                style={[s.flowStateSecondaryBtn, { borderColor: theme.border }]}
+                activeOpacity={0.85}
+              >
+                <Text style={[s.flowStateSecondaryText, { color: "#F87171" }]}>Discard</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
+
+        {suggestedActivityMatch ? (
+          <View
+            style={[
+              s.flowStateCard,
+              { backgroundColor: quietSectionSurface, borderColor: quietBorder },
+            ]}
+          >
+            <View style={s.flowStateTopRow}>
+              <View style={[s.flowStateIcon, { backgroundColor: theme.primaryBg }]}>
+                <Feather name="link" size={16} color={theme.primaryText} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.flowStateTitle, { color: theme.text }]}>
+                  Looks like this {suggestedActivityMatch.provider} activity matches today’s planned session
+                </Text>
+                <Text style={[s.flowStateBody, { color: theme.subtext }]}>
+                  {suggestedActivityMatch.activity.title} → {suggestedActivityMatch.sessionCard.title}
+                </Text>
+              </View>
+            </View>
+            <View style={s.flowStateActions}>
+              <TouchableOpacity
+                onPress={linkSuggestedActivityMatch}
+                disabled={linkingSuggestedMatch}
+                style={[
+                  s.flowStatePrimaryBtn,
+                  { backgroundColor: theme.primaryBg, opacity: linkingSuggestedMatch ? 0.7 : 1 },
+                ]}
+                activeOpacity={0.9}
+              >
+                <Text style={[s.flowStatePrimaryText, { color: theme.primaryText }]}>
+                  {linkingSuggestedMatch ? "Linking…" : "Link activity"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={ignoreSuggestedActivityMatch}
+                disabled={linkingSuggestedMatch}
+                style={[s.flowStateSecondaryBtn, { borderColor: theme.border }]}
+                activeOpacity={0.85}
+              >
+                <Text style={[s.flowStateSecondaryText, { color: theme.text }]}>Ignore</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
 
         {/* Today hero */}
         <View style={s.heroWrap}>
@@ -3728,6 +4094,118 @@ export default function TrainIndex() {
 
         {showResolvedPlanState ? (
           <>
+            {focusedDayActivities.length ? (
+              <View style={s.section}>
+                <View style={s.sectionHead}>
+                  <Text style={[s.sectionTitle, { color: theme.text }]}>
+                    Completed on this day
+                  </Text>
+                  <Text style={[s.sectionSubtleInline, { color: theme.subtext }]}>
+                    {focusedDayActivities.length}
+                  </Text>
+                </View>
+                {focusedDayCompletionInsight ? (
+                  <View
+                    style={[
+                      s.completedInsightCard,
+                      { backgroundColor: quietInsetSurface, borderColor: quietBorder },
+                    ]}
+                  >
+                    <View style={s.completedInsightTop}>
+                      <View style={[s.completedBenefitIcon, { backgroundColor: theme.primaryBg }]}>
+                        <Feather
+                          name={focusedDayCompletionInsight.benefit.icon}
+                          size={15}
+                          color={theme.primaryText}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[s.completedInsightEyebrow, { color: theme.subtext }]}>
+                          {focusedDayCompletionInsight.summary}
+                        </Text>
+                        <Text style={[s.completedInsightTitle, { color: theme.text }]}>
+                          {focusedDayCompletionInsight.benefit.label} · {focusedDayCompletionInsight.benefit.title}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={[s.completedInsightBody, { color: theme.subtext }]}>
+                      {focusedDayCompletionInsight.benefit.body}
+                    </Text>
+                    <View style={[s.completedNextBox, { borderColor: quietBorder }]}>
+                      <Text style={[s.completedNextLabel, { color: theme.text }]}>Next best move</Text>
+                      <Text style={[s.completedNextText, { color: theme.subtext }]}>
+                        {focusedDayCompletionInsight.suggestion}
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+                <View style={s.completedActivityList}>
+                  {focusedDayActivities.map((activity) => {
+                    const benefit = activityBenefit(activity);
+                    const stats = externalActivityStats(activity);
+                    const meta = externalActivityMeta(activity);
+                    return (
+                      <TouchableOpacity
+                        key={`${activity.source}:${activity.id}`}
+                        activeOpacity={0.86}
+                        onPress={() => openExternalActivityFromTrain(activity)}
+                        style={[
+                          s.completedActivityRow,
+                          { backgroundColor: quietInsetSurface, borderColor: quietBorder },
+                        ]}
+                      >
+                        <View style={s.completedActivityMainRow}>
+                          <View style={[s.completedActivityIcon, { borderColor: theme.border }]}>
+                            <Feather
+                              name={benefit.icon}
+                              size={15}
+                              color={theme.text}
+                            />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <View style={s.completedActivityTitleRow}>
+                              <Text
+                                style={[s.completedActivityTitle, { color: theme.text }]}
+                                numberOfLines={1}
+                              >
+                                {activity.title}
+                              </Text>
+                              <View style={[s.completedBenefitChip, { backgroundColor: theme.primaryBg }]}>
+                                <Text style={[s.completedBenefitChipText, { color: theme.primaryText }]}>
+                                  {benefit.label}
+                                </Text>
+                              </View>
+                            </View>
+                            <Text
+                              style={[s.completedActivityMeta, { color: theme.subtext }]}
+                              numberOfLines={1}
+                            >
+                              {activity.provider}{meta ? ` · ${meta}` : ""}
+                            </Text>
+                          </View>
+                          <Feather name="chevron-right" size={17} color={theme.subtext} />
+                        </View>
+                        {stats.length ? (
+                          <View style={s.completedActivityStats}>
+                            {stats.map((stat) => (
+                              <View key={stat.key} style={s.completedActivityStat}>
+                                <Text style={[s.completedActivityStatLabel, { color: theme.subtext }]}>
+                                  {stat.label}
+                                </Text>
+                                <Text style={[s.completedActivityStatValue, { color: theme.text }]}>
+                                  {stat.value}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        ) : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+
             {/* Up next */}
             <View style={s.section}>
               <Text style={[s.sectionTitle, { color: theme.text }]}>Up next</Text>
@@ -3983,281 +4461,90 @@ export default function TrainIndex() {
             </TouchableOpacity>
           </View>
           <Text style={[s.sectionSubtle, { color: theme.subtext }]}>
-            Secondary discovery: coach templates and training knowledge.
+            Tools for changing your plan, creating a workout, or learning what to do next.
           </Text>
 
-          <View style={[s.card, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}>
-            <View style={s.sectionHead}>
-              <Text style={[s.cardTitle, { color: theme.text }]}>Coach set plans</Text>
-              <TouchableOpacity
-                onPress={() => router.push("/train/coach-plans")}
-                style={[s.coachBrowseBtn, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
-                activeOpacity={0.85}
-              >
-                <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>Browse all</Text>
-                <Feather name="chevron-right" size={13} color={theme.text} />
-              </TouchableOpacity>
-            </View>
-
-            {hasRunPlan && !hasStrengthPlan ? (
-              <TouchableOpacity
-                onPress={() => router.push("/train/create/create-strength")}
-                style={[s.exploreAssistRow, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
-                activeOpacity={0.85}
-              >
-                <Feather name="bar-chart-2" size={14} color={theme.text} />
-                <Text style={{ color: theme.text, fontSize: 12, fontWeight: "700", flex: 1 }}>
-                  Add a strength companion plan to balance your run block.
-                </Text>
-                <Feather name="chevron-right" size={14} color={theme.subtext} />
-              </TouchableOpacity>
-            ) : null}
-            {hasStrengthPlan && !hasRunPlan ? (
-              <TouchableOpacity
-                onPress={() => router.push("/train/create/create-run")}
-                style={[s.exploreAssistRow, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
-                activeOpacity={0.85}
-              >
-                <Feather name="activity" size={14} color={theme.text} />
-                <Text style={{ color: theme.text, fontSize: 12, fontWeight: "700", flex: 1 }}>
-                  Add a run companion plan to round out weekly conditioning.
-                </Text>
-                <Feather name="chevron-right" size={14} color={theme.subtext} />
-              </TouchableOpacity>
-            ) : null}
-
-            {coachPlansLoading ? (
-              <View style={s.coachLoadingWrap}>
-                <ActivityIndicator />
-                <Text style={{ color: theme.subtext, fontWeight: "600", fontSize: 12 }}>Loading coach plans…</Text>
-              </View>
-            ) : coachPlans.length ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.coachPlanRow}>
-                {coachPlans.map((cp) => {
-                  const isRun = cp.kind === "run";
-                  const isStrength = cp.kind === "strength";
-                  const kindIcon = isRun ? "activity" : isStrength ? "bar-chart-2" : "layers";
-                  const kindLabel = isRun ? "Run" : isStrength ? "Strength" : "Training";
-                  const isLocalTemplate = cp.sourceCollection === "localTemplates";
-                  const isUsing = String(usingCoachPlanId) === String(cp.id);
-
-                  return (
-                    <View
-                      key={`${cp.sourceCollection}_${cp.id}`}
-                      style={[s.coachPlanCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
-                    >
-                      <View style={s.coachPlanTop}>
-                        <View style={[s.coachTypePill, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}>
-                          <Feather name={kindIcon} size={12} color={theme.text} />
-                          <Text style={[s.coachTypePillText, { color: theme.text }]}>{kindLabel}</Text>
-                        </View>
-                        <Text style={{ color: theme.subtext, fontSize: 11, fontWeight: "600" }} numberOfLines={1}>
-                          {cp.coachName}
-                        </Text>
-                      </View>
-
-                      <Text style={[s.coachPlanName, { color: theme.text }]} numberOfLines={2}>
-                        {cp.name}
-                      </Text>
-                      <Text style={[s.coachPlanMeta, { color: theme.subtext }]}>
-                        {cp.weekCount} weeks · {cp.sessionCount} sessions
-                      </Text>
-
-                      <View style={s.coachPlanActions}>
-                        <TouchableOpacity
-                          onPress={() => viewCoachPlan(cp)}
-                          style={[s.coachActionBtn, { borderColor: quietBorder, backgroundColor: quietSectionSurface }]}
-                          activeOpacity={0.85}
-                        >
-                          <Feather name="eye" size={13} color={theme.text} />
-                          <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>View</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          onPress={() =>
-                            isLocalTemplate
-                              ? router.push({
-                                  pathname: "/train/coach-plan-preview",
-                                  params: { templateId: cp.id },
-                                })
-                              : activateCoachPlan(cp)
-                          }
-                          disabled={isUsing}
-                          style={[
-                            s.coachActionBtn,
-                            {
-                              borderColor: "rgba(0,0,0,0)",
-                              backgroundColor: theme.primaryBg,
-                              opacity: isUsing ? 0.7 : 1,
-                            },
-                          ]}
-                          activeOpacity={0.85}
-                        >
-                          {isUsing ? (
-                            <ActivityIndicator size="small" color={theme.primaryText} />
-                          ) : (
-                            <Feather
-                              name={isLocalTemplate ? "sliders" : "plus"}
-                              size={13}
-                              color={theme.primaryText}
-                            />
-                          )}
-                          <Text style={{ color: theme.primaryText, fontWeight: "700", fontSize: 12 }}>
-                            {isUsing ? "Adding…" : isLocalTemplate ? "Personalise" : "Use"}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-            ) : (
-              <View style={[s.restCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
-                <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>No coach plans published</Text>
-                <Text style={{ color: theme.subtext, marginTop: 4, fontSize: 12 }}>
-                  Coach-set templates will appear here as they’re published.
-                </Text>
-              </View>
-            )}
-          </View>
-
-          <View style={s.exploreTipsBlock}>
-            <View style={s.sectionHead}>
-              <View style={{ flex: 1 }}>
-                <Text style={[s.cardTitle, { color: theme.text }]}>Create workout</Text>
-                <Text style={[s.sectionSubtle, { color: theme.subtext, marginTop: 4 }]}>
-                  Prefill a run, strength or hybrid session in one tap.
-                </Text>
-              </View>
-
-              <TouchableOpacity
-                onPress={() =>
-                  router.push({
-                    pathname: "/train/create-workout",
-                    params: { mode: "ai" },
-                  })
-                }
-                style={[s.coachBrowseBtn, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
-                activeOpacity={0.85}
-              >
-                <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>Generate</Text>
-                <Feather name="sparkles" size={13} color={theme.text} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={s.quickCreateGrid}>
-              {quickCreateCards.map((card) => (
-                <TouchableOpacity
-                  key={`quick-create-${card.sampleKey}`}
-                  onPress={() =>
-                    router.push({
-                      pathname: "/train/create-workout",
-                      params: { sampleKey: card.sampleKey, mode: "manual" },
-                    })
-                  }
-                  style={s.quickCreateCardShell}
-                  activeOpacity={0.9}
-                >
-                  <LinearGradient
-                    colors={[
-                      withHexAlpha(card.colors[0], theme.isDark ? "26" : "18"),
-                      withHexAlpha(card.colors[1], theme.isDark ? "12" : "0D"),
-                    ]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={[
-                      s.quickCreateCard,
-                      {
-                        backgroundColor: theme.card2,
-                        borderColor: withHexAlpha(card.colors[0], theme.isDark ? "52" : "30"),
-                      },
-                    ]}
-                  >
-                    <View style={s.quickCreateCardTop}>
-                      <View
-                        style={[
-                          s.quickCreateIconPill,
-                          {
-                            backgroundColor: withHexAlpha(card.colors[0], theme.isDark ? "28" : "22"),
-                            borderColor: withHexAlpha(card.colors[0], theme.isDark ? "5E" : "3D"),
-                          },
-                        ]}
-                      >
-                        <Feather name={card.icon} size={14} color="#FFFFFF" />
-                      </View>
-                      <Text style={s.quickCreateCardKicker}>{card.kicker}</Text>
-                    </View>
-
-                    <Text style={s.quickCreateCardTitle} numberOfLines={2}>
-                      {card.label}
-                    </Text>
-                    <Text style={s.quickCreateCardMeta} numberOfLines={1}>
-                      {card.sample.durationMin} min · {sampleSecondaryMeta(card.sample)} · {sampleEffortLabel(card.sample.rpe)}
-                    </Text>
-
-                    <Feather
-                      name={card.icon}
-                      size={42}
-                      color="rgba(255,255,255,0.12)"
-                      style={s.quickCreateWatermark}
-                    />
-                  </LinearGradient>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            <View
-              style={[
-                s.quickCreateCompactFooter,
-                { borderColor: theme.border, backgroundColor: theme.card2 },
-              ]}
+          <View style={s.exploreActionGrid}>
+            <TouchableOpacity
+              onPress={() => router.push("/train/coach-plans")}
+              style={[s.exploreActionCard, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}
+              activeOpacity={0.88}
             >
-              <Text style={[s.quickCreateCompactText, { color: theme.subtext }]}>
-                Use a tile for a structured custom workout, or quick log if you trained something else.
-              </Text>
-              <TouchableOpacity
-                onPress={() => openQuickRecord(focusedDay ? focusedDay.dayIdx : 0)}
-                style={[s.quickCreateCompactBtn, { borderColor: theme.border, backgroundColor: theme.card }]}
-                activeOpacity={0.85}
-              >
-                <Feather name="plus-circle" size={14} color={theme.text} />
-                <Text style={[s.quickCreateCompactBtnText, { color: theme.text }]}>Quick log</Text>
-              </TouchableOpacity>
-            </View>
+              <View style={[s.exploreActionIcon, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
+                <Feather name="layers" size={16} color={theme.text} />
+              </View>
+              <Text style={[s.exploreActionTitle, { color: theme.text }]}>Coach plans</Text>
+              <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>Browse templates</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() =>
+                router.push({
+                  pathname: "/train/create-workout",
+                  params: { mode: "ai" },
+                })
+              }
+              style={[s.exploreActionCard, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}
+              activeOpacity={0.88}
+            >
+              <View style={[s.exploreActionIcon, { backgroundColor: theme.primaryBg, borderColor: theme.primaryBg }]}>
+                <Feather name="sparkles" size={16} color={theme.primaryText} />
+              </View>
+              <Text style={[s.exploreActionTitle, { color: theme.text }]}>Create workout</Text>
+              <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>AI or manual</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => setTipsOpen(true)}
+              style={[s.exploreActionCard, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}
+              activeOpacity={0.88}
+            >
+              <View style={[s.exploreActionIcon, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
+                <Feather name="book-open" size={16} color={theme.text} />
+              </View>
+              <Text style={[s.exploreActionTitle, { color: theme.text }]}>Training guide</Text>
+              <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>Simple advice</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => openQuickRecord(focusedDay ? focusedDay.dayIdx : 0)}
+              style={[s.exploreActionCard, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}
+              activeOpacity={0.88}
+            >
+              <View style={[s.exploreActionIcon, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
+                <Feather name="plus-circle" size={16} color={theme.text} />
+              </View>
+              <Text style={[s.exploreActionTitle, { color: theme.text }]}>Quick log</Text>
+              <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>Record anything</Text>
+            </TouchableOpacity>
           </View>
 
-          <View style={s.exploreTipsBlock}>
-            <View style={s.sectionHead}>
-              <Text style={[s.cardTitle, { color: theme.text }]}>Training tips</Text>
-              <TouchableOpacity
-                onPress={() => setTipsOpen(true)}
-                style={[s.coachBrowseBtn, { borderColor: theme.border, backgroundColor: theme.card2 }]}
-                activeOpacity={0.85}
-              >
-                <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>Open guide</Text>
-                <Feather name="chevron-right" size={13} color={theme.text} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tipCardRow}>
-              {TRAINING_TIP_TOPICS.slice(0, 6).map((topic) => (
-                <TouchableOpacity
-                  key={`tip-card-preview-${topic.key}`}
-                  onPress={() => {
-                    setTipTopicKey(topic.key);
-                    setTipsOpen(true);
-                  }}
-                  style={s.tipCard}
-                  activeOpacity={0.85}
-                >
-                  <Image source={topic.image} style={s.tipCardImage} resizeMode="cover" />
-                  <View style={s.tipCardOverlay} />
-                  <Text style={s.tipCardTitle} numberOfLines={2}>
-                    {topic.title}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
+          {hasRunPlan && !hasStrengthPlan ? (
+            <TouchableOpacity
+              onPress={() => router.push("/train/create/create-strength")}
+              style={[s.exploreAssistRow, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
+              activeOpacity={0.85}
+            >
+              <Feather name="bar-chart-2" size={14} color={theme.text} />
+              <Text style={{ color: theme.text, fontSize: 12, fontWeight: "700", flex: 1 }}>
+                Add strength to balance this run block.
+              </Text>
+              <Feather name="chevron-right" size={14} color={theme.subtext} />
+            </TouchableOpacity>
+          ) : null}
+          {hasStrengthPlan && !hasRunPlan ? (
+            <TouchableOpacity
+              onPress={() => router.push("/train/create/create-run")}
+              style={[s.exploreAssistRow, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
+              activeOpacity={0.85}
+            >
+              <Feather name="activity" size={14} color={theme.text} />
+              <Text style={{ color: theme.text, fontSize: 12, fontWeight: "700", flex: 1 }}>
+                Add running to round out weekly conditioning.
+              </Text>
+              <Feather name="chevron-right" size={14} color={theme.subtext} />
+            </TouchableOpacity>
+          ) : null}
         </View>
       </ScrollView>
 
@@ -5138,6 +5425,66 @@ const s = StyleSheet.create({
     gap: 6,
   },
   secondaryBtnText: { fontWeight: "700", fontSize: 12 },
+  flowStateCard: {
+    marginHorizontal: 18,
+    marginBottom: 12,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 13,
+    gap: 12,
+  },
+  flowStateTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  flowStateIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  flowStateTitle: {
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: "900",
+  },
+  flowStateBody: {
+    marginTop: 3,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "600",
+  },
+  flowStateActions: {
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+  },
+  flowStatePrimaryBtn: {
+    flex: 1,
+    minHeight: 38,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  flowStatePrimaryText: {
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  flowStateSecondaryBtn: {
+    minHeight: 38,
+    borderRadius: 13,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  flowStateSecondaryText: {
+    fontSize: 12,
+    fontWeight: "900",
+  },
   heroTextLink: {
     marginTop: 10,
     minHeight: 38,
@@ -5167,6 +5514,123 @@ const s = StyleSheet.create({
   sectionHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
   sectionTitle: { fontSize: 18, fontWeight: "700", letterSpacing: 0.1 },
   sectionSubtle: { fontSize: 12, fontWeight: "500", marginTop: -2, marginBottom: 10, lineHeight: 17 },
+  sectionSubtleInline: { fontSize: 12, fontWeight: "700" },
+  completedActivityList: {
+    gap: 8,
+  },
+  completedInsightCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 18,
+    padding: 13,
+    marginBottom: 10,
+    gap: 10,
+  },
+  completedInsightTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  completedBenefitIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  completedInsightEyebrow: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  completedInsightTitle: {
+    marginTop: 2,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  completedInsightBody: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+  },
+  completedNextBox: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 10,
+  },
+  completedNextLabel: {
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  completedNextText: {
+    marginTop: 3,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "600",
+  },
+  completedActivityRow: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  completedActivityMainRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  completedActivityIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  completedActivityTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    flex: 1,
+  },
+  completedActivityTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  completedBenefitChip: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  completedBenefitChipText: {
+    fontSize: 9,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  completedActivityMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    fontWeight: "550",
+  },
+  completedActivityStats: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingLeft: 46,
+  },
+  completedActivityStat: {
+    minWidth: 64,
+  },
+  completedActivityStatLabel: {
+    fontSize: 9,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  completedActivityStatValue: {
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: "900",
+  },
 
   weekControls: { flexDirection: "row", alignItems: "center", gap: 10 },
   weekStripRow: { gap: 10, paddingRight: 8 },
@@ -5458,34 +5922,6 @@ const s = StyleSheet.create({
     justifyContent: "space-between",
   },
 
-  tipCardRow: {
-    gap: 10,
-    paddingRight: 10,
-  },
-  tipCard: {
-    width: 180,
-    height: 118,
-    borderRadius: 14,
-    overflow: "hidden",
-    justifyContent: "flex-end",
-  },
-  tipCardImage: {
-    ...StyleSheet.absoluteFillObject,
-    width: "100%",
-    height: "100%",
-  },
-  tipCardOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.32)",
-  },
-  tipCardTitle: {
-    color: "#FFFFFF",
-    fontSize: 13,
-    fontWeight: "900",
-    lineHeight: 18,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-  },
   tipsSheet: {
     height: "70%",
   },
@@ -5688,97 +6124,39 @@ const s = StyleSheet.create({
   exploreTipsBlock: {
     marginTop: 10,
   },
-  quickCreateGrid: {
-    marginTop: 10,
+  exploreActionGrid: {
+    marginTop: 12,
     flexDirection: "row",
     flexWrap: "wrap",
-    justifyContent: "space-between",
     gap: 8,
   },
-  quickCreateCardShell: {
+  exploreActionCard: {
     width: "48.5%",
-  },
-  quickCreateCard: {
-    minHeight: 112,
+    minHeight: 104,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 11,
-    overflow: "hidden",
-  },
-  quickCreateCardTop: {
-    flexDirection: "row",
-    alignItems: "center",
+    padding: 12,
     justifyContent: "space-between",
-    gap: 8,
   },
-  quickCreateIconPill: {
-    width: 28,
-    height: 28,
+  exploreActionIcon: {
+    width: 32,
+    height: 32,
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: "center",
     justifyContent: "center",
   },
-  quickCreateCardKicker: {
-    color: "rgba(255,255,255,0.84)",
-    fontSize: 9,
-    fontWeight: "900",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
-  },
-  quickCreateCardTitle: {
-    marginTop: 16,
-    color: "#FFFFFF",
-    fontSize: 19,
-    lineHeight: 22,
-    fontWeight: "900",
-    maxWidth: "88%",
-  },
-  quickCreateCardMeta: {
-    marginTop: 6,
-    color: "rgba(255,255,255,0.82)",
-    fontSize: 10,
-    fontWeight: "700",
-    lineHeight: 14,
-    maxWidth: "88%",
-  },
-  quickCreateWatermark: {
-    position: "absolute",
-    right: 8,
-    bottom: 8,
-  },
-  quickCreateCompactFooter: {
+  exploreActionTitle: {
     marginTop: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: "900",
   },
-  quickCreateCompactText: {
-    flex: 1,
+  exploreActionMeta: {
+    marginTop: 3,
     fontSize: 11,
-    lineHeight: 16,
-    fontWeight: "600",
-  },
-  quickCreateCompactBtn: {
-    minHeight: 36,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-  },
-  quickCreateCompactBtnText: {
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 0.2,
+    lineHeight: 15,
+    fontWeight: "700",
   },
   sampleCtaHint: {
     fontSize: 11,
@@ -6060,41 +6438,6 @@ const s = StyleSheet.create({
     marginTop: -2,
   },
 
-  coachLoadingWrap: {
-    minHeight: 86,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  },
-  coachPlanRow: { gap: 10, paddingRight: 8 },
-  coachPlanCard: {
-    width: 300,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 16,
-    padding: 12,
-  },
-  coachPlanTop: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-  },
-  coachTypePill: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-  },
-  coachTypePillText: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0.2,
-    textTransform: "uppercase",
-  },
   coachBrowseBtn: {
     minHeight: 30,
     borderRadius: 999,
@@ -6103,32 +6446,6 @@ const s = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-  },
-  coachPlanName: {
-    marginTop: 10,
-    fontSize: 15,
-    fontWeight: "700",
-  },
-  coachPlanMeta: {
-    marginTop: 6,
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  coachPlanActions: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 10,
-  },
-  coachActionBtn: {
-    flex: 1,
-    minHeight: 38,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-    gap: 6,
-    paddingHorizontal: 8,
   },
 
   modalBackdrop: {

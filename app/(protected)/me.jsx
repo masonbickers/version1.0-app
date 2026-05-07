@@ -1,20 +1,27 @@
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import { createContext, useContext, useMemo, useState } from "react";
+import * as ImagePicker from "expo-image-picker";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Svg, { Circle, Line, Path } from "react-native-svg";
+import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 
 import Feather from "../../components/LucideFeather";
+import { auth, db, storage } from "../../firebaseConfig";
 import { useTheme } from "../../providers/ThemeProvider";
 import { useMePageData } from "../../src/hooks/useMePageData";
 
@@ -72,15 +79,54 @@ const YouThemeContext = createContext({
   s: null,
 });
 
+function decodePolyline(encoded) {
+  if (!encoded || typeof encoded !== "string") return [];
+  let index = 0;
+  let lat = 0;
+  let lon = 0;
+  const points = [];
+
+  while (index < encoded.length) {
+    let shift = 0;
+    let result = 0;
+    let byte = null;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+
+    shift = 0;
+    result = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lon += result & 1 ? ~(result >> 1) : result >> 1;
+
+    points.push({ lat: lat / 1e5, lon: lon / 1e5 });
+  }
+
+  return points;
+}
+
 function useYouTheme() {
   return useContext(YouThemeContext);
 }
 
 export default function MePage() {
   const router = useRouter();
+  const params = useLocalSearchParams();
   const { width } = useWindowDimensions();
   const { colors: appColors, isDark } = useTheme();
   const [activeTab, setActiveTab] = useState("overview");
+  const [activityEditTarget, setActivityEditTarget] = useState(null);
+  const [promptedActivityIds, setPromptedActivityIds] = useState(() => new Set());
+  const scrollRef = useRef(null);
+  const scrollYRef = useRef(0);
+  const pendingRestoreScrollYRef = useRef(null);
   const {
     loading,
     error,
@@ -111,6 +157,33 @@ export default function MePage() {
     if (resolved !== accent) return resolved;
     return isDark ? "rgba(230,255,59,0.2)" : "rgba(230,255,59,0.3)";
   }, [appColors, isDark]);
+
+  useEffect(() => {
+    if (loading || activityEditTarget) return;
+    const next = activityFeed.find(
+      (activity) =>
+        shouldPromptForActivityCustomisation(activity) &&
+        !promptedActivityIds.has(activity.id)
+    );
+    if (!next) return;
+    setPromptedActivityIds((prev) => new Set(prev).add(next.id));
+    setActivityEditTarget(next);
+  }, [activityEditTarget, activityFeed, loading, promptedActivityIds]);
+
+  useEffect(() => {
+    const requestedTab = Array.isArray(params?.tab) ? params.tab[0] : params?.tab;
+    const requestedScrollY = Array.isArray(params?.scrollY)
+      ? params.scrollY[0]
+      : params?.scrollY;
+
+    if (requestedTab === "activity") {
+      setActiveTab("activity");
+      const y = Number(requestedScrollY || 0);
+      pendingRestoreScrollYRef.current = Number.isFinite(y) && y > 0 ? y : 0;
+    }
+  }, [params?.scrollY, params?.tab]);
+
+  const closeActivityPrompt = () => setActivityEditTarget(null);
 
   return (
     <YouThemeContext.Provider value={{ c, s }}>
@@ -153,9 +226,23 @@ export default function MePage() {
         </View>
 
         <ScrollView
+          ref={scrollRef}
           style={s.scroll}
           contentContainerStyle={s.content}
           showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={(event) => {
+            scrollYRef.current = event.nativeEvent.contentOffset.y;
+          }}
+          onContentSizeChange={() => {
+            if (activeTab !== "activity") return;
+            const y = pendingRestoreScrollYRef.current;
+            if (y === null || y === undefined) return;
+            pendingRestoreScrollYRef.current = null;
+            requestAnimationFrame(() => {
+              scrollRef.current?.scrollTo({ y, animated: false });
+            });
+          }}
         >
           {loading ? (
             <View style={s.loadingWrap}>
@@ -172,7 +259,12 @@ export default function MePage() {
               )}
 
               {activeTab === "activity" ? (
-                <ActivityLogTab profile={profile} activities={activityFeed} router={router} />
+                <ActivityLogTab
+                  profile={profile}
+                  activities={activityFeed}
+                  router={router}
+                  scrollYRef={scrollYRef}
+                />
               ) : (
                 <OverviewTab
                   chartWidth={chartWidth}
@@ -186,6 +278,14 @@ export default function MePage() {
             </>
           )}
         </ScrollView>
+        <ActivityCustomiseModal
+          activity={activityEditTarget}
+          onClose={closeActivityPrompt}
+          onSaved={async () => {
+            closeActivityPrompt();
+            await refresh();
+          }}
+        />
       </SafeAreaView>
     </YouThemeContext.Provider>
   );
@@ -480,7 +580,7 @@ function IntegrationsCard({ rows }) {
   );
 }
 
-function ActivityLogTab({ activities, profile, router }) {
+function ActivityLogTab({ activities, profile, router, scrollYRef }) {
   const { s } = useYouTheme();
   const hasActivities = activities.length > 0;
 
@@ -494,6 +594,7 @@ function ActivityLogTab({ activities, profile, router }) {
               activity={activity}
               profile={profile}
               router={router}
+              scrollYRef={scrollYRef}
             />
           ))}
         </View>
@@ -536,7 +637,7 @@ function EmptyActivityState({ router }) {
   );
 }
 
-function ActivityFeedItem({ activity, profile, router }) {
+function ActivityFeedItem({ activity, profile, router, scrollYRef }) {
   const { c, s } = useYouTheme();
   const canOpen = Boolean(activity.detailId && activity.detailSource);
   const hasRoutePreview =
@@ -552,6 +653,8 @@ function ActivityFeedItem({ activity, profile, router }) {
       params: {
         id: String(activity.detailId),
         source: String(activity.detailSource),
+        from: "meActivity",
+        scrollY: String(Math.max(0, Math.round(scrollYRef?.current || 0))),
       },
     });
   };
@@ -572,28 +675,43 @@ function ActivityFeedItem({ activity, profile, router }) {
             )}
           </View>
           <View style={s.activityHeaderCopy}>
-            <Text style={s.activityHeaderName}>{profile?.name || "You"}</Text>
+            <Text style={s.activityHeaderName} numberOfLines={1}>
+              {profile?.name || "You"}
+            </Text>
             <Text style={s.activityHeaderMeta} numberOfLines={1}>
               {[activity.whenLabel, activity.deviceLabel].filter(Boolean).join(" · ")}
             </Text>
-            {!!activity.locationLabel && (
-              <View style={s.activityLocationRow}>
-                <Feather name={activity.locationIcon || "map-pin"} size={15} color={c.text} />
-                <Text style={s.activityLocationText} numberOfLines={1}>
-                  {activity.locationLabel}
-                </Text>
-              </View>
-            )}
           </View>
         </View>
       </View>
 
-      <Text style={s.activityTitle}>{activity.title}</Text>
+      <View style={s.activityTitleBlock}>
+        <View style={s.activityTypeLine}>
+          <Feather name={activity.activityTypeIcon || "activity"} size={14} color={c.orange} />
+          <Text style={s.activityTypeLineText} numberOfLines={1}>
+            {[activity.activityTypeLabel, activity.typeLabel].filter(Boolean).join(" · ")}
+          </Text>
+        </View>
+        <Text style={s.activityTitle} numberOfLines={2}>
+          {activity.title}
+        </Text>
+        {!!activity.locationLabel && (
+          <View style={s.activitySubMetaRow}>
+            <Feather name="map-pin" size={13} color={c.muted} />
+            <Text style={s.activitySubMetaText} numberOfLines={1}>
+              {activity.locationLabel}
+            </Text>
+          </View>
+        )}
+      </View>
       {!!activity.note && <Text style={s.activityNote}>{activity.note}</Text>}
+      {!!activity.photoUrls?.[0] && (
+        <Image source={{ uri: activity.photoUrls[0] }} style={s.activityPhoto} />
+      )}
 
       {!!usefulStats.length && (
         <View style={s.activityStatsRow}>
-          {usefulStats.slice(0, 4).map(([label, value]) => (
+          {usefulStats.slice(0, 3).map(([label, value]) => (
             <View key={label} style={s.activityStatColumn}>
               <Text style={s.activityStatLabel}>{label}</Text>
               <Text style={s.activityStatValue}>{value}</Text>
@@ -621,6 +739,200 @@ function ActivityRoutePreview({ points }) {
         <Text style={s.activityMapBadgeText}>Start and end hidden</Text>
       </View>
     </View>
+  );
+}
+
+function ActivityCustomiseModal({ activity, onClose, onSaved }) {
+  const { c, s } = useYouTheme();
+  const [title, setTitle] = useState("");
+  const [caption, setCaption] = useState("");
+  const [photoUri, setPhotoUri] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setTitle(activity?.title || "");
+    setCaption(activity?.note || "");
+    setPhotoUri(activity?.photoUrls?.[0] || "");
+    setSaving(false);
+  }, [activity]);
+
+  const pickPhoto = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Photos", "Allow photo access to add an image to this activity.");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      quality: 0.82,
+    });
+
+    if (!result.canceled && result.assets?.[0]?.uri) {
+      setPhotoUri(result.assets[0].uri);
+    }
+  };
+
+  const saveActivity = async () => {
+    if (!activity?.detailId || !activity?.detailSource) return;
+
+    try {
+      const uid = auth.currentUser?.uid;
+      if (!uid) {
+        Alert.alert("Activity", "Please sign in again.");
+        return;
+      }
+
+      setSaving(true);
+      let nextPhotoUrls = normalizePhotoUrls(activity.photoUrls);
+
+      if (photoUri && !String(photoUri).startsWith("http")) {
+        const response = await fetch(photoUri);
+        const blob = await response.blob();
+        const storageRef = ref(
+          storage,
+          `activity_photos/${uid}/${activity.detailSource}_${activity.detailId}_${Date.now()}.jpg`
+        );
+        await uploadBytes(storageRef, blob, { contentType: "image/jpeg" });
+        const downloadUrl = await getDownloadURL(storageRef);
+        nextPhotoUrls = [downloadUrl, ...nextPhotoUrls.filter((url) => url !== downloadUrl)];
+      } else if (photoUri) {
+        nextPhotoUrls = [photoUri, ...nextPhotoUrls.filter((url) => url !== photoUri)];
+      }
+
+      const trimmedTitle = title.trim() || activity.title || "Garmin activity";
+      const trimmedCaption = caption.trim();
+      const activityRef = doc(db, "users", uid, activity.detailSource, String(activity.detailId));
+
+      await updateDoc(activityRef, {
+        name: trimmedTitle,
+        title: trimmedTitle,
+        description: trimmedCaption,
+        note: trimmedCaption,
+        photoUrls: nextPhotoUrls,
+        customizedAt: serverTimestamp(),
+        customizedAtMs: Date.now(),
+        updatedAt: serverTimestamp(),
+        updatedAtMs: Date.now(),
+      });
+
+      await onSaved?.();
+    } catch (e) {
+      console.log("Activity customise save error", e);
+      Alert.alert("Activity", e?.message || "Could not save this activity.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      visible={Boolean(activity)}
+      animationType="slide"
+      transparent
+      onRequestClose={saving ? undefined : onClose}
+    >
+      <View style={s.modalScrim}>
+        <View style={s.activityEditSheet}>
+          <View style={s.activityEditHandle} />
+          <View style={s.activityEditHeader}>
+            <View style={s.activityEditIcon}>
+              <Feather name="watch" size={18} color={c.orange} />
+            </View>
+            <View style={s.activityEditCopy}>
+              <Text style={s.activityEditEyebrow}>Garmin import</Text>
+              <Text style={s.activityEditTitle}>Name this activity</Text>
+            </View>
+          </View>
+
+          <ScrollView
+            style={s.activityEditScroll}
+            contentContainerStyle={s.activityEditContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={s.activityEditSummary}>
+              <Text style={s.activityEditSummaryMeta} numberOfLines={2}>
+                {[activity?.whenLabel, activity?.deviceLabel || "Garmin"].filter(Boolean).join(" · ")}
+              </Text>
+              {!!activity?.locationLabel && (
+                <Text style={s.activityEditSummaryLocation} numberOfLines={1}>
+                  {activity.locationLabel}
+                </Text>
+              )}
+              {!!activity?.stats?.length && (
+                <View style={s.activityEditSummaryStats}>
+                  {activity.stats.slice(0, 3).map(([label, value]) => (
+                    <View key={label} style={s.activityEditSummaryStat}>
+                      <Text style={s.activityEditSummaryStatValue}>{value}</Text>
+                      <Text style={s.activityEditSummaryStatLabel}>{label}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+
+            <TextInput
+              value={title}
+              onChangeText={setTitle}
+              placeholder="Activity name"
+              placeholderTextColor={c.muted}
+              style={s.activityEditInput}
+              maxLength={80}
+            />
+            <TextInput
+              value={caption}
+              onChangeText={setCaption}
+              placeholder="Add a caption"
+              placeholderTextColor={c.muted}
+              style={[s.activityEditInput, s.activityEditCaption]}
+              multiline
+              maxLength={280}
+            />
+
+            <TouchableOpacity
+              style={s.activityEditPhotoButton}
+              onPress={pickPhoto}
+              activeOpacity={0.84}
+              disabled={saving}
+            >
+              {photoUri ? (
+                <Image source={{ uri: photoUri }} style={s.activityEditPhotoPreview} />
+              ) : (
+                <View style={s.activityEditPhotoPlaceholder}>
+                  <Feather name="image" size={22} color={c.orange} />
+                  <Text style={s.activityEditPhotoText}>Add photo</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </ScrollView>
+
+          <View style={s.activityEditActions}>
+            <TouchableOpacity
+              style={s.activityEditSecondary}
+              onPress={onClose}
+              activeOpacity={0.84}
+              disabled={saving}
+            >
+              <Text style={s.activityEditSecondaryText}>Later</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={s.activityEditPrimary}
+              onPress={saveActivity}
+              activeOpacity={0.88}
+              disabled={saving}
+            >
+              {saving ? (
+                <ActivityIndicator size="small" color={c.primaryText} />
+              ) : (
+                <Text style={s.activityEditPrimaryText}>Save</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -812,20 +1124,28 @@ function buildActivityFeed(recentActivities, garminWorkoutSyncs) {
       (provider === "garmin" ? "Garmin" : "");
     const locationLabel =
       activity.location ||
+      activity.locationName ||
+      activity.startLocation ||
+      activity.startLocationName ||
       activity.rawGarminActivity?.location ||
       activity.rawGarminActivity?.startLocation ||
+      activity.rawGarminActivity?.locationName ||
+      activity.rawGarminActivity?.startLocationName ||
       "";
-    const stats = isStrength
-      ? [
-          minutes > 0 ? ["Time", formatLongDuration(minutes)] : null,
-          averageHr > 0 ? ["Avg HR", `${Math.round(averageHr)} bpm`] : null,
-          calories > 0 ? ["Cal", `${Math.round(calories)} Cal`] : null,
-        ].filter(Boolean)
-      : [
-          distanceKm > 0 ? ["Distance", formatKm(distanceKm)] : null,
-          pace ? ["Pace", pace] : null,
-          minutes > 0 ? ["Time", formatLongDuration(minutes)] : null,
-        ].filter(Boolean);
+    const stats = buildActivityStats({
+      averageHr,
+      calories,
+      distanceKm,
+      isStrength,
+      minutes,
+      pace,
+      type,
+    });
+    const activityTime =
+      activity.startDateMs ||
+      activity.startDate ||
+      activity.when;
+    const routeCoordinates = pickActivityRouteCoordinates(activity);
 
     return {
       id: activity.id || `activity-${index}`,
@@ -836,25 +1156,22 @@ function buildActivityFeed(recentActivities, garminWorkoutSyncs) {
           : "stravaActivities",
       icon: provider === "garmin" ? "watch" : isStrength ? "zap" : type === "Walk" ? "map-pin" : "activity",
       typeLabel: provider === "garmin" ? "Garmin" : isStrength ? "Strength" : type,
+      activityTypeLabel: formatActivityTypeLabel(type),
+      activityTypeIcon: iconForActivityType(type, isStrength),
       note: activity.description || activity.note || "",
+      provider,
+      customizedAt: activity.customizedAt || null,
+      customizedAtMs: toMillis(activity.customizedAtMs || activity.customizedAt),
+      photoUrls: normalizePhotoUrls(activity.photoUrls || activity.photos || activity.imageUrl),
       stats: stats.length ? stats : [["Type", isStrength ? "Strength" : type]],
       title,
       deviceLabel,
       locationLabel,
       locationIcon: isStrength ? "dumbbell" : "map-pin",
-      routeCoordinates: activity.routeCoordinates || [],
-      whenLabel:
-        activity.whenLabel ||
-        formatActivityDate(
-          activity.startDateMs ||
-            activity.startDate ||
-            activity.when ||
-            activity.createdAtMs
-        ),
+      routeCoordinates,
+      whenLabel: formatActivityDate(activityTime) || activity.whenLabel || "",
       sortMs: toMillis(
-        activity.startDateMs ||
-          activity.startDate ||
-          activity.when ||
+        activityTime ||
           activity.createdAtMs
       ),
     };
@@ -889,6 +1206,113 @@ function buildActivityFeed(recentActivities, garminWorkoutSyncs) {
   return [...mappedActivities, ...mappedGarmin]
     .sort((a, b) => toNum(b.sortMs) - toNum(a.sortMs))
     .slice(0, 20);
+}
+
+function buildActivityStats({ averageHr, calories, distanceKm, isStrength, minutes, pace, type }) {
+  if (isStrength) {
+    return [
+      minutes > 0 ? ["Time", formatLongDuration(minutes)] : null,
+      averageHr > 0 ? ["Avg HR", `${Math.round(averageHr)} bpm`] : null,
+      calories > 0 ? ["Cal", `${Math.round(calories)} Cal`] : null,
+    ].filter(Boolean);
+  }
+
+  return [
+    distanceKm > 0 ? ["Distance", formatActivityDistance(distanceKm)] : null,
+    pace ? ["Pace", pace] : null,
+    minutes > 0 ? ["Time", formatLongDuration(minutes)] : null,
+    averageHr > 0 ? ["Avg HR", `${Math.round(averageHr)} bpm`] : null,
+    calories > 0 ? ["Cal", `${Math.round(calories)} Cal`] : null,
+    !distanceKm && !minutes ? ["Type", type || "Workout"] : null,
+  ].filter(Boolean);
+}
+
+function normalizePhotoUrls(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => (typeof item === "string" ? item : item?.url || item?.uri || ""))
+      .filter(Boolean);
+  }
+  if (typeof value === "string") return [value].filter(Boolean);
+  if (typeof value === "object") return [value.url || value.uri].filter(Boolean);
+  return [];
+}
+
+function pickActivityRouteCoordinates(activity = {}) {
+  const raw = activity.rawGarminActivity || {};
+  const candidates = [
+    activity.routeCoordinates,
+    activity.coordinates,
+    activity.trackPoints,
+    activity.samples,
+    raw.routeCoordinates,
+    raw.coordinates,
+    raw.trackPoints,
+    raw.samples,
+    raw.activitySamples,
+  ];
+
+  for (const candidate of candidates) {
+    const points = (Array.isArray(candidate) ? candidate : [])
+      .map(normaliseRoutePoint)
+      .filter(Boolean);
+    if (points.length > 1) return points;
+  }
+
+  const polyline = String(
+    activity.summaryPolyline ||
+      activity.polyline ||
+      activity.map?.summary_polyline ||
+      activity.map?.polyline ||
+      raw.summaryPolyline ||
+      raw.polyline ||
+      raw.map?.summary_polyline ||
+      raw.map?.polyline ||
+      ""
+  ).trim();
+
+  return decodePolyline(polyline);
+}
+
+function shouldPromptForActivityCustomisation(activity) {
+  if (!activity?.detailId || !activity?.detailSource) return false;
+  if (String(activity.provider || "").toLowerCase() !== "garmin") return false;
+  if (!["garmin_activities", "garminActivities"].includes(activity.detailSource)) return false;
+  if (activity.customizedAt || activity.customizedAtMs) return false;
+  return true;
+}
+
+function formatActivityTypeLabel(type) {
+  const raw = String(type || "").trim();
+  if (!raw) return "Workout";
+  const compact = raw
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  if (/strength|weight|gym|resistance/.test(compact)) return "Weight training";
+  if (/treadmill/.test(compact)) return "Treadmill run";
+  if (/indoor.*bike|trainer|virtual ride/.test(compact)) return "Trainer";
+  if (/run|running/.test(compact)) return "Run";
+  if (/walk|walking/.test(compact)) return "Walk";
+  if (/ride|cycling|bike|biking/.test(compact)) return "Ride";
+  if (/swim/.test(compact)) return "Swim";
+  if (/hike/.test(compact)) return "Hike";
+
+  return compact.charAt(0).toUpperCase() + compact.slice(1);
+}
+
+function iconForActivityType(type, isStrength) {
+  const compact = String(type || "").toLowerCase();
+  if (isStrength || /strength|weight|gym|resistance/.test(compact)) return "zap";
+  if (/trainer|bike|cycling|ride/.test(compact)) return "repeat";
+  if (/walk|hike/.test(compact)) return "map-pin";
+  if (/swim/.test(compact)) return "droplet";
+  if (/run|treadmill/.test(compact)) return "activity";
+  return "activity";
 }
 
 function readDistanceKm(activity) {
@@ -987,6 +1411,12 @@ function formatKm(value) {
   return `${toNum(value).toFixed(1)} km`;
 }
 
+function formatActivityDistance(value) {
+  const n = toNum(value);
+  if (n >= 10) return `${n.toFixed(2)} km`;
+  return `${n.toFixed(1)} km`;
+}
+
 function formatDuration(minutes) {
   const mins = Math.round(toNum(minutes));
   if (mins <= 0) return "0m";
@@ -1015,7 +1445,7 @@ function formatPace(minutesPerKm) {
 
 function formatActivityDate(value) {
   const ms = toMillis(value);
-  if (!ms) return "Date unavailable";
+  if (!ms) return "";
   const date = new Date(ms);
   const today = new Date();
   const yesterday = new Date(today);
@@ -1603,7 +2033,7 @@ function makeStyles(c) {
       gap: 0,
     },
     activityList: {
-      gap: 14,
+      gap: 9,
     },
     emptyActivityCard: {
       padding: 22,
@@ -1667,25 +2097,27 @@ function makeStyles(c) {
       fontWeight: "800",
     },
     activityCard: {
-      padding: 20,
-      borderRadius: 28,
+      padding: 13,
+      borderRadius: 18,
       backgroundColor: c.surface,
-      gap: 16,
+      gap: 10,
       borderWidth: 1,
       borderColor: c.faintLine,
     },
     activityTop: {
       flexDirection: "row",
-      gap: 14,
+      alignItems: "flex-start",
+      justifyContent: "space-between",
+      gap: 10,
     },
     activityIdentity: {
       flex: 1,
       flexDirection: "row",
-      gap: 14,
+      gap: 10,
     },
     activityAvatarWrap: {
-      width: 54,
-      height: 54,
+      width: 40,
+      height: 40,
       borderRadius: 999,
       backgroundColor: c.panel,
       alignItems: "center",
@@ -1698,71 +2130,131 @@ function makeStyles(c) {
     },
     activityAvatarInitial: {
       color: c.text,
-      fontSize: 18,
+      fontSize: 14,
       fontWeight: "900",
     },
     activityHeaderCopy: {
       flex: 1,
-      gap: 4,
+      gap: 2,
       justifyContent: "center",
     },
     activityHeaderName: {
       color: c.text,
-      fontSize: 18,
-      lineHeight: 22,
+      fontSize: 14,
+      lineHeight: 17,
       fontWeight: "900",
     },
     activityHeaderMeta: {
       color: c.muted,
-      fontSize: 14,
-      lineHeight: 18,
+      fontSize: 12,
+      lineHeight: 15,
+    },
+    activitySourceBadge: {
+      display: "none",
+    },
+    activitySourceBadgeText: {
+      color: c.text,
+      fontSize: 10,
+      fontWeight: "900",
+      textTransform: "uppercase",
+      letterSpacing: 0.7,
     },
     activityLocationRow: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 8,
-      paddingTop: 2,
+      gap: 6,
+      paddingTop: 1,
     },
     activityLocationText: {
       color: c.muted,
-      fontSize: 14,
-      lineHeight: 18,
+      fontSize: 12,
+      lineHeight: 15,
+    },
+    activitySubMetaRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
+    activitySubMetaText: {
+      color: c.muted,
+      fontSize: 11,
+      lineHeight: 14,
+    },
+    activityTitleBlock: {
+      gap: 4,
+    },
+    activityTypePill: {
+      alignSelf: "flex-start",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      paddingHorizontal: 9,
+      paddingVertical: 5,
+      borderRadius: 999,
+      backgroundColor: c.panel,
+      borderWidth: 1,
+      borderColor: c.faintLine,
+    },
+    activityTypePillText: {
+      color: c.muted,
+      fontSize: 11,
+      lineHeight: 14,
+      fontWeight: "800",
+    },
+    activityTypeLine: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 7,
+    },
+    activityTypeLineText: {
+      color: c.muted,
+      fontSize: 12,
+      lineHeight: 15,
+      fontWeight: "700",
     },
     activityTitle: {
       color: c.text,
-      fontSize: 30,
-      lineHeight: 35,
+      fontSize: 24,
+      lineHeight: 28,
       fontWeight: "900",
     },
     activityNote: {
       color: c.muted,
-      fontSize: 15,
-      lineHeight: 21,
-      marginTop: -8,
+      fontSize: 13,
+      lineHeight: 18,
+      marginTop: -5,
+    },
+    activityPhoto: {
+      width: "100%",
+      height: 170,
+      borderRadius: 14,
+      backgroundColor: c.surfaceAlt,
     },
     activityStatsRow: {
       flexDirection: "row",
       justifyContent: "space-between",
-      gap: 16,
+      gap: 0,
+      paddingTop: 2,
     },
     activityStatColumn: {
       flex: 1,
-      gap: 6,
+      gap: 3,
+      paddingRight: 8,
     },
     activityStatValue: {
       color: c.text,
-      fontSize: 23,
-      lineHeight: 28,
+      fontSize: 17,
+      lineHeight: 21,
       fontWeight: "900",
     },
     activityStatLabel: {
       color: c.muted,
-      fontSize: 14,
-      lineHeight: 18,
+      fontSize: 11,
+      lineHeight: 14,
     },
     activityMapPreview: {
-      height: 190,
-      borderRadius: 12,
+      height: 130,
+      borderRadius: 10,
       overflow: "hidden",
       backgroundColor: c.surfaceAlt,
       borderWidth: 1,
@@ -1772,14 +2264,193 @@ function makeStyles(c) {
       position: "absolute",
       left: 12,
       top: 12,
-      paddingHorizontal: 10,
-      paddingVertical: 7,
+      paddingHorizontal: 8,
+      paddingVertical: 5,
       borderRadius: 6,
       backgroundColor: c.panel,
     },
     activityMapBadgeText: {
       color: c.text,
+      fontSize: 11,
+      fontWeight: "900",
+    },
+    modalScrim: {
+      flex: 1,
+      justifyContent: "flex-end",
+      backgroundColor: "rgba(0,0,0,0.58)",
+    },
+    activityEditSheet: {
+      maxHeight: "88%",
+      paddingTop: 10,
+      paddingHorizontal: 20,
+      paddingBottom: 26,
+      borderTopLeftRadius: 30,
+      borderTopRightRadius: 30,
+      backgroundColor: c.surface,
+      borderWidth: 1,
+      borderColor: c.faintLine,
+      gap: 16,
+    },
+    activityEditHandle: {
+      alignSelf: "center",
+      width: 42,
+      height: 5,
+      borderRadius: 999,
+      backgroundColor: c.soft,
+      opacity: 0.55,
+    },
+    activityEditHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingTop: 4,
+    },
+    activityEditIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 16,
+      backgroundColor: c.panel,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    activityEditCopy: {
+      flex: 1,
+      gap: 3,
+    },
+    activityEditEyebrow: {
+      color: c.muted,
+      fontSize: 11,
+      fontWeight: "800",
+      textTransform: "uppercase",
+      letterSpacing: 0.9,
+    },
+    activityEditTitle: {
+      color: c.text,
+      fontSize: 24,
+      lineHeight: 28,
+      fontWeight: "900",
+      letterSpacing: -0.5,
+    },
+    activityEditScroll: {
+      maxHeight: 430,
+    },
+    activityEditContent: {
+      gap: 12,
+      paddingBottom: 2,
+    },
+    activityEditSummary: {
+      padding: 14,
+      borderRadius: 18,
+      backgroundColor: c.panel,
+      borderWidth: 1,
+      borderColor: c.faintLine,
+      gap: 10,
+    },
+    activityEditSummaryMeta: {
+      color: c.text,
+      fontSize: 15,
+      lineHeight: 20,
+      fontWeight: "800",
+    },
+    activityEditSummaryLocation: {
+      color: c.muted,
       fontSize: 13,
+      lineHeight: 18,
+      marginTop: -5,
+    },
+    activityEditSummaryStats: {
+      flexDirection: "row",
+      gap: 10,
+    },
+    activityEditSummaryStat: {
+      flex: 1,
+      gap: 3,
+    },
+    activityEditSummaryStatValue: {
+      color: c.text,
+      fontSize: 18,
+      lineHeight: 22,
+      fontWeight: "900",
+    },
+    activityEditSummaryStatLabel: {
+      color: c.muted,
+      fontSize: 11,
+      lineHeight: 15,
+      fontWeight: "800",
+      textTransform: "uppercase",
+      letterSpacing: 0.7,
+    },
+    activityEditInput: {
+      minHeight: 54,
+      borderRadius: 18,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      color: c.text,
+      backgroundColor: c.panel,
+      borderWidth: 1,
+      borderColor: c.faintLine,
+      fontSize: 16,
+      fontWeight: "700",
+    },
+    activityEditCaption: {
+      minHeight: 112,
+      textAlignVertical: "top",
+      fontWeight: "600",
+      lineHeight: 22,
+    },
+    activityEditPhotoButton: {
+      height: 190,
+      borderRadius: 20,
+      overflow: "hidden",
+      backgroundColor: c.panel,
+      borderWidth: 1,
+      borderColor: c.faintLine,
+    },
+    activityEditPhotoPreview: {
+      width: "100%",
+      height: "100%",
+    },
+    activityEditPhotoPlaceholder: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 9,
+    },
+    activityEditPhotoText: {
+      color: c.text,
+      fontSize: 14,
+      fontWeight: "800",
+    },
+    activityEditActions: {
+      flexDirection: "row",
+      gap: 12,
+    },
+    activityEditSecondary: {
+      flex: 1,
+      minHeight: 52,
+      borderRadius: 999,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: c.panel,
+      borderWidth: 1,
+      borderColor: c.faintLine,
+    },
+    activityEditSecondaryText: {
+      color: c.text,
+      fontSize: 14,
+      fontWeight: "900",
+    },
+    activityEditPrimary: {
+      flex: 1,
+      minHeight: 52,
+      borderRadius: 999,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: c.orange,
+    },
+    activityEditPrimaryText: {
+      color: c.primaryText,
+      fontSize: 14,
       fontWeight: "900",
     },
   });

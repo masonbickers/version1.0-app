@@ -3433,7 +3433,9 @@ export default function TrainSessionDetail() {
             ) : (
               <>
                 <TouchableOpacity
-                  onPress={() => router.push(`/train/session/${encodeURIComponent(encodedKey)}/live`)}
+                  onPress={() =>
+                    router.push(`/train/session/${encodeURIComponent(encodedKey)}/live?autoStart=1`)
+                  }
                   style={[st.bottomPrimaryBtn, { backgroundColor: theme.primaryBg }]}
                   activeOpacity={0.9}
                 >

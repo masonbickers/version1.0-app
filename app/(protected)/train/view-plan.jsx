@@ -1798,8 +1798,16 @@ export default function ViewPlanPage() {
           </View>
         )}
 
-        <View style={styles.headerCard}>
-          <Text style={styles.hKicker}>Active training block</Text>
+        <LinearGradient
+          colors={["rgba(230,255,59,0.10)", "rgba(255,255,255,0.035)"]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.headerCard}
+        >
+          <View style={styles.hKickerRow}>
+            <Text style={styles.hKicker}>Active training block</Text>
+            <View style={styles.hStatusDot} />
+          </View>
           <Text style={styles.hTitle}>
             {isHybrid ? hybridSummary?.name : isStrength ? strengthSummary?.name : runSummary?.name}
           </Text>
@@ -1821,6 +1829,92 @@ export default function ViewPlanPage() {
               ))}
             </View>
           )}
+
+          {isRun && runSummary ? (
+            <View style={styles.headerDetailBlock}>
+              {runSummary.targetTime || runSummary.difficulty ? (
+                <View style={styles.headerDetailPillRow}>
+                  {runSummary.targetTime ? (
+                    <InfoPill styles={styles} label="Target" value={runSummary.targetTime} compact />
+                  ) : null}
+                  {runSummary.difficulty ? (
+                    <InfoPill styles={styles} label="Difficulty" value={runSummary.difficulty} compact />
+                  ) : null}
+                </View>
+              ) : null}
+              {!!runSummary.runDays?.length && (
+                <Text style={styles.headerDetailText}>
+                  Run days: <Text style={styles.boldText}>{runSummary.runDays.join(", ")}</Text>
+                </Text>
+              )}
+              <Text style={styles.headerDetailText}>
+                Current: <Text style={styles.boldText}>{runSummary.weeklyKmNow ? `${runSummary.weeklyKmNow} km/wk` : "—"}</Text>
+                {"  "}Peak: <Text style={styles.boldText}>{runSummary.maxWeeklyKm ? `${runSummary.maxWeeklyKm} km/wk` : "—"}</Text>
+                {runSummary.maxLongKm ? (
+                  <>
+                    {"  "}Long: <Text style={styles.boldText}>{runSummary.maxLongKm} km</Text>
+                  </>
+                ) : null}
+              </Text>
+            </View>
+          ) : null}
+
+          {isHybrid && hybridSummary ? (
+            <View style={styles.headerDetailBlock}>
+              {!!hybridSummary.runDays?.length && (
+                <Text style={styles.headerDetailText}>
+                  Run days: <Text style={styles.boldText}>{hybridSummary.runDays.join(", ")}</Text>
+                </Text>
+              )}
+              <Text style={styles.headerDetailText}>
+                Long run: <Text style={styles.boldText}>{hybridSummary.longRunDay || "—"}</Text>
+                {"  "}Current: <Text style={styles.boldText}>{hybridSummary.weeklyRunKmNow ? `${hybridSummary.weeklyRunKmNow} km/wk` : "—"}</Text>
+              </Text>
+              <Text style={styles.headerDetailText}>
+                Peak run volume: <Text style={styles.boldText}>{hybridSummary.maxWeeklyRunKm ? `${hybridSummary.maxWeeklyRunKm} km/wk` : "—"}</Text>
+                {hybridSummary.maxLongKm ? (
+                  <>
+                    {"  "}Peak long: <Text style={styles.boldText}>{hybridSummary.maxLongKm} km</Text>
+                  </>
+                ) : null}
+              </Text>
+            </View>
+          ) : null}
+
+          {isStrength && strengthSummary ? (
+            <View style={styles.headerDetailBlock}>
+              <View style={styles.headerDetailPillRow}>
+                {strengthSummary.sessionLength ? (
+                  <InfoPill styles={styles} label="Length" value={strengthSummary.sessionLength} compact />
+                ) : null}
+                {strengthSummary.progressionStyle ? (
+                  <InfoPill styles={styles} label="Progression" value={strengthSummary.progressionStyle} compact />
+                ) : null}
+                <InfoPill
+                  styles={styles}
+                  label="Main lifts"
+                  value={
+                    strengthSummary.fixedMainLifts == null
+                      ? "—"
+                      : strengthSummary.fixedMainLifts
+                      ? "Stable"
+                      : "Rotating"
+                  }
+                  compact
+                />
+              </View>
+              {!!strengthSummary.preferredDays?.length && (
+                <Text style={styles.headerDetailText}>
+                  Days: <Text style={styles.boldText}>{strengthSummary.preferredDays.join(", ")}</Text>
+                </Text>
+              )}
+              {!!strengthSummary.weakAreas?.length && (
+                <Text style={styles.headerDetailText}>
+                  Focus areas: <Text style={styles.boldText}>{strengthSummary.weakAreas.join(", ")}</Text>
+                </Text>
+              )}
+            </View>
+          ) : null}
 
           <View style={styles.headerActions}>
             <Pressable
@@ -1851,7 +1945,7 @@ export default function ViewPlanPage() {
               <Text style={styles.headerSecondaryBtnText}>Back to Train</Text>
             </Pressable>
           </View>
-        </View>
+        </LinearGradient>
 
         {showAddStrength ? (
           <View style={styles.card}>
@@ -1883,155 +1977,8 @@ export default function ViewPlanPage() {
           </View>
         ) : null}
 
-        {isRun && runSummary ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Summary</Text>
-
-            <View style={styles.rowWrap}>
-              <InfoPill styles={styles} label="Goal" value={runSummary.distance || "—"} />
-              <InfoPill styles={styles} label="Target" value={runSummary.targetTime || "—"} />
-              <InfoPill styles={styles} label="Weeks" value={String(runSummary.planLengthWeeks || weeks.length)} />
-              <InfoPill styles={styles} label="Runs/wk" value={String(runSummary.sessionsPerWeek || "—")} />
-              <InfoPill styles={styles} label="Long run" value={runSummary.longRunDay || "—"} />
-              <InfoPill styles={styles} label="Difficulty" value={runSummary.difficulty || "—"} />
-            </View>
-
-            {!!runSummary.runDays?.length && (
-              <View style={{ marginTop: 10 }}>
-                <Text style={styles.mutedText}>
-                  Run days: <Text style={styles.boldText}>{runSummary.runDays.join(", ")}</Text>
-                </Text>
-              </View>
-            )}
-
-            <View style={styles.divider} />
-
-            <Text style={styles.mutedText}>
-              Current volume:{" "}
-              <Text style={styles.boldText}>
-                {runSummary.weeklyKmNow ? `${runSummary.weeklyKmNow} km/wk` : "—"}
-              </Text>{" "}
-              • Longest run:{" "}
-              <Text style={styles.boldText}>
-                {runSummary.longestRunNow ? `${runSummary.longestRunNow} km` : "—"}
-              </Text>
-            </Text>
-
-            {!!runSummary.maxWeeklyKm && (
-              <Text style={[styles.mutedText, { marginTop: 6 }]}>
-                Peak target: <Text style={styles.boldText}>{runSummary.maxWeeklyKm} km/wk</Text>
-                {!!runSummary.maxLongKm ? (
-                  <>
-                    {" "}
-                    • Peak long run: <Text style={styles.boldText}>{runSummary.maxLongKm} km</Text>
-                  </>
-                ) : null}
-              </Text>
-            )}
-          </View>
-        ) : null}
-
-        {isHybrid && hybridSummary ? (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Summary</Text>
-
-            <View style={styles.rowWrap}>
-              <InfoPill styles={styles} label="Goal" value={hybridSummary.goalType || "—"} />
-              <InfoPill styles={styles} label="Focus" value={hybridSummary.primaryFocus || "—"} />
-              <InfoPill styles={styles} label="Weeks" value={String(hybridSummary.planLengthWeeks || weeks.length)} />
-              <InfoPill styles={styles} label="Sessions/wk" value={String(hybridSummary.sessionsPerWeek || "—")} />
-              <InfoPill styles={styles} label="Run/wk" value={String(hybridSummary.runSessionsPerWeek || "—")} />
-              <InfoPill styles={styles} label="Lift/wk" value={String(hybridSummary.strengthSessionsPerWeek || "—")} />
-              <InfoPill styles={styles} label="Long run" value={hybridSummary.longRunDay || "—"} />
-            </View>
-
-            {!!hybridSummary.runDays?.length && (
-              <View style={{ marginTop: 10 }}>
-                <Text style={styles.mutedText}>
-                  Run days: <Text style={styles.boldText}>{hybridSummary.runDays.join(", ")}</Text>
-                </Text>
-              </View>
-            )}
-
-            <View style={styles.divider} />
-
-            <Text style={styles.mutedText}>
-              Current run volume:{" "}
-              <Text style={styles.boldText}>
-                {hybridSummary.weeklyRunKmNow ? `${hybridSummary.weeklyRunKmNow} km/wk` : "—"}
-              </Text>
-              {!!hybridSummary.maxWeeklyRunKm ? (
-                <>
-                  {" "}
-                  • Peak run volume: <Text style={styles.boldText}>{hybridSummary.maxWeeklyRunKm} km/wk</Text>
-                </>
-              ) : null}
-            </Text>
-
-            {!!hybridSummary.maxLongKm && (
-              <Text style={[styles.mutedText, { marginTop: 6 }]}>
-                Peak long run: <Text style={styles.boldText}>{hybridSummary.maxLongKm} km</Text>
-              </Text>
-            )}
-          </View>
-        ) : null}
-
         {isStrength && strengthSummary ? (
           <>
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Summary</Text>
-
-              <View style={styles.rowWrap}>
-                <InfoPill styles={styles} label="Goal" value={strengthSummary.goalType || "—"} />
-                <InfoPill styles={styles} label="Focus" value={strengthSummary.primaryFocus || "—"} />
-                <InfoPill styles={styles} label="Weeks" value={String(strengthSummary.planLengthWeeks || weeks.length)} />
-                <InfoPill styles={styles} label="Days/wk" value={String(strengthSummary.daysPerWeek || "—")} />
-                <InfoPill styles={styles} label="Split" value={strengthSummary.preferredSplit || "—"} />
-                <InfoPill styles={styles} label="Length" value={strengthSummary.sessionLength || "—"} />
-                <InfoPill styles={styles} label="Progression" value={strengthSummary.progressionStyle || "—"} />
-                <InfoPill
-                  styles={styles}
-                  label="Main lifts"
-                  value={
-                    strengthSummary.fixedMainLifts == null
-                      ? "—"
-                      : strengthSummary.fixedMainLifts
-                      ? "Stable"
-                      : "Rotating"
-                  }
-                />
-              </View>
-
-              {!!strengthSummary.preferredDays?.length && (
-                <View style={{ marginTop: 10 }}>
-                  <Text style={styles.mutedText}>
-                    Preferred days:{" "}
-                    <Text style={styles.boldText}>
-                      {strengthSummary.preferredDays.join(", ")}
-                    </Text>
-                  </Text>
-                </View>
-              )}
-
-              {!!strengthSummary.weakAreas?.length && (
-                <Text style={[styles.mutedText, { marginTop: 6 }]}>
-                  Weak areas:{" "}
-                  <Text style={styles.boldText}>
-                    {strengthSummary.weakAreas.join(", ")}
-                  </Text>
-                </Text>
-              )}
-
-              {!!strengthSummary.equipment?.length && (
-                <Text style={[styles.mutedText, { marginTop: 6 }]}>
-                  Equipment:{" "}
-                  <Text style={styles.boldText}>
-                    {strengthSummary.equipment.join(", ")}
-                  </Text>
-                </Text>
-              )}
-            </View>
-
             {!!(
               Array.isArray(strengthSummary.planGuidelines?.progression) ||
               Array.isArray(strengthSummary.planGuidelines?.execution)
@@ -2210,9 +2157,9 @@ function TopBar({ title, onBack, styles, typeLabel }) {
   );
 }
 
-function InfoPill({ label, value, styles }) {
+function InfoPill({ label, value, styles, compact = false }) {
   return (
-    <View style={styles.pill}>
+    <View style={[styles.pill, compact && styles.pillCompact]}>
       <Text style={styles.pillLabel}>{label}</Text>
       <Text style={styles.pillValue}>{value}</Text>
     </View>
@@ -2483,15 +2430,15 @@ function makeStyles(t, topInset = 0) {
       height: 260,
     },
     scrollPad: {
-      paddingHorizontal: 18,
-      paddingTop: 8,
+      paddingHorizontal: 16,
+      paddingTop: 6,
       paddingBottom: 34,
     },
 
     topBar: {
       paddingTop: Math.max((Number(topInset) || 0) + 6, 12),
-      paddingBottom: 10,
-      paddingHorizontal: 18,
+      paddingBottom: 8,
+      paddingHorizontal: 16,
       flexDirection: "row",
       alignItems: "center",
       gap: 10,
@@ -2503,8 +2450,8 @@ function makeStyles(t, topInset = 0) {
     },
     topTitle: {
       color: t.text,
-      fontSize: 17,
-      fontWeight: "800",
+      fontSize: 18,
+      fontWeight: "900",
       letterSpacing: 0.2,
     },
     topSubtitle: {
@@ -2514,9 +2461,9 @@ function makeStyles(t, topInset = 0) {
       fontWeight: "500",
     },
     backBtn: {
-      width: 38,
-      height: 34,
-      borderRadius: 12,
+      width: 42,
+      height: 42,
+      borderRadius: 16,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: t.border,
       alignItems: "center",
@@ -2594,70 +2541,90 @@ function makeStyles(t, topInset = 0) {
     },
 
     headerCard: {
-      marginBottom: 14,
-      paddingHorizontal: 16,
-      paddingVertical: 15,
+      marginBottom: 10,
+      paddingHorizontal: 13,
+      paddingVertical: 12,
       borderRadius: 20,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: t.border,
-      backgroundColor: t.surfaceAlt,
+      borderColor: "rgba(230,255,59,0.18)",
+      overflow: "hidden",
+    },
+    hKickerRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 10,
     },
     hKicker: {
       color: t.subtext,
-      fontSize: 11,
-      fontWeight: "700",
-      letterSpacing: 0.4,
+      fontSize: 10,
+      fontWeight: "900",
+      letterSpacing: 0.8,
       textTransform: "uppercase",
+    },
+    hStatusDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: t.primaryBg,
+      shadowColor: t.primaryBg,
+      shadowOpacity: 0.4,
+      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 0 },
     },
     hTitle: {
       color: t.text,
-      fontSize: 23,
-      fontWeight: "800",
-      letterSpacing: 0.2,
-      marginTop: 4,
+      fontSize: 20,
+      lineHeight: 24,
+      fontWeight: "900",
+      letterSpacing: 0,
+      marginTop: 6,
     },
     hSub: {
       marginTop: 4,
       color: t.subtext,
       fontSize: 13,
-      fontWeight: "500",
-      lineHeight: 18,
+      fontWeight: "600",
+      lineHeight: 19,
     },
     heroStatRow: {
       flexDirection: "row",
-      gap: 8,
-      marginTop: 12,
+      gap: 7,
+      marginTop: 10,
     },
     heroStatCard: {
       flex: 1,
-      borderRadius: 12,
+      minHeight: 51,
+      borderRadius: 14,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: t.border,
-      backgroundColor: t.card,
+      backgroundColor: "rgba(255,255,255,0.055)",
       paddingVertical: 8,
       paddingHorizontal: 9,
+      justifyContent: "center",
     },
     heroStatLabel: {
       color: t.subtext,
-      fontSize: 10,
-      fontWeight: "600",
-      letterSpacing: 0.2,
+      fontSize: 9.5,
+      fontWeight: "800",
+      letterSpacing: 0.25,
     },
     heroStatValue: {
       color: t.text,
-      fontSize: 13,
-      fontWeight: "700",
-      marginTop: 3,
+      fontSize: 14,
+      lineHeight: 17,
+      fontWeight: "900",
+      marginTop: 4,
     },
     headerActions: {
       flexDirection: "row",
-      gap: 10,
-      marginTop: 13,
+      gap: 8,
+      marginTop: 10,
     },
     headerPrimaryBtn: {
       flex: 1,
-      minHeight: 44,
-      borderRadius: 14,
+      minHeight: 42,
+      borderRadius: 15,
       alignItems: "center",
       justifyContent: "center",
       backgroundColor: t.primaryBg,
@@ -2665,40 +2632,40 @@ function makeStyles(t, topInset = 0) {
     },
     headerPrimaryBtnText: {
       color: t.primaryText,
-      fontWeight: "700",
+      fontWeight: "900",
       fontSize: 13,
       letterSpacing: 0.1,
     },
     headerSecondaryBtn: {
       flex: 1,
-      minHeight: 44,
-      borderRadius: 14,
+      minHeight: 42,
+      borderRadius: 15,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: t.card,
+      backgroundColor: "rgba(255,255,255,0.08)",
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: t.border,
       paddingHorizontal: 12,
     },
     headerSecondaryBtnText: {
       color: t.text,
-      fontWeight: "700",
+      fontWeight: "900",
       fontSize: 13,
       letterSpacing: 0.1,
     },
 
     card: {
-      backgroundColor: t.card,
-      borderRadius: 16,
+      backgroundColor: "rgba(255,255,255,0.055)",
+      borderRadius: 20,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: t.border,
-      padding: 16,
-      marginBottom: 14,
+      padding: 13,
+      marginBottom: 10,
     },
     cardTitle: {
       color: t.text,
-      fontSize: 17,
-      fontWeight: "700",
+      fontSize: 18,
+      fontWeight: "900",
       marginBottom: 10,
     },
     subSectionLabel: {
@@ -2711,11 +2678,12 @@ function makeStyles(t, topInset = 0) {
     mutedText: {
       color: t.subtext,
       fontSize: 13,
-      lineHeight: 20,
+      lineHeight: 18,
+      fontWeight: "600",
     },
     boldText: {
       color: t.text,
-      fontWeight: "700",
+      fontWeight: "900",
     },
     bulletText: {
       color: t.subtext,
@@ -2727,40 +2695,69 @@ function makeStyles(t, topInset = 0) {
     rowWrap: {
       flexDirection: "row",
       flexWrap: "wrap",
-      gap: 10,
+      gap: 7,
     },
     pill: {
-      backgroundColor: t.surfaceAlt,
+      backgroundColor: "rgba(0,0,0,0.14)",
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: t.border,
-      borderRadius: 12,
-      paddingVertical: 9,
+      borderRadius: 13,
+      paddingVertical: 8,
       paddingHorizontal: 11,
-      minWidth: 96,
+      minWidth: "30%",
+      flexGrow: 1,
+      minHeight: 48,
+      justifyContent: "center",
+    },
+    pillCompact: {
+      minWidth: 0,
+      flexGrow: 1,
+      flexBasis: 0,
+      minHeight: 42,
+      paddingVertical: 7,
     },
     pillLabel: {
       color: t.subtext,
       fontSize: 10,
-      marginBottom: 2,
-      fontWeight: "600",
-      letterSpacing: 0.2,
+      marginBottom: 3,
+      fontWeight: "800",
+      letterSpacing: 0.35,
     },
     pillValue: {
       color: t.text,
-      fontSize: 13,
-      fontWeight: "700",
+      fontSize: 13.5,
+      lineHeight: 17,
+      fontWeight: "900",
     },
 
     divider: {
       height: StyleSheet.hairlineWidth,
       backgroundColor: t.border,
-      marginVertical: 12,
+      marginVertical: 10,
+    },
+    headerDetailBlock: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: t.border,
+      marginTop: 10,
+      paddingTop: 9,
+      gap: 5,
+    },
+    headerDetailPillRow: {
+      flexDirection: "row",
+      gap: 7,
+      marginBottom: 2,
+    },
+    headerDetailText: {
+      color: t.subtext,
+      fontSize: 12,
+      lineHeight: 16,
+      fontWeight: "600",
     },
 
     sectionTitle: {
       color: t.text,
-      fontSize: 18,
-      fontWeight: "700",
+      fontSize: 20,
+      fontWeight: "900",
       marginTop: 4,
       marginBottom: 10,
       letterSpacing: 0.1,
@@ -2771,18 +2768,18 @@ function makeStyles(t, topInset = 0) {
       gap: 8,
     },
     weekTab: {
-      minWidth: 64,
-      paddingVertical: 10,
-      paddingHorizontal: 12,
-      borderRadius: 12,
+      minWidth: 72,
+      paddingVertical: 11,
+      paddingHorizontal: 13,
+      borderRadius: 16,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: t.border,
       backgroundColor: t.surfaceAlt,
       alignItems: "center",
     },
     weekTabActive: {
-      borderColor: "rgba(230,255,59,0.5)",
-      backgroundColor: "rgba(230,255,59,0.18)",
+      borderColor: "rgba(230,255,59,0.72)",
+      backgroundColor: "rgba(230,255,59,0.20)",
     },
     weekTabText: {
       color: t.text,
@@ -2795,8 +2792,8 @@ function makeStyles(t, topInset = 0) {
     weekTabSub: {
       marginTop: 2,
       color: t.subtext,
-      fontSize: 11,
-      fontWeight: "600",
+      fontSize: 12,
+      fontWeight: "700",
     },
     weekTabSubActive: {
       color: t.text,
@@ -2804,27 +2801,28 @@ function makeStyles(t, topInset = 0) {
     },
 
     weekCard: {
-      backgroundColor: t.surfaceAlt,
-      borderRadius: 16,
+      backgroundColor: "rgba(255,255,255,0.035)",
+      borderRadius: 20,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: t.border,
-      marginBottom: 12,
+      marginBottom: 10,
       overflow: "hidden",
     },
     weekHeader: {
       flexDirection: "row",
       alignItems: "center",
-      padding: 14,
+      paddingHorizontal: 15,
+      paddingVertical: 14,
     },
     weekTitle: {
       color: t.text,
-      fontSize: 16,
-      fontWeight: "700",
+      fontSize: 17,
+      fontWeight: "900",
     },
     weekMeta: {
       color: t.subtext,
-      fontSize: 12,
-      fontWeight: "600",
+      fontSize: 13,
+      fontWeight: "700",
       marginTop: 3,
     },
     weekFocus: {

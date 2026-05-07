@@ -6,6 +6,18 @@ import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
 import { API_URL } from "../config/api";
 import { auth } from "../firebaseConfig";
 
+function isNonFatalInitialSyncResponse(res, data) {
+  const message = String(
+    data?.error || data?.message || data?.details?.errorMessage || ""
+  );
+  return (
+    data?.ok === true ||
+    data?.duplicate === true ||
+    res.status === 409 ||
+    (res.status === 429 && /just requested|rate limit|wait/i.test(message))
+  );
+}
+
 async function triggerGarminInitialSync() {
   const user = auth.currentUser;
   if (!user?.uid) throw new Error("No authenticated user");
@@ -33,6 +45,11 @@ async function triggerGarminInitialSync() {
   }
 
   if (!res.ok || data?.ok !== true) {
+    if (isNonFatalInitialSyncResponse(res, data)) {
+      console.log("Garmin initial sync already pending", data);
+      return { ...data, ok: true, alreadyPending: true };
+    }
+
     console.log("Garmin initial sync failed", data);
     throw new Error(data?.error || "Garmin initial sync failed");
   }

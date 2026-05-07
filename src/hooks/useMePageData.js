@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { auth, db } from "../../firebaseConfig";
+import { dedupeActivities } from "../lib/activities/activityDedupe";
 
 const STRAVA_CACHE_KEY = "strava_cached_activities_v1";
 
@@ -42,14 +43,14 @@ function formatMinutes(value) {
 }
 
 function formatShortDate(ms) {
-  if (!ms) return "—";
+  if (!ms) return "";
   try {
     return new Date(ms).toLocaleDateString("en-GB", {
       day: "numeric",
       month: "short",
     });
   } catch {
-    return "—";
+    return "";
   }
 }
 
@@ -169,13 +170,7 @@ function deriveRecentActivities(activities) {
 
 function readActivitySortMs(activity) {
   return toMillis(
-    activity.startTimeMs ||
-      activity.startDateMs ||
-      activity.startTime ||
-      activity.startDate ||
-      activity.startedAt ||
-      activity.summaryStartTimeInSeconds * 1000 ||
-      activity.startTimeInSeconds * 1000 ||
+    readActualActivityTimeMs(activity) ||
       activity.createdAtMs ||
       activity.updatedAtMs ||
       activity.fetchedAtMs ||
@@ -183,8 +178,46 @@ function readActivitySortMs(activity) {
   );
 }
 
+function readActualActivityTimeMs(activity = {}) {
+  const raw = activity.rawGarminActivity || {};
+  return toMillis(
+    activity.activityStartTimeMs ||
+      activity.startTimeMs ||
+      activity.startDateMs ||
+      activity.startTime ||
+      activity.startDate ||
+      activity.startedAt ||
+      activity.startDateLocal ||
+      activity.startDateGMT ||
+      activity.beginTimestamp ||
+      activity.beginTimestampGMT ||
+      activity.summary?.startTimeInSeconds * 1000 ||
+      activity.summary?.summaryStartTimeInSeconds * 1000 ||
+      activity.activitySummary?.startTimeInSeconds * 1000 ||
+      activity.activitySummary?.summaryStartTimeInSeconds * 1000 ||
+      activity.summaryStartTimeInSeconds * 1000 ||
+      activity.startTimeInSeconds * 1000 ||
+      raw.activityStartTimeMs ||
+      raw.startTimeMs ||
+      raw.startDateMs ||
+      raw.startTime ||
+      raw.startDate ||
+      raw.startedAt ||
+      raw.startDateLocal ||
+      raw.startDateGMT ||
+      raw.beginTimestamp ||
+      raw.beginTimestampGMT ||
+      raw.summary?.startTimeInSeconds * 1000 ||
+      raw.summary?.summaryStartTimeInSeconds * 1000 ||
+      raw.activitySummary?.startTimeInSeconds * 1000 ||
+      raw.activitySummary?.summaryStartTimeInSeconds * 1000 ||
+      raw.summaryStartTimeInSeconds * 1000 ||
+      raw.startTimeInSeconds * 1000
+  );
+}
+
 function normalizeGarminActivity(activity, source, index) {
-  const sortMs = readActivitySortMs(activity);
+  const actualStartMs = readActualActivityTimeMs(activity);
   const distanceMeters =
     toNum(activity.distanceInMeters, 0) ||
     toNum(activity.distanceM, 0) ||
@@ -202,12 +235,23 @@ function normalizeGarminActivity(activity, source, index) {
     source,
     type: activity.activityType || activity.type || activity.sport || "Garmin activity",
     name: activity.activityName || activity.name || activity.title || "Garmin activity",
-    startDateMs: sortMs,
+    startDateMs: actualStartMs,
+    importedAtMs: toMillis(activity.createdAtMs),
     createdAtMs: toMillis(activity.createdAtMs),
     distanceKm: distanceMeters > 0 ? distanceMeters / 1000 : 0,
     movingTimeMin: durationSec > 0 ? durationSec / 60 : 0,
     averageHeartRate: activity.averageHeartRateInBeatsPerMinute || activity.avgHr || activity.averageHeartRate,
     calories: activity.activeKilocalories || activity.calories,
+    description: activity.description || activity.caption || activity.note || "",
+    photoUrls: Array.isArray(activity.photoUrls)
+      ? activity.photoUrls
+      : Array.isArray(activity.photos)
+      ? activity.photos
+      : activity.imageUrl
+      ? [activity.imageUrl]
+      : [],
+    customizedAt: activity.customizedAt || null,
+    customizedAtMs: toMillis(activity.customizedAtMs || activity.customizedAt),
     deviceName:
       activity.deviceName ||
       activity.device_name ||
@@ -397,7 +441,7 @@ export function useMePageData() {
 
   const combinedActivities = useMemo(
     () =>
-      [...activities, ...garminActivities].sort(
+      dedupeActivities([...activities, ...garminActivities]).sort(
         (a, b) => readActivitySortMs(b) - readActivitySortMs(a)
       ),
     [activities, garminActivities]

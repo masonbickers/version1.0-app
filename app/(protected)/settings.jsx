@@ -70,6 +70,18 @@ const APP_SCHEME = guessAppScheme();
 const STRAVA_RETURN_URL = Linking.createURL("strava-linked");
 const GARMIN_RETURN_URL = Linking.createURL("garmin-linked");
 
+function isNonFatalGarminInitialSyncResponse(res, data) {
+  const message = String(
+    data?.error || data?.message || data?.details?.errorMessage || ""
+  );
+  return (
+    data?.ok === true ||
+    data?.duplicate === true ||
+    res.status === 409 ||
+    (res.status === 429 && /just requested|rate limit|wait/i.test(message))
+  );
+}
+
 async function triggerGarminInitialSync() {
   const user = auth.currentUser;
   if (!user?.uid) throw new Error("No authenticated user");
@@ -97,6 +109,11 @@ async function triggerGarminInitialSync() {
   }
 
   if (!res.ok || data?.ok !== true) {
+    if (isNonFatalGarminInitialSyncResponse(res, data)) {
+      console.log("Garmin initial sync already pending", data);
+      return { ...data, ok: true, alreadyPending: true };
+    }
+
     console.log("Garmin initial sync failed", data);
     throw new Error(data?.error || "Garmin initial sync failed");
   }
@@ -464,7 +481,7 @@ export default function SettingsPage() {
           console.log("Garmin initial sync after connect failed", syncError);
           Alert.alert(
             "Garmin",
-            "Garmin account connected. Initial activity import could not start automatically; try Sync Garmin Activities."
+            "Garmin account connected. Recent activities will import through Garmin shortly."
           );
         }
       } else {

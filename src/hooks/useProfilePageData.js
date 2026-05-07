@@ -54,6 +54,48 @@ function normalizeWebsite(value) {
   return `https://${raw}`;
 }
 
+function cleanNumberText(value) {
+  return String(value || "").replace(/[^0-9.]/g, "").trim();
+}
+
+function numberOrNull(value) {
+  const raw = cleanNumberText(value);
+  if (!raw) return null;
+  if (!/^\d+(\.\d+)?$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function hasInvalidNumber(value) {
+  const raw = cleanNumberText(value);
+  return !!raw && !/^\d+(\.\d+)?$/.test(raw);
+}
+
+function normalizeDob(value) {
+  const raw = cleanText(value);
+  if (!raw) return "";
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return raw;
+  const date = new Date(`${raw}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toISOString().slice(0, 10);
+}
+
+function ageFromDob(dobISO) {
+  const raw = String(dobISO || "").trim();
+  if (!raw) return null;
+  const date = new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  const age = Math.floor((Date.now() - date.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+  return age >= 10 && age <= 100 ? age : null;
+}
+
+function estimateMaxHrFromAge(age) {
+  const value = Number(age);
+  if (!Number.isFinite(value) || value < 10 || value > 100) return null;
+  return Math.round(208 - 0.7 * value);
+}
+
 function buildSupportLine(values) {
   const bio = cleanText(values?.bio);
   if (bio) return bio;
@@ -68,6 +110,13 @@ function validateValues(values) {
   const username = normalizeUsername(values.username);
   const bio = cleanText(values.bio);
   const websiteRaw = cleanText(values.website);
+  const dobISO = normalizeDob(values.dobISO);
+  const heightCm = numberOrNull(values.heightCm);
+  const weightKg = numberOrNull(values.weightKg);
+  const maxHR = numberOrNull(values.maxHR);
+  const restingHR = numberOrNull(values.restingHR);
+  const thresholdHR = numberOrNull(values.thresholdHR);
+  const trainingBackground = cleanText(values.trainingBackground);
 
   if (!name) {
     next.name = "Name is required.";
@@ -94,6 +143,59 @@ function validateValues(values) {
     }
   }
 
+  if (dobISO) {
+    const match = dobISO.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const date = match ? new Date(`${dobISO}T00:00:00.000Z`) : null;
+    const age = date ? Math.floor((Date.now() - date.getTime()) / (365.25 * 24 * 60 * 60 * 1000)) : null;
+    if (!match || !date || Number.isNaN(date.getTime())) {
+      next.dobISO = "Use YYYY-MM-DD.";
+    } else if (age < 10 || age > 100) {
+      next.dobISO = "Enter a realistic date of birth.";
+    }
+  }
+
+  if (hasInvalidNumber(values.heightCm)) {
+    next.heightCm = "Enter a number in cm.";
+  } else if (heightCm != null && (heightCm < 80 || heightCm > 250)) {
+    next.heightCm = "Use height in cm, between 80 and 250.";
+  }
+
+  if (hasInvalidNumber(values.weightKg)) {
+    next.weightKg = "Enter a number in kg.";
+  } else if (weightKg != null && (weightKg < 25 || weightKg > 250)) {
+    next.weightKg = "Use weight in kg, between 25 and 250.";
+  }
+
+  if (hasInvalidNumber(values.maxHR)) {
+    next.maxHR = "Enter a whole number in bpm.";
+  } else if (maxHR != null && (maxHR < 120 || maxHR > 230)) {
+    next.maxHR = "Max HR should be between 120 and 230 bpm.";
+  }
+
+  if (hasInvalidNumber(values.restingHR)) {
+    next.restingHR = "Enter a whole number in bpm.";
+  } else if (restingHR != null && (restingHR < 30 || restingHR > 100)) {
+    next.restingHR = "Resting HR should be between 30 and 100 bpm.";
+  }
+
+  if (hasInvalidNumber(values.thresholdHR)) {
+    next.thresholdHR = "Enter a whole number in bpm.";
+  } else if (thresholdHR != null && (thresholdHR < 80 || thresholdHR > 220)) {
+    next.thresholdHR = "Threshold HR should be between 80 and 220 bpm.";
+  }
+
+  if (maxHR != null && restingHR != null && restingHR >= maxHR) {
+    next.restingHR = "Resting HR must be below max HR.";
+  }
+
+  if (maxHR != null && thresholdHR != null && thresholdHR >= maxHR) {
+    next.thresholdHR = "Threshold HR should be below max HR.";
+  }
+
+  if (trainingBackground.length > 500) {
+    next.trainingBackground = "Keep this under 500 characters.";
+  }
+
   return next;
 }
 
@@ -105,6 +207,46 @@ function normalizeForSave(values) {
     sport: cleanText(values.sport),
     location: cleanText(values.location),
     website: normalizeWebsite(values.website),
+    dobISO: normalizeDob(values.dobISO),
+    sex: cleanText(values.sex),
+    heightCm: cleanNumberText(values.heightCm),
+    weightKg: cleanNumberText(values.weightKg),
+    maxHR: cleanNumberText(values.maxHR),
+    restingHR: cleanNumberText(values.restingHR),
+    thresholdHR: cleanNumberText(values.thresholdHR),
+    trainingBackground: cleanText(values.trainingBackground),
+  };
+}
+
+function buildPrivateAthleteProfile(values) {
+  const age = ageFromDob(values.dobISO);
+  const enteredMaxHR = numberOrNull(values.maxHR);
+  const estimatedMaxHR = estimateMaxHrFromAge(age);
+  const maxHR = enteredMaxHR ?? estimatedMaxHR;
+  const restingHR = numberOrNull(values.restingHR);
+  const thresholdHR = numberOrNull(values.thresholdHR);
+
+  return {
+    dobISO: normalizeDob(values.dobISO) || null,
+    age,
+    sex: cleanText(values.sex) || null,
+    heightCm: numberOrNull(values.heightCm),
+    weightKg: numberOrNull(values.weightKg),
+    maxHR,
+    enteredMaxHR,
+    estimatedMaxHR,
+    maxHRSource: enteredMaxHR != null ? "manual" : estimatedMaxHR != null ? "age_estimate" : null,
+    restingHR,
+    thresholdHR,
+    hr: {
+      max: maxHR,
+      enteredMax: enteredMaxHR,
+      estimatedMax: estimatedMaxHR,
+      maxSource: enteredMaxHR != null ? "manual" : estimatedMaxHR != null ? "age_estimate" : null,
+      resting: restingHR,
+      threshold: thresholdHR,
+    },
+    trainingBackground: cleanText(values.trainingBackground) || null,
   };
 }
 
@@ -134,6 +276,14 @@ export function useProfilePageData() {
     sport: "",
     location: "",
     website: "",
+    dobISO: "",
+    sex: "",
+    heightCm: "",
+    weightKg: "",
+    maxHR: "",
+    restingHR: "",
+    thresholdHR: "",
+    trainingBackground: "",
     email: "",
     photoURL: "",
   });
@@ -177,6 +327,10 @@ export function useProfilePageData() {
 
       const userData = userSnap.exists() ? userSnap.data() || {} : {};
       const profileData = publicProfileSnap.exists() ? publicProfileSnap.data() || {} : {};
+      const athleteProfile = userData?.athleteProfile || {};
+      const maxHRWasEstimated =
+        athleteProfile?.maxHRSource === "age_estimate" ||
+        athleteProfile?.hr?.maxSource === "age_estimate";
 
       const nextValues = {
         name: user?.displayName || profileData?.name || "",
@@ -185,6 +339,31 @@ export function useProfilePageData() {
         sport: profileData?.sport || "",
         location: profileData?.location || "",
         website: profileData?.website || "",
+        dobISO: athleteProfile?.dobISO || athleteProfile?.dob || "",
+        sex: athleteProfile?.sex || "",
+        heightCm: athleteProfile?.heightCm != null ? String(athleteProfile.heightCm) : "",
+        weightKg: athleteProfile?.weightKg != null ? String(athleteProfile.weightKg) : "",
+        maxHR:
+          maxHRWasEstimated
+            ? ""
+            : athleteProfile?.maxHR != null
+            ? String(athleteProfile.maxHR)
+            : athleteProfile?.hr?.max != null
+            ? String(athleteProfile.hr.max)
+            : "",
+        restingHR:
+          athleteProfile?.restingHR != null
+            ? String(athleteProfile.restingHR)
+            : athleteProfile?.hr?.resting != null
+            ? String(athleteProfile.hr.resting)
+            : "",
+        thresholdHR:
+          athleteProfile?.thresholdHR != null
+            ? String(athleteProfile.thresholdHR)
+            : athleteProfile?.hr?.threshold != null
+            ? String(athleteProfile.hr.threshold)
+            : "",
+        trainingBackground: athleteProfile?.trainingBackground || "",
         email: user?.email || "",
         photoURL: user?.photoURL || profileData?.photoURL || "",
       };
@@ -343,6 +522,14 @@ export function useProfilePageData() {
       sport: true,
       location: true,
       website: true,
+      dobISO: true,
+      sex: true,
+      heightCm: true,
+      weightKg: true,
+      maxHR: true,
+      restingHR: true,
+      thresholdHR: true,
+      trainingBackground: true,
     });
 
     const currentErrors = validateValues(values);
@@ -389,6 +576,43 @@ export function useProfilePageData() {
           website: normalizedValues.website,
           photoURL: finalPhotoURL || "",
           updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      const privateAthleteProfile = buildPrivateAthleteProfile(normalizedValues);
+
+      await setDoc(
+        doc(db, "users", user.uid),
+        {
+          name: normalizedValues.name || user.displayName || "",
+          email: user.email || "",
+          photoURL: finalPhotoURL || "",
+          athleteProfile: {
+            ...privateAthleteProfile,
+            updatedAt: serverTimestamp(),
+          },
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      await setDoc(
+        doc(db, "users", user.uid, "planPrefs", "current"),
+        {
+          dobISO: privateAthleteProfile.dobISO,
+          sex: privateAthleteProfile.sex,
+          heightCm: privateAthleteProfile.heightCm,
+          weightKg: privateAthleteProfile.weightKg,
+          maxHR: privateAthleteProfile.maxHR,
+          enteredMaxHR: privateAthleteProfile.enteredMaxHR,
+          estimatedMaxHR: privateAthleteProfile.estimatedMaxHR,
+          maxHRSource: privateAthleteProfile.maxHRSource,
+          restingHR: privateAthleteProfile.restingHR,
+          thresholdHR: privateAthleteProfile.thresholdHR,
+          hr: privateAthleteProfile.hr,
+          trainingBackground: privateAthleteProfile.trainingBackground,
+          athleteProfileUpdatedAt: serverTimestamp(),
         },
         { merge: true }
       );

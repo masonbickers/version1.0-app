@@ -1,5 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { doc, onSnapshot } from "firebase/firestore";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+
+import { auth, db } from "../firebaseConfig";
 
 const LIVE_ACTIVITY_KEY = "@live_activity_v1";
 
@@ -58,6 +61,37 @@ export function LiveActivityProvider({ children }) {
   const clearLiveActivity = useCallback(() => {
     setLiveActivity(null);
   }, [setLiveActivity]);
+
+  useEffect(() => {
+    if (!hydrated) return undefined;
+    if (!liveActivity?.isActive) return undefined;
+
+    const uid = String(auth.currentUser?.uid || "").trim();
+    const sessionKey = String(liveActivity?.sessionKey || "").trim();
+    if (!uid || !sessionKey) return undefined;
+
+    const unsub = onSnapshot(
+      doc(db, "users", uid, "sessionLogs", sessionKey),
+      (snap) => {
+        if (!snap.exists()) return;
+        const log = snap.data() || {};
+        const status = String(log?.status || "").trim().toLowerCase();
+        const isResolved =
+          status === "completed" ||
+          status === "skipped" ||
+          !!log?.completedAt ||
+          !!log?.skippedAt ||
+          !!String(log?.lastTrainSessionId || "").trim();
+
+        if (isResolved) clearLiveActivity();
+      },
+      () => {}
+    );
+
+    return () => {
+      unsub();
+    };
+  }, [clearLiveActivity, hydrated, liveActivity?.isActive, liveActivity?.sessionKey]);
 
   const value = useMemo(
     () => ({

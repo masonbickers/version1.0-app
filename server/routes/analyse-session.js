@@ -31,6 +31,7 @@ router.post("/", async (req, res) => {
     type: payload.type,
     distance: payload.distance,
     moving_time: payload.moving_time,
+    hasAthleteProfile: !!payload.athleteProfile,
   });
 
   // ---- normalise numbers ---------------------------------------------------
@@ -38,10 +39,79 @@ router.post("/", async (req, res) => {
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
   };
+  const compactObject = (value) => {
+    if (!value || typeof value !== "object") return null;
+    if (Array.isArray(value)) {
+      const arr = value.map(compactObject).filter((item) => item != null);
+      return arr.length ? arr : null;
+    }
+
+    const next = {};
+    Object.entries(value).forEach(([key, item]) => {
+      if (item == null || item === "") return;
+      if (typeof item === "object") {
+        const cleaned = compactObject(item);
+        if (cleaned != null) next[key] = cleaned;
+        return;
+      }
+      next[key] = item;
+    });
+    return Object.keys(next).length ? next : null;
+  };
+  const ageFromDob = (dobISO) => {
+    const raw = String(dobISO || "").trim();
+    if (!raw) return null;
+    const date = new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) return null;
+    const age = Math.floor((Date.now() - date.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+    return age >= 10 && age <= 100 ? age : null;
+  };
+  const estimateMaxHrFromAge = (age) => {
+    const value = Number(age);
+    if (!Number.isFinite(value) || value < 10 || value > 100) return null;
+    return Math.round(208 - 0.7 * value);
+  };
 
   const id = payload.id;
   const name = payload.name;
   const type = payload.type;
+  const athleteProfileRaw = compactObject(payload.athleteProfile);
+  const athleteAge =
+    toNum(athleteProfileRaw?.age) || ageFromDob(athleteProfileRaw?.dobISO || athleteProfileRaw?.dob);
+  const profileMaxHrWasEstimated =
+    athleteProfileRaw?.maxHRSource === "age_estimate" ||
+    athleteProfileRaw?.hr?.maxSource === "age_estimate";
+  const manualProfileMaxHr = profileMaxHrWasEstimated
+    ? null
+    : toNum(athleteProfileRaw?.hr?.max ?? athleteProfileRaw?.maxHR);
+  const estimatedProfileMaxHr =
+    toNum(athleteProfileRaw?.hr?.estimatedMax ?? athleteProfileRaw?.estimatedMaxHR) ||
+    estimateMaxHrFromAge(athleteAge);
+  const profileMaxHr = manualProfileMaxHr || estimatedProfileMaxHr;
+  const athleteProfile = compactObject(
+    athleteProfileRaw
+      ? {
+          ...athleteProfileRaw,
+          age: athleteAge,
+          estimatedMaxHR: estimatedProfileMaxHr,
+          maxHRSource: manualProfileMaxHr
+            ? "manual"
+            : estimatedProfileMaxHr
+            ? "age_estimate"
+            : athleteProfileRaw?.maxHRSource,
+          hr: {
+            ...(athleteProfileRaw?.hr || {}),
+            max: profileMaxHr,
+            estimatedMax: estimatedProfileMaxHr,
+            maxSource: manualProfileMaxHr
+              ? "manual"
+              : estimatedProfileMaxHr
+              ? "age_estimate"
+              : athleteProfileRaw?.hr?.maxSource,
+          },
+        }
+      : null
+  );
 
   const distance = toNum(payload.distance);
   const moving_time = toNum(payload.moving_time);
@@ -53,6 +123,7 @@ router.post("/", async (req, res) => {
   const start_date = payload.start_date;
   const mode = String(payload.mode || "session").trim().toLowerCase();
   const notes = String(payload.notes || payload.description || "").trim();
+  const device_name = String(payload.device_name || "").trim();
   const rawLaps = Array.isArray(payload.laps) ? payload.laps : [];
   const laps = rawLaps
     .map((lap, idx) => {
@@ -94,7 +165,6 @@ router.post("/", async (req, res) => {
     paceSecPerKmRaw && Number.isFinite(paceSecPerKmRaw)
       ? paceSecPerKmRaw
       : moving_time / distanceKm;
-
   const formatPace = (secPerKm) => {
     if (!secPerKm || !Number.isFinite(secPerKm)) return "-";
     const mins = Math.floor(secPerKm / 60);
@@ -112,7 +182,13 @@ router.post("/", async (req, res) => {
       average_heartrate != null
         ? ` Average HR was about ${Math.round(
             average_heartrate
-          )}bpm, which suggests a solid aerobic effort.`
+          )}bpm${
+            profileMaxHr
+              ? ` (${Math.round((average_heartrate / profileMaxHr) * 100)}% of your ${
+                  manualProfileMaxHr ? "saved" : "age-estimated"
+                } max HR)`
+              : ""
+          }, which suggests a solid aerobic effort.`
         : "";
     const elevBit =
       total_elevation_gain != null
@@ -187,15 +263,17 @@ router.post("/", async (req, res) => {
   try {
     const systemPromptSession = `
 You are an experienced endurance coach.
-You analyse a single running session from Strava and give clear, concise feedback.
+You analyse a single training session and give clear, concise feedback.
 
 Goals:
 - Summarise the run (distance, time, pace, elevation, HR).
 - Comment on pacing (too hot, steady, conservative, good negative split potential, etc.).
-- Comment on effort in relation to typical training zones based on HR (if provided).
+- Comment on effort using the athlete profile when provided, especially measured max HR or age-estimated max HR, resting HR, threshold HR, age/DOB, weight, height and training background.
+- If athlete profile data is missing, avoid pretending to know exact zones.
+- Pinpoint any specific metric that may be limiting performance, such as cadence too high/low, HR too high for the session goal, spiky power, poor pace control, long stopped time, or terrain cost.
 - Give 2–3 specific recommendations for future sessions (pacing, fuelling, warm-up, etc.).
 
-Keep it short, punchy and conversational. UK spelling. Do NOT use bullet points or markdown, just 1–3 short paragraphs of text.
+Keep it short, punchy and conversational. UK spelling. Do NOT use bullet points or markdown, just 1–3 short paragraphs of text. Mention one personalised reason only when the profile supports it.
 `.trim();
 
     const systemPromptLaps = `
@@ -206,6 +284,8 @@ Your output must:
 - Judge whether that pace is appropriate/good for the apparent session intent.
 - Evaluate execution quality (consistency, control, fade/finish, pacing discipline).
 - Reference heart-rate and elevation changes when relevant.
+- Use the athlete profile when provided, especially measured max HR or age-estimated max HR, resting HR, threshold HR, age/DOB and training background.
+- Pinpoint any metric that may be hindering performance, such as cadence, HR drift, power spikes, poor recovery lap control, or inconsistent lap pacing.
 - Give 2 practical next-step recommendations.
 
 Keep it concise, conversational UK English, no markdown and no bullet points. 2–3 short paragraphs.
@@ -225,8 +305,10 @@ Keep it concise, conversational UK English, no markdown and no bullet points. 2�
       pace_s_per_km: paceSeconds,
       pace_str: formattedPace,
       start_date,
+      device_name,
       notes,
       laps,
+      athlete_profile: athleteProfile,
     };
 
     const resp = await openai.responses.create({

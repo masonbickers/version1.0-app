@@ -2,6 +2,21 @@ import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
 
 import ProfileField from "./ProfileField";
 
+function ageFromDob(dobISO) {
+  const raw = String(dobISO || "").trim();
+  if (!raw) return null;
+  const date = new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  const age = Math.floor((Date.now() - date.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+  return age >= 10 && age <= 100 ? age : null;
+}
+
+function estimateMaxHrFromAge(age) {
+  const value = Number(age);
+  if (!Number.isFinite(value) || value < 10 || value > 100) return null;
+  return Math.round(208 - 0.7 * value);
+}
+
 export default function ProfileForm({
   values,
   errors,
@@ -17,6 +32,7 @@ export default function ProfileForm({
 }) {
   const saving = saveState === "saving";
   const disabled = !dirty || hasErrors || saving;
+  const estimatedMaxHR = estimateMaxHrFromAge(ageFromDob(values.dobISO));
   const toneColor =
     saveState === "error"
       ? colors.danger || "#EF4444"
@@ -119,6 +135,145 @@ export default function ProfileForm({
           helper="We’ll normalize this to a valid public URL."
           autoCapitalize="none"
           keyboardType="url"
+        />
+      </View>
+
+      <View style={styles.sectionHeading}>
+        <Text style={[styles.sectionTitle, { color: colors.subtext }]}>Training profile</Text>
+        <Text style={[styles.sectionSummary, { color: colors.subtext }]}>
+          Private details used to personalise training analysis, heart-rate zones, and AI feedback.
+        </Text>
+      </View>
+
+      <View style={styles.formStack}>
+        <View style={styles.twoColumnRow}>
+          <View style={styles.twoColumnItem}>
+            <ProfileField
+              label="Date of birth"
+              value={values.dobISO}
+              onChangeText={(value) => onChangeField("dobISO", value)}
+              onBlur={() => onBlurField("dobISO")}
+              placeholder="YYYY-MM-DD"
+              colors={colors}
+              styles={styles}
+              error={errors.dobISO}
+              helper="Used to estimate age-based training ranges."
+              keyboardType="numbers-and-punctuation"
+            />
+          </View>
+
+          <View style={styles.twoColumnItem}>
+            <ProfileField
+              label="Sex"
+              value={values.sex}
+              onChangeText={(value) => onChangeField("sex", value)}
+              onBlur={() => onBlurField("sex")}
+              placeholder="Optional"
+              colors={colors}
+              styles={styles}
+              error={errors.sex}
+              helper="Optional context for personalised analysis."
+            />
+          </View>
+        </View>
+
+        <View style={styles.sectionDivider} />
+
+        <View style={styles.twoColumnRow}>
+          <View style={styles.twoColumnItem}>
+            <ProfileField
+              label="Height"
+              value={values.heightCm}
+              onChangeText={(value) => onChangeField("heightCm", value)}
+              onBlur={() => onBlurField("heightCm")}
+              placeholder="cm"
+              colors={colors}
+              styles={styles}
+              error={errors.heightCm}
+              keyboardType="decimal-pad"
+            />
+          </View>
+
+          <View style={styles.twoColumnItem}>
+            <ProfileField
+              label="Weight"
+              value={values.weightKg}
+              onChangeText={(value) => onChangeField("weightKg", value)}
+              onBlur={() => onBlurField("weightKg")}
+              placeholder="kg"
+              colors={colors}
+              styles={styles}
+              error={errors.weightKg}
+              keyboardType="decimal-pad"
+            />
+          </View>
+        </View>
+
+        <View style={styles.sectionDivider} />
+
+        <View style={styles.twoColumnRow}>
+          <View style={styles.twoColumnItem}>
+            <ProfileField
+              label="Max HR"
+              value={values.maxHR}
+              onChangeText={(value) => onChangeField("maxHR", value)}
+              onBlur={() => onBlurField("maxHR")}
+              placeholder="bpm"
+              colors={colors}
+              styles={styles}
+              error={errors.maxHR}
+              helper={
+                estimatedMaxHR
+                  ? `Leave blank to use age estimate: ${estimatedMaxHR} bpm.`
+                  : "Leave blank if unknown."
+              }
+              keyboardType="number-pad"
+            />
+          </View>
+
+          <View style={styles.twoColumnItem}>
+            <ProfileField
+              label="Resting HR"
+              value={values.restingHR}
+              onChangeText={(value) => onChangeField("restingHR", value)}
+              onBlur={() => onBlurField("restingHR")}
+              placeholder="bpm"
+              colors={colors}
+              styles={styles}
+              error={errors.restingHR}
+              keyboardType="number-pad"
+            />
+          </View>
+        </View>
+
+        <View style={styles.sectionDivider} />
+
+        <ProfileField
+          label="Threshold HR"
+          value={values.thresholdHR}
+          onChangeText={(value) => onChangeField("thresholdHR", value)}
+          onBlur={() => onBlurField("thresholdHR")}
+          placeholder="bpm"
+          colors={colors}
+          styles={styles}
+          error={errors.thresholdHR}
+          helper="Optional. Useful if you know your lactate threshold HR."
+          keyboardType="number-pad"
+        />
+
+        <View style={styles.sectionDivider} />
+
+        <ProfileField
+          label="Training context"
+          value={values.trainingBackground}
+          onChangeText={(value) => onChangeField("trainingBackground", value)}
+          onBlur={() => onBlurField("trainingBackground")}
+          placeholder="Recent injuries, goals, experience, limits, or anything the coach should know"
+          colors={colors}
+          styles={styles}
+          error={errors.trainingBackground}
+          helper="Private notes for better AI analysis."
+          multiline
         />
       </View>
 

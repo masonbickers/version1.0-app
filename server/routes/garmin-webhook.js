@@ -3,6 +3,10 @@ import admin from "../admin.js";
 // Fixed path: removing the /garmin/ subfolder to match your explorer
 // This goes up two levels to leave 'routes' and 'server', then into 'src'
 import { stripUndefinedDeep } from "../utils/firestoreSafe.js";
+import {
+  activityDedupeKey,
+  likelySameActivity,
+} from "../../src/lib/activities/activityDedupe.js";
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
@@ -108,6 +112,10 @@ function toIsoStartTime(item) {
     firstDefined(
       item?.startTimeInSeconds,
       item?.summaryStartTimeInSeconds,
+      item?.summary?.startTimeInSeconds,
+      item?.summary?.summaryStartTimeInSeconds,
+      item?.activitySummary?.startTimeInSeconds,
+      item?.activitySummary?.summaryStartTimeInSeconds,
       item?.startTimestampGMT
     )
   );
@@ -120,6 +128,15 @@ function toIsoStartTime(item) {
     item?.startDateLocal ||
     item?.startDateGMT ||
     item?.beginTimestamp ||
+    item?.beginTimestampGMT ||
+    item?.summary?.startTime ||
+    item?.summary?.startDate ||
+    item?.summary?.startDateLocal ||
+    item?.summary?.startDateGMT ||
+    item?.activitySummary?.startTime ||
+    item?.activitySummary?.startDate ||
+    item?.activitySummary?.startDateLocal ||
+    item?.activitySummary?.startDateGMT ||
     null
   );
 }
@@ -210,11 +227,34 @@ function mapGarminActivity(item, { garminUserId, rawWebhookDocId, index }) {
     rawGarminActivity: stripUndefinedDeep(item),
     updatedAt: getServerTimestamp(),
   };
+  mapped.activityDedupeKey = activityDedupeKey(mapped);
 
   return {
     docId: activityDocId(mapped.activityId, index),
     data: stripUndefinedDeep(mapped),
   };
+}
+
+async function loadRecentStravaActivities(uid) {
+  try {
+    const snap = await admin
+      .firestore()
+      .collection("users")
+      .doc(uid)
+      .collection("stravaActivities")
+      .limit(250)
+      .get();
+
+    return snap.docs.map((docSnap) => ({
+      docId: docSnap.id,
+      id: docSnap.id,
+      source: "strava",
+      ...(docSnap.data() || {}),
+    }));
+  } catch (e) {
+    console.warn("Strava activities read failed for Garmin dedupe:", e?.message || e);
+    return [];
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -296,7 +336,9 @@ async function mapToUserActivities({ payload, rawWebhookDocId, allowUserWrite })
     };
   }
 
-  const batch = admin.firestore().batch();
+  const db = admin.firestore();
+  const batch = db.batch();
+  const stravaActivities = await loadRecentStravaActivities(uid);
 
   items.forEach((item, index) => {
     const { docId, data } = mapGarminActivity(item, {
@@ -304,6 +346,9 @@ async function mapToUserActivities({ payload, rawWebhookDocId, allowUserWrite })
       rawWebhookDocId,
       index,
     });
+    const duplicateStrava = stravaActivities.find((candidate) =>
+      likelySameActivity(data, candidate)
+    );
 
     const activityRef = admin
       .firestore()
@@ -312,8 +357,51 @@ async function mapToUserActivities({ payload, rawWebhookDocId, allowUserWrite })
       .collection("garmin_activities")
       .doc(docId);
 
-    batch.set(activityRef, data, { merge: true });
-    results.push({ activityId: data.activityId, docId, mapped: true });
+    batch.set(
+      activityRef,
+      {
+        ...data,
+        hiddenDuplicate: false,
+        duplicateOf: duplicateStrava
+          ? {
+              provider: "strava",
+              source: "stravaActivities",
+              id: duplicateStrava.id || null,
+              activityId: duplicateStrava.activityId || duplicateStrava.id || null,
+            }
+          : null,
+      },
+      { merge: true }
+    );
+
+    if (duplicateStrava?.id) {
+      const stravaRef = db
+        .collection("users")
+        .doc(uid)
+        .collection("stravaActivities")
+        .doc(String(duplicateStrava.docId || duplicateStrava.id));
+      batch.set(
+        stravaRef,
+        {
+          hiddenDuplicate: true,
+          duplicateOf: {
+            provider: "garmin",
+            source: "garmin_activities",
+            id: docId,
+            activityId: data.activityId,
+          },
+          duplicateCheckedAt: getServerTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
+    results.push({
+      activityId: data.activityId,
+      docId,
+      mapped: true,
+      duplicateStravaId: duplicateStrava?.id || null,
+    });
   });
 
   await batch.commit();

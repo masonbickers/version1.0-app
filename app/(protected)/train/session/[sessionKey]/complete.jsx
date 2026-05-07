@@ -1,4 +1,5 @@
 import { Feather } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
   collection,
@@ -6,9 +7,11 @@ import {
   doc,
   getDoc,
   serverTimestamp,
+  setDoc,
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
@@ -27,7 +30,7 @@ import Svg, {
   Path as SvgPath,
 } from "react-native-svg";
 
-import { auth, db } from "../../../../../firebaseConfig";
+import { auth, db, storage } from "../../../../../firebaseConfig";
 import { useLiveActivity } from "../../../../../providers/LiveActivityProvider";
 import { useTheme } from "../../../../../providers/ThemeProvider";
 import { decodeSessionKey } from "../../../../../src/train/utils/sessionHelpers";
@@ -60,6 +63,16 @@ function getLocalDateOnly(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function normaliseExerciseKey(value) {
+  return (
+    String(value || "exercise")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 80) || "exercise"
+  );
+}
+
 function secondsToClock(sec) {
   const total = Math.max(0, Math.floor(Number(sec || 0)));
   const h = Math.floor(total / 3600);
@@ -67,6 +80,29 @@ function secondsToClock(sec) {
   const s = total % 60;
   if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function formatSaveDuration(sec, min) {
+  const seconds = Number(sec);
+  if (Number.isFinite(seconds) && seconds > 0) return formatDurationShort(seconds);
+  const minutes = Number(min);
+  if (Number.isFinite(minutes) && minutes > 0) return `${Math.round(minutes)} min`;
+  return null;
+}
+
+function pluralise(value, singular, plural = `${singular}s`) {
+  const count = Number(value);
+  if (!Number.isFinite(count) || count <= 0) return null;
+  return `${Math.round(count)} ${Math.round(count) === 1 ? singular : plural}`;
+}
+
+function getEffortLabel(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return "Moderate";
+  if (score <= 3) return "Easy";
+  if (score <= 6) return "Moderate";
+  if (score <= 8) return "Hard";
+  return "Max";
 }
 
 function formatPaceFromSec(value, fallback = "—") {
@@ -782,6 +818,7 @@ export default function SessionCompleteScreen() {
   const {
     sessionKey,
     status: statusParam,
+    savedSessionId: savedSessionIdParam,
     returnWeekIndex: returnWeekIndexParam,
     returnDayIndex: returnDayIndexParam,
     returnToken: returnTokenParam,
@@ -798,6 +835,12 @@ export default function SessionCompleteScreen() {
     () => (Array.isArray(sessionKey) ? sessionKey[0] : String(sessionKey || "")),
     [sessionKey]
   );
+  const savedSessionIdParamValue = useMemo(() => {
+    const raw = Array.isArray(savedSessionIdParam)
+      ? savedSessionIdParam[0]
+      : savedSessionIdParam;
+    return String(raw || "").trim();
+  }, [savedSessionIdParam]);
   const returnWeekIndex = useMemo(() => {
     const raw = Array.isArray(returnWeekIndexParam) ? returnWeekIndexParam[0] : returnWeekIndexParam;
     const parsed = Number(raw);
@@ -837,9 +880,42 @@ export default function SessionCompleteScreen() {
 
   const initialStatus = String(Array.isArray(statusParam) ? statusParam[0] : statusParam || "").toLowerCase();
   const [status, setStatus] = useState(initialStatus === "skipped" ? "skipped" : "completed");
+  const [sessionTitle, setSessionTitle] = useState("");
   const [notes, setNotes] = useState("");
+  const [effortScore, setEffortScore] = useState(5);
+  const [photoUris, setPhotoUris] = useState([]);
   const [saving, setSaving] = useState(false);
   const [existingTrainSessionId, setExistingTrainSessionId] = useState(null);
+  const [savedSessionId, setSavedSessionId] = useState("");
+  const [savedSession, setSavedSession] = useState(null);
+
+  useEffect(() => {
+    if (!savedSessionIdParamValue) return;
+    let cancelled = false;
+
+    (async () => {
+      const uid = auth.currentUser?.uid;
+      if (!uid) return;
+      setSavedSessionId(savedSessionIdParamValue);
+      try {
+        const snap = await getDoc(
+          doc(db, "users", uid, "trainSessions", savedSessionIdParamValue)
+        );
+        if (cancelled) return;
+        setSavedSession(
+          snap.exists()
+            ? { id: snap.id, ...(snap.data() || {}) }
+            : { id: savedSessionIdParamValue }
+        );
+      } catch {
+        if (!cancelled) setSavedSession({ id: savedSessionIdParamValue });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [savedSessionIdParamValue]);
 
   const pendingSaveDraft = useMemo(() => {
     const draft = liveActivity?.pendingSaveDraft;
@@ -854,12 +930,57 @@ export default function SessionCompleteScreen() {
     () => (isRunLiveDraft ? buildRunCompletionReview(pendingSaveDraft?.payload || {}, notes) : null),
     [isRunLiveDraft, notes, pendingSaveDraft?.payload]
   );
+  const saveSummary = useMemo(() => {
+    const payload = pendingSaveDraft?.payload || {};
+    const isStrength = pendingSaveDraft?.mode === "strength";
+    const strengthEntries = Array.isArray(payload?.strengthLog?.entries)
+      ? payload.strengthLog.entries
+      : [];
+    const exerciseCount = Number(payload?.strengthLog?.loggedExercises) || strengthEntries.length || null;
+    const setCount = strengthEntries.reduce((sum, entry) => {
+      const performed = Number(entry?.performed?.sets ?? entry?.performed?.completedSets);
+      const prescribed = Number(entry?.prescribed?.sets);
+      const value = Number.isFinite(performed) && performed > 0 ? performed : prescribed;
+      return sum + (Number.isFinite(value) && value > 0 ? value : 0);
+    }, 0);
+    const durationText = formatSaveDuration(
+      payload?.live?.durationSec ?? payload?.strengthLog?.durationSec,
+      payload?.actualDurationMin ?? payload?.targetDurationMin
+    );
+    const distanceKm = Number(payload?.live?.distanceKm ?? payload?.actualDistanceKm);
+    const metricItems = isStrength
+      ? [
+          durationText,
+          pluralise(exerciseCount, "exercise"),
+          pluralise(setCount, "set"),
+        ].filter(Boolean)
+      : [
+          Number.isFinite(distanceKm) && distanceKm > 0 ? `${distanceKm.toFixed(distanceKm >= 10 ? 1 : 2)} km` : null,
+          durationText,
+          payload?.live?.avgPaceMinPerKm ? `${payload.live.avgPaceMinPerKm}/km` : null,
+        ].filter(Boolean);
+    const effortLabel = getEffortLabel(effortScore);
+
+    return {
+      title: String(sessionTitle || payload?.title || payload?.name || "Training session").trim(),
+      badge: status === "skipped" ? "SKIPPED" : "COMPLETED",
+      metricItems,
+      effortLabel,
+      effortText: `Effort ${effortScore}/10 · ${effortLabel}`,
+    };
+  }, [effortScore, pendingSaveDraft?.mode, pendingSaveDraft?.payload, sessionTitle, status]);
 
   useEffect(() => {
     if (hasLiveDraft) {
-      setNotes(String(pendingSaveDraft?.payload?.notes || ""));
+      const payload = pendingSaveDraft?.payload || {};
+      setSessionTitle(String(payload?.title || payload?.name || ""));
+      setNotes(String(payload?.notes || ""));
+      const nextEffort = Number(payload?.avgRPE || payload?.effortRatingNumeric || 5);
+      if (Number.isFinite(nextEffort) && nextEffort >= 1 && nextEffort <= 10) {
+        setEffortScore(Math.round(nextEffort));
+      }
     }
-  }, [hasLiveDraft, pendingSaveDraft?.payload?.notes]);
+  }, [hasLiveDraft, pendingSaveDraft?.payload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -881,7 +1002,12 @@ export default function SessionCompleteScreen() {
 
         if (!hasLiveDraft) {
           setStatus(String(log?.status || initialStatus || "").toLowerCase() === "skipped" ? "skipped" : "completed");
+          setSessionTitle(String(log?.title || ""));
           setNotes(String(log?.notes || ""));
+          const nextEffort = Number(log?.effortRatingNumeric || log?.avgRPE || 5);
+          if (Number.isFinite(nextEffort) && nextEffort >= 1 && nextEffort <= 10) {
+            setEffortScore(Math.round(nextEffort));
+          }
         }
       } catch {}
     })();
@@ -890,6 +1016,44 @@ export default function SessionCompleteScreen() {
       cancelled = true;
     };
   }, [encodedKey, hasLiveDraft, initialStatus]);
+
+  const pickPhotos = useCallback(async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (permission.status !== "granted") {
+      Alert.alert("Photos", "Allow photo access to add photos to this session.");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.82,
+      allowsMultipleSelection: true,
+      selectionLimit: 6,
+    });
+
+    if (result.canceled) return;
+    const uris = (result.assets || []).map((asset) => asset?.uri).filter(Boolean);
+    setPhotoUris((prev) => [...prev, ...uris].slice(0, 6));
+  }, []);
+
+  const uploadSessionPhotos = useCallback(async (uid, trainSessionId) => {
+    const uris = Array.isArray(photoUris) ? photoUris.filter(Boolean) : [];
+    if (!uris.length) return [];
+
+    const uploaded = [];
+    for (let i = 0; i < uris.length; i += 1) {
+      const uri = uris[i];
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      const photoRef = ref(
+        storage,
+        `train_session_photos/${uid}/${trainSessionId}_${Date.now()}_${i}.jpg`
+      );
+      await uploadBytes(photoRef, blob, { contentType: "image/jpeg" });
+      uploaded.push(await getDownloadURL(photoRef));
+    }
+    return uploaded;
+  }, [photoUris]);
 
   const save = useCallback(async () => {
     try {
@@ -907,7 +1071,9 @@ export default function SessionCompleteScreen() {
       setSaving(true);
       const { planId, weekIndex, dayIndex, sessionIndex } = decodeSessionKey(encodedKey);
       const trimmedNotes = notes.trim();
-      const source = hasLiveDraft ? "live_save" : "manual_log";
+      const trimmedTitle = sessionTitle.trim();
+      const isStrengthDraft = hasLiveDraft && pendingSaveDraft?.mode === "strength";
+      const source = isStrengthDraft ? "strength_log" : hasLiveDraft ? "live_save" : "manual_log";
       const sessionLogRef = doc(db, "users", uid, "sessionLogs", encodedKey);
       const existingLogSnap = await getDoc(sessionLogRef);
       const existingLog = existingLogSnap.exists() ? existingLogSnap.data() || {} : null;
@@ -927,6 +1093,8 @@ export default function SessionCompleteScreen() {
         }
       }
 
+      const uploadedPhotoUrls = await uploadSessionPhotos(uid, trainSessionRef.id);
+
       let trainSessionPayload;
       let sessionDate = getLocalDateOnly();
       const storedRunReview =
@@ -938,9 +1106,13 @@ export default function SessionCompleteScreen() {
         trainSessionPayload = {
           ...payload,
           sessionKey: encodedKey,
+          ...(trimmedTitle ? { title: trimmedTitle } : {}),
           notes: trimmedNotes || payload?.notes || "",
+          effortRatingNumeric: effortScore,
+          perceivedEffort: `${effortScore}/10`,
+          ...(uploadedPhotoUrls.length ? { photoUrls: uploadedPhotoUrls } : {}),
           status,
-          source: "live_save",
+          source,
         };
 
         if (status === "completed" && runReview?.analysis) {
@@ -972,7 +1144,11 @@ export default function SessionCompleteScreen() {
         sessionDate = plannedPayload.date || sessionDate;
         trainSessionPayload = {
           ...stripNilValues(plannedPayload),
+          ...(trimmedTitle ? { title: trimmedTitle } : {}),
           notes: trimmedNotes || null,
+          effortRatingNumeric: effortScore,
+          perceivedEffort: `${effortScore}/10`,
+          ...(uploadedPhotoUrls.length ? { photoUrls: uploadedPhotoUrls } : {}),
         };
         if (hasExistingTrainSession) {
           delete trainSessionPayload.source;
@@ -1011,7 +1187,11 @@ export default function SessionCompleteScreen() {
         date: sessionDate,
         status,
         source,
+        ...(trimmedTitle ? { title: trimmedTitle } : {}),
         notes: trimmedNotes || null,
+        effortRatingNumeric: effortScore,
+        perceivedEffort: `${effortScore}/10`,
+        ...(uploadedPhotoUrls.length ? { photoUrls: uploadedPhotoUrls } : {}),
         lastTrainSessionId: trainSessionRef.id,
         updatedAt: serverTimestamp(),
         statusAt: serverTimestamp(),
@@ -1050,6 +1230,81 @@ export default function SessionCompleteScreen() {
       batch.set(sessionLogRef, sessionLogPayload, { merge: true });
       await batch.commit();
 
+      if (isStrengthDraft && status === "completed") {
+        const entries = Array.isArray(trainSessionPayload?.strengthLog?.entries)
+          ? trainSessionPayload.strengthLog.entries
+          : [];
+        const progressWrites = entries.flatMap((entry) => {
+          if (!entry?.isLoggable || !entry?.performed?.metrics?.hasData) return [];
+
+          const exerciseKey = entry.exerciseKey || normaliseExerciseKey(entry.title);
+          const entryDocId = `${encodedKey}__${normaliseExerciseKey(entry.id)}`;
+          const latestSnapshot = {
+            date: sessionDate,
+            planId: planId || null,
+            planName: trainSessionPayload?.planName || null,
+            sessionKey: encodedKey,
+            trainSessionId: trainSessionRef.id,
+            sessionTitle: trainSessionPayload?.title || null,
+            blockTitle: entry.blockTitle || null,
+            durationMin: trainSessionPayload?.actualDurationMin ?? null,
+            prescribed: entry.prescribed || null,
+            performed: entry.performed || null,
+          };
+
+          return [
+            setDoc(
+              doc(db, "users", uid, "strengthExerciseProgress", exerciseKey),
+              {
+                exerciseKey,
+                title: entry.title,
+                updatedAt: serverTimestamp(),
+                lastDate: sessionDate,
+                lastSessionKey: encodedKey,
+                lastTrainSessionId: trainSessionRef.id,
+                latest: latestSnapshot,
+              },
+              { merge: true }
+            ),
+            setDoc(
+              doc(
+                db,
+                "users",
+                uid,
+                "strengthExerciseProgress",
+                exerciseKey,
+                "entries",
+                entryDocId
+              ),
+              {
+                exerciseKey,
+                title: entry.title,
+                sourceExerciseId: entry.id,
+                date: sessionDate,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+                planId: planId || null,
+                planName: trainSessionPayload?.planName || null,
+                sessionKey: encodedKey,
+                trainSessionId: trainSessionRef.id,
+                weekIndex,
+                dayIndex,
+                sessionIndex,
+                sessionTitle: trainSessionPayload?.title || null,
+                blockTitle: entry.blockTitle || null,
+                prescribed: entry.prescribed || null,
+                performed: entry.performed || null,
+              },
+              { merge: true }
+            ),
+          ];
+        });
+
+        if (progressWrites.length) {
+          await Promise.allSettled(progressWrites);
+        }
+      }
+
       setExistingTrainSessionId(trainSessionRef.id);
 
       if (hasLiveDraft) {
@@ -1068,12 +1323,12 @@ export default function SessionCompleteScreen() {
         clearLiveActivity();
       }
 
-      Alert.alert("Saved", "Session has been saved to history.", [
-        {
-          text: "OK",
-          onPress: () => router.replace(`/train/history/${trainSessionRef.id}`),
-        },
-      ]);
+      setSavedSessionId(trainSessionRef.id);
+      setSavedSession({
+        id: trainSessionRef.id,
+        ...trainSessionPayload,
+        status,
+      });
     } catch (e) {
       Alert.alert("Save failed", e?.message || "Please try again.");
     } finally {
@@ -1083,13 +1338,44 @@ export default function SessionCompleteScreen() {
     clearLiveActivity,
     encodedKey,
     existingTrainSessionId,
+    effortScore,
     hasLiveDraft,
     notes,
     pendingSaveDraft,
+    sessionTitle,
     router,
     runReview,
     status,
+    uploadSessionPhotos,
   ]);
+
+  const openSavedSession = useCallback(() => {
+    const id = String(savedSessionId || "").trim();
+    if (!id) return;
+    router.replace(`/train/history/${id}`);
+  }, [router, savedSessionId]);
+
+  const returnToTrain = useCallback(() => {
+    router.replace("/train");
+  }, [router]);
+
+  const discardActivity = useCallback(() => {
+    Alert.alert(
+      "Discard activity?",
+      "This removes the unsaved session from this device. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => {
+            clearLiveActivity();
+            router.replace("/train");
+          },
+        },
+      ]
+    );
+  }, [clearLiveActivity, router]);
 
   const renderRunReview = () => {
     const payload = pendingSaveDraft?.payload || {};
@@ -1360,6 +1646,64 @@ export default function SessionCompleteScreen() {
         </SectionCard>
 
         <SectionCard title="Session notes" colors={colors}>
+          <Text style={[styles.formLabel, { color: colors.subtext }]}>Title</Text>
+          <TextInput
+            value={sessionTitle}
+            onChangeText={setSessionTitle}
+            placeholder="Name this session"
+            placeholderTextColor={colors.subtext}
+            style={[
+              styles.singleLineInput,
+              { backgroundColor: cardSoft, color: colors.text, borderColor: "transparent" },
+            ]}
+            maxLength={80}
+          />
+
+          <Text style={[styles.formLabel, { color: colors.subtext, marginTop: 14 }]}>
+            How hard did it feel?
+          </Text>
+          <View style={styles.effortRow}>
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => {
+              const active = score <= effortScore;
+              return (
+                <TouchableOpacity
+                  key={score}
+                  onPress={() => setEffortScore(score)}
+                  style={[
+                    styles.effortDot,
+                    {
+                      backgroundColor: active ? accent : cardSoft,
+                      borderColor: active ? accent : "transparent",
+                    },
+                  ]}
+                  activeOpacity={0.85}
+                >
+                  <Text
+                    style={[
+                      styles.effortDotText,
+                      { color: active ? "#111111" : colors.subtext },
+                    ]}
+                  >
+                    {score}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={[styles.formLabel, { color: colors.subtext, marginTop: 14 }]}>Photos</Text>
+          <TouchableOpacity
+            onPress={pickPhotos}
+            style={[styles.photoButton, { backgroundColor: cardSoft }]}
+            activeOpacity={0.85}
+          >
+            <Feather name="image" size={16} color={colors.text} />
+            <Text style={[styles.photoButtonText, { color: colors.text }]}>
+              {photoUris.length ? `${photoUris.length} selected` : "Add photos"}
+            </Text>
+          </TouchableOpacity>
+
+          <Text style={[styles.formLabel, { color: colors.subtext, marginTop: 14 }]}>Notes</Text>
           <TextInput
             value={notes}
             onChangeText={setNotes}
@@ -1376,11 +1720,39 @@ export default function SessionCompleteScreen() {
     );
   };
 
-  const renderBasicForm = () => (
+  const renderSaveSummary = () => (
+    <View style={[styles.saveSummaryCard, { backgroundColor: card2 }]}>
+      <View style={styles.saveSummaryHeader}>
+        <Text style={[styles.formLabel, { color: colors.subtext }]}>Session summary</Text>
+        <View style={[styles.heroAccentBadge, { backgroundColor: accentSoft }]}>
+          <Text style={[styles.heroAccentText, { color: accent }]}>
+            {saveSummary.badge}
+          </Text>
+        </View>
+      </View>
+      <Text style={[styles.saveSummaryTitle, { color: colors.text }]}>
+        {saveSummary.title || "Training session"}
+      </Text>
+      {saveSummary.metricItems?.length ? (
+        <View style={styles.saveMetricRow}>
+          {saveSummary.metricItems.map((item) => (
+            <View key={item} style={[styles.saveMetricPill, { backgroundColor: cardSoft }]}>
+              <Text style={[styles.saveMetricText, { color: colors.text }]}>{item}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+      <Text style={[styles.saveEffortText, { color: colors.subtext }]}>
+        {saveSummary.effortText}
+      </Text>
+    </View>
+  );
+
+  const renderSaveForm = () => (
     <View
       style={[
-        styles.sectionCard,
-        { borderColor: "transparent", backgroundColor: card2, marginTop: 8 },
+        styles.saveFormCard,
+        { borderColor: "transparent", backgroundColor: card2 },
       ]}
     >
       <Text style={[styles.formLabel, { color: colors.subtext }]}>Status</Text>
@@ -1428,11 +1800,68 @@ export default function SessionCompleteScreen() {
         </TouchableOpacity>
       </View>
 
-      <Text style={[styles.formLabel, { color: colors.subtext, marginTop: 16 }]}>Notes</Text>
+      <Text style={[styles.formLabel, { color: colors.subtext, marginTop: 18 }]}>
+        Activity name
+      </Text>
+      <TextInput
+        value={sessionTitle}
+        onChangeText={setSessionTitle}
+        placeholder="Name this session"
+        placeholderTextColor={colors.subtext}
+        style={[
+          styles.singleLineInput,
+          {
+            borderColor: "transparent",
+            color: colors.text,
+            backgroundColor: cardSoft,
+          },
+        ]}
+        maxLength={80}
+      />
+
+      <Text style={[styles.formLabel, { color: colors.subtext, marginTop: 18 }]}>Effort</Text>
+      <View style={styles.effortRow}>
+        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => {
+          const active = score === effortScore;
+          return (
+            <TouchableOpacity
+              key={score}
+              onPress={() => setEffortScore(score)}
+              style={[
+                styles.effortDot,
+                {
+                  backgroundColor: active ? accent : cardSoft,
+                  borderColor: active ? accent : "transparent",
+                },
+              ]}
+              activeOpacity={0.85}
+            >
+              <Text
+                style={[
+                  styles.effortDotText,
+                  { color: active ? "#111111" : colors.subtext },
+                ]}
+              >
+                {score}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <View style={styles.effortScaleLabels}>
+        <Text style={[styles.effortScaleText, { color: colors.subtext }]}>Easy</Text>
+        <Text style={[styles.effortScaleText, { color: colors.subtext }]}>Moderate</Text>
+        <Text style={[styles.effortScaleText, { color: colors.subtext }]}>Max</Text>
+      </View>
+      <Text style={[styles.selectedEffortText, { color: colors.text }]}>
+        Selected: {effortScore}/10 · {getEffortLabel(effortScore)}
+      </Text>
+
+      <Text style={[styles.formLabel, { color: colors.subtext, marginTop: 18 }]}>Notes</Text>
       <TextInput
         value={notes}
         onChangeText={setNotes}
-        placeholder="Optional notes"
+        placeholder="How did the session feel?"
         placeholderTextColor={colors.subtext}
         multiline
         style={[
@@ -1445,8 +1874,126 @@ export default function SessionCompleteScreen() {
           },
         ]}
       />
+
+      <Text style={[styles.formLabel, { color: colors.subtext, marginTop: 18 }]}>Photos</Text>
+      <TouchableOpacity
+        onPress={pickPhotos}
+        style={[styles.photoButton, { backgroundColor: cardSoft }]}
+        activeOpacity={0.85}
+      >
+        <Feather name="image" size={16} color={colors.text} />
+        <Text style={[styles.photoButtonText, { color: colors.text }]}>
+          {photoUris.length ? `${photoUris.length} selected` : "Add photos"}
+        </Text>
+      </TouchableOpacity>
     </View>
   );
+  const shouldShowDetailedRunReview = false;
+
+  if (savedSessionId) {
+    const title = String(savedSession?.title || savedSession?.name || "Session complete");
+    const mode = String(
+      savedSession?.live?.mode ||
+        savedSession?.workout?.sport ||
+        savedSession?.sessionType ||
+        savedSession?.primaryActivity ||
+        "training"
+    );
+    const distance =
+      savedSession?.actualDistanceKm ??
+      savedSession?.live?.distanceKm ??
+      savedSession?.workout?.totalDistanceKm ??
+      null;
+    const durationSec =
+      savedSession?.live?.durationSec ??
+      (savedSession?.actualDurationMin ? Number(savedSession.actualDurationMin) * 60 : null) ??
+      savedSession?.workout?.totalDurationSec ??
+      null;
+    const rpe = savedSession?.avgRPE ?? null;
+
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: colors.bg }]}>
+        <View style={[styles.flex, { justifyContent: "space-between" }]}>
+          <View>
+            <View style={styles.header}>
+              <TouchableOpacity
+                onPress={returnToTrain}
+                style={[styles.iconBtn, { borderColor: "transparent", backgroundColor: cardSoft }]}
+                activeOpacity={0.85}
+              >
+                <Feather name="x" size={20} color={colors.text} />
+              </TouchableOpacity>
+
+              <View style={styles.headerCenter}>
+                <Text style={[styles.title, { color: colors.text }]}>Session complete</Text>
+                <Text style={[styles.subtitle, { color: colors.subtext }]}>
+                  Saved to history
+                </Text>
+              </View>
+
+              <View style={styles.iconSpacer} />
+            </View>
+
+            <View style={[styles.heroCard, { backgroundColor: card2 }]}>
+              <View style={styles.heroTopRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.overline, { color: colors.subtext }]}>
+                    {mode.includes("strength") || mode.includes("gym") ? "Strength saved" : "Workout saved"}
+                  </Text>
+                  <Text style={[styles.heroTitle, { color: colors.text }]}>{title}</Text>
+                  <Text style={[styles.heroSub, { color: colors.subtext }]}>
+                    Review the full training summary or head back to your plan.
+                  </Text>
+                </View>
+
+                <View style={[styles.heroAccentBadge, { backgroundColor: accentSoft }]}>
+                  <Text style={[styles.heroAccentText, { color: accent }]}>Done</Text>
+                </View>
+              </View>
+
+              <View style={styles.summaryStatsRow}>
+                <SummaryStat
+                  label="Distance"
+                  value={formatDistanceKm(distance, 2)}
+                  colors={colors}
+                />
+                <SummaryStat
+                  label="Time"
+                  value={durationSec ? secondsToClock(durationSec) : "—"}
+                  colors={colors}
+                />
+                <SummaryStat
+                  label="RPE"
+                  value={rpe ? `${Number(rpe).toFixed(1)}` : "—"}
+                  colors={colors}
+                  accent={accent}
+                />
+              </View>
+            </View>
+          </View>
+
+          <View style={[styles.footer, { backgroundColor: colors.bg, gap: 10 }]}>
+            <TouchableOpacity
+              onPress={openSavedSession}
+              style={[styles.primaryBtn, { backgroundColor: accent }]}
+              activeOpacity={0.9}
+            >
+              <Text style={{ color: "#111111", fontWeight: "900" }}>
+                View full summary
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={returnToTrain}
+              style={[styles.secondaryWideBtn, { backgroundColor: cardSoft }]}
+              activeOpacity={0.85}
+            >
+              <Text style={{ color: colors.text, fontWeight: "900" }}>Back to plan</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.bg }]}>
@@ -1454,32 +2001,47 @@ export default function SessionCompleteScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.flex}
       >
-        <View style={styles.header}>
+        <View style={styles.saveHeader}>
           <TouchableOpacity
             onPress={goBackToPreviousScreen}
-            style={[styles.iconBtn, { borderColor: "transparent", backgroundColor: cardSoft }]}
+            style={styles.resumeBtn}
             activeOpacity={0.85}
           >
-            <Feather name="chevron-left" size={20} color={colors.text} />
+            <Text style={[styles.resumeBtnText, { color: colors.text }]}>Resume</Text>
           </TouchableOpacity>
 
-          <View style={styles.headerCenter}>
-            <Text style={[styles.title, { color: colors.text }]}>
-              {isRunLiveDraft ? "Session Review" : "Log Session"}
-            </Text>
-            <Text style={[styles.subtitle, { color: colors.subtext }]}>
-              {isRunLiveDraft
-                ? "Review execution before saving to history"
-                : "Save the planned session outcome"}
+          <View style={styles.saveHeaderCenter}>
+            <Text style={[styles.saveHeaderTitle, { color: colors.text }]}>
+              Session Complete
             </Text>
           </View>
 
-          <View style={styles.iconSpacer} />
+          <TouchableOpacity
+            onPress={discardActivity}
+            style={styles.headerActionRight}
+            activeOpacity={0.85}
+          >
+            <View style={[styles.iconBtn, { borderColor: "transparent", backgroundColor: cardSoft }]}>
+              <Feather name="trash-2" size={17} color="#F87171" />
+            </View>
+          </TouchableOpacity>
         </View>
 
-        {isRunLiveDraft ? renderRunReview() : renderBasicForm()}
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.saveScrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={[styles.saveIntro, { color: colors.subtext }]}>
+            Review your effort, add notes, then save it to your training history.
+          </Text>
+          {renderSaveSummary()}
+          {renderSaveForm()}
+          {shouldShowDetailedRunReview && isRunLiveDraft ? renderRunReview() : null}
+        </ScrollView>
 
-        <View style={[styles.footer, { backgroundColor: colors.bg }]}>
+        <View style={[styles.footer, styles.saveFooter, { backgroundColor: colors.bg }]}>
           <TouchableOpacity
             onPress={save}
             disabled={saving}
@@ -1492,8 +2054,16 @@ export default function SessionCompleteScreen() {
             activeOpacity={0.9}
           >
             <Text style={{ color: "#111111", fontWeight: "900" }}>
-              {saving ? "Saving..." : hasLiveDraft ? "Save to history" : "Save session log"}
+              {saving ? "Saving..." : "Save session"}
             </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={discardActivity}
+            disabled={saving}
+            style={[styles.discardBtn, { borderColor: "rgba(248,113,113,0.44)" }]}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.discardBtnText}>Discard activity</Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -1522,6 +2092,91 @@ const styles = StyleSheet.create({
   iconSpacer: { width: 40, height: 40 },
   title: { fontSize: 18, fontWeight: "900" },
   subtitle: { marginTop: 2, fontSize: 11, fontWeight: "600" },
+  saveHeader: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 6,
+  },
+  resumeBtn: {
+    minWidth: 72,
+    minHeight: 40,
+    justifyContent: "center",
+  },
+  resumeBtnText: {
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  headerActionRight: {
+    minWidth: 72,
+    minHeight: 40,
+    alignItems: "flex-end",
+    justifyContent: "center",
+  },
+  saveHeaderCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  saveHeaderTitle: {
+    fontSize: 19,
+    fontWeight: "900",
+  },
+  saveIntro: {
+    marginBottom: 0,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  saveScrollContent: {
+    paddingTop: 8,
+    paddingBottom: 18,
+    gap: 14,
+  },
+  saveSummaryCard: {
+    borderRadius: 18,
+    padding: 14,
+    gap: 9,
+  },
+  saveSummaryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  saveSummaryTitle: {
+    marginTop: 2,
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: "900",
+  },
+  saveMetaText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+  saveMetricRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+  },
+  saveMetricPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  saveMetricText: {
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  saveEffortText: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "800",
+  },
 
   heroCard: {
     borderRadius: 18,
@@ -1567,6 +2222,11 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 14,
     gap: 10,
+  },
+  saveFormCard: {
+    borderRadius: 22,
+    padding: 18,
+    gap: 0,
   },
   sectionCardHeader: {
     flexDirection: "row",
@@ -1757,6 +2417,58 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
   },
+  singleLineInput: {
+    minHeight: 48,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  effortRow: {
+    flexDirection: "row",
+    gap: 5,
+    marginTop: 10,
+  },
+  effortDot: {
+    flex: 1,
+    minHeight: 34,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  effortDotText: {
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  effortScaleLabels: {
+    marginTop: 6,
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  effortScaleText: {
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  selectedEffortText: {
+    marginTop: 8,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  photoButton: {
+    marginTop: 10,
+    minHeight: 46,
+    borderRadius: 14,
+    paddingHorizontal: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  photoButtonText: {
+    fontSize: 13,
+    fontWeight: "900",
+  },
 
   formLabel: {
     fontSize: 11,
@@ -1778,10 +2490,32 @@ const styles = StyleSheet.create({
   footer: {
     paddingVertical: 10,
   },
+  saveFooter: {
+    gap: 10,
+    paddingTop: 10,
+    paddingBottom: 12,
+  },
   primaryBtn: {
     minHeight: 52,
     borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
+  },
+  secondaryWideBtn: {
+    minHeight: 48,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  discardBtn: {
+    minHeight: 34,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  discardBtnText: {
+    color: "#F87171",
+    fontSize: 13,
+    fontWeight: "800",
   },
 });

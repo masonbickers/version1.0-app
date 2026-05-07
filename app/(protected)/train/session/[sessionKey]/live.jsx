@@ -461,7 +461,7 @@ export default function LiveTrainSession() {
   const theme = useScreenTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { sessionKey } = useLocalSearchParams();
+  const { sessionKey, autoStart } = useLocalSearchParams();
   const { hydrated: liveHydrated, liveActivity, setLiveActivity, clearLiveActivity } =
     useLiveActivity();
 
@@ -548,6 +548,7 @@ export default function LiveTrainSession() {
   const restoredFromLiveRef = useRef(false);
   const latestLiveDraftRef = useRef(null);
   const suppressLivePersistRef = useRef(false);
+  const autoStartAttemptedRef = useRef(false);
 
   /* -------------------------------------------------------------- */
   /* Keep awake                                                     */
@@ -1421,7 +1422,7 @@ export default function LiveTrainSession() {
     const draft = buildLiveActivityDraft(runState);
     if (draft) setLiveActivity(draft);
     else if (matchesPersistedLiveSession) clearLiveActivity();
-    router.back();
+    router.replace("/train");
   }, [
     buildLiveActivityDraft,
     clearLiveActivity,
@@ -1895,6 +1896,21 @@ export default function LiveTrainSession() {
       setKeepAwakeOn(true);
     }
   }, [runState, startTimer]);
+
+  useEffect(() => {
+    const requested = String(Array.isArray(autoStart) ? autoStart[0] : autoStart || "") === "1";
+    if (!requested) return;
+    if (autoStartAttemptedRef.current) return;
+    if (loading || error || !session) return;
+    if (runState !== "idle") return;
+
+    autoStartAttemptedRef.current = true;
+    if (isRun) {
+      onStart();
+    } else {
+      onStrengthStart();
+    }
+  }, [autoStart, error, isRun, loading, onStart, onStrengthStart, runState, session]);
 
   const onStrengthPause = useCallback(() => {
     if (runState !== "running") return;

@@ -82,7 +82,7 @@ app.use("/garmin", garminTrainingRoutes);
 // ============================================================================
 // AI & Training Routes
 // ============================================================================
-app.use("/coach-chat", coachChatRoute(openai));
+app.use("/coach-chat", requireUser, coachChatRoute(openai));
 app.use("/workouts", workoutRoutes(openai));
 app.use("/nutrition", nutritionRoutes(openai));
 

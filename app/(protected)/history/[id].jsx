@@ -1,18 +1,30 @@
 // app/(protected)/history/[id].jsx
 import { Feather } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { collection, doc, getDoc, getDocs } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  serverTimestamp,
+  updateDoc,
+} from "firebase/firestore";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   ActivityIndicator,
+  Image,
   Modal,
   Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -24,7 +36,7 @@ import Svg, {
 // import MapView, { Polyline } from "react-native-maps";
 
 import { API_URL } from "../../../config/api";
-import { auth, db } from "../../../firebaseConfig";
+import { auth, db, storage } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
 import {
   attachExternalActivityToTrainSession,
@@ -189,12 +201,52 @@ const STORED_ACTIVITY_SOURCES = new Set([
   "garmin_workout_syncs",
 ]);
 
+const EDIT_ACTIVITY_TYPES = [
+  { value: "Run", label: "Run" },
+  { value: "Treadmill", label: "Treadmill run" },
+  { value: "WeightTraining", label: "Weight training" },
+  { value: "Strength", label: "Strength" },
+  { value: "Ride", label: "Ride" },
+  { value: "Trainer", label: "Trainer" },
+  { value: "Walk", label: "Walk" },
+  { value: "Workout", label: "Workout" },
+];
+
+const EDIT_ACTIVITY_LABELS = [
+  "Race",
+  "Long run",
+  "Tempo",
+  "Recovery",
+  "Speed",
+  "Easy",
+  "Intervals",
+  "Strength",
+  "Commute",
+  "Test",
+];
+
 function finiteNumber(...values) {
   for (const value of values) {
     const n = Number(value);
     if (Number.isFinite(n) && n > 0) return n;
   }
   return null;
+}
+
+function firstNumber(...values) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function normalizePhotoUrls(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  const raw = String(value || "").trim();
+  return raw ? [raw] : [];
 }
 
 function storedActivityType(value) {
@@ -265,6 +317,270 @@ function pickStoredCoordinates(data, raw) {
   return [];
 }
 
+function firstArray(...values) {
+  for (const value of values) {
+    if (Array.isArray(value) && value.length) return value;
+  }
+  return [];
+}
+
+function buildStoredStreamsAndLaps(activity) {
+  const data = activity?.storedData || {};
+  const raw = data?.rawGarminActivity || {};
+  const samples = firstArray(
+    data?.samples,
+    data?.activitySamples,
+    data?.samplePoints,
+    data?.trackPoints,
+    raw?.samples,
+    raw?.activitySamples,
+    raw?.samplePoints,
+    raw?.trackPoints,
+    raw?.activityDetail?.samples,
+    raw?.activityDetails?.samples
+  );
+  const streamData = {
+    distance: [],
+    heartrate: [],
+    altitude: [],
+    velocity: [],
+    watts: [],
+    cadence: [],
+    grade: [],
+    time: [],
+  };
+
+  samples.forEach((sample, index) => {
+    const distanceValue = firstNumber(
+      sample?.distance,
+      sample?.distanceInMeters,
+      sample?.distanceMeters,
+      sample?.totalDistanceInMeters,
+      sample?.cumulativeDistanceInMeters,
+      sample?.totalDistance
+    );
+    const timeValue = firstNumber(
+      sample?.time,
+      sample?.timerDurationInSeconds,
+      sample?.elapsedDurationInSeconds,
+      sample?.clockDurationInSeconds,
+      sample?.durationInSeconds,
+      sample?.offsetInSeconds,
+      sample?.sampleTimeOffsetInSeconds,
+      index
+    );
+    const hrValue = firstNumber(
+      sample?.heartrate,
+      sample?.heartRate,
+      sample?.heartRateInBeatsPerMinute,
+      sample?.heartRateBpm
+    );
+    const altitudeValue = firstNumber(
+      sample?.altitude,
+      sample?.altitudeInMeters,
+      sample?.elevation,
+      sample?.elevationInMeters,
+      sample?.heightInMeters
+    );
+    const speedValue = firstNumber(
+      sample?.velocity,
+      sample?.velocity_smooth,
+      sample?.speed,
+      sample?.speedMetersPerSecond,
+      sample?.speedInMetersPerSecond
+    );
+    const powerValue = firstNumber(sample?.watts, sample?.power, sample?.powerInWatts);
+    const cadenceValue = firstNumber(
+      sample?.cadence,
+      sample?.runCadence,
+      sample?.runCadenceInStepsPerMinute,
+      sample?.runCadenceInSPM,
+      sample?.bikeCadence,
+      sample?.bikeCadenceInRPM
+    );
+    const gradeValue = firstNumber(sample?.grade, sample?.gradeSmooth, sample?.grade_smooth);
+
+    if (distanceValue != null) streamData.distance.push(distanceValue);
+    if (timeValue != null) streamData.time.push(timeValue);
+    if (hrValue != null) streamData.heartrate.push(hrValue);
+    if (altitudeValue != null) streamData.altitude.push(altitudeValue);
+    if (speedValue != null) streamData.velocity.push(speedValue);
+    if (powerValue != null) streamData.watts.push(powerValue);
+    if (cadenceValue != null) streamData.cadence.push(cadenceValue);
+    if (gradeValue != null) streamData.grade.push(gradeValue);
+  });
+
+  const garminLaps = firstArray(
+    data?.laps,
+    data?.splits,
+    data?.splits_metric,
+    raw?.laps,
+    raw?.splits,
+    raw?.activityLaps,
+    raw?.activityDetail?.laps,
+    raw?.activityDetails?.laps
+  ).map((lap, index) => {
+    const distance = firstNumber(
+      lap?.distance,
+      lap?.distanceInMeters,
+      lap?.distanceMeters,
+      lap?.totalDistanceInMeters
+    );
+    const moving = firstNumber(
+      lap?.moving_time,
+      lap?.movingTime,
+      lap?.movingDurationInSeconds,
+      lap?.durationInSeconds,
+      lap?.elapsedDurationInSeconds
+    );
+    const elapsed = firstNumber(
+      lap?.elapsed_time,
+      lap?.elapsedTime,
+      lap?.elapsedDurationInSeconds,
+      lap?.durationInSeconds,
+      moving
+    );
+
+    return {
+      name: lap?.name || `Lap ${index + 1}`,
+      distance: distance || 0,
+      moving_time: moving || 0,
+      elapsed_time: elapsed || moving || 0,
+      elevation_difference:
+        firstNumber(lap?.elevation_difference, lap?.elevationDifference, lap?.netElevationGainInMeters) || 0,
+      total_elevation_gain:
+        firstNumber(lap?.total_elevation_gain, lap?.elevationGain, lap?.elevationGainInMeters) || 0,
+      average_heartrate:
+        firstNumber(lap?.average_heartrate, lap?.averageHeartRate, lap?.averageHeartRateInBeatsPerMinute) || 0,
+    };
+  });
+
+  const hasStreams = Object.values(streamData).some((arr) => arr.length > 1);
+  return { streams: hasStreams ? streamData : null, laps: garminLaps };
+}
+
+function filterPaceChartPoints(points) {
+  const safe = (Array.isArray(points) ? points : [])
+    .map((point) => ({
+      x: Number(point?.x),
+      y: Number(point?.y),
+    }))
+    .filter(
+      (point) =>
+        Number.isFinite(point.x) &&
+        Number.isFinite(point.y) &&
+        point.x >= 0 &&
+        point.y >= 2.25 &&
+        point.y <= 12
+    );
+
+  if (safe.length < 8) return safe;
+
+  const sorted = safe.map((point) => point.y).sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const min = Math.max(2.25, median * 0.58);
+  const max = Math.min(12, median * 1.7);
+  return safe.filter((point) => point.y >= min && point.y <= max);
+}
+
+function filterHeartRateChartPoints(points) {
+  const safe = (Array.isArray(points) ? points : [])
+    .map((point) => ({
+      x: Number(point?.x),
+      y: Number(point?.y),
+    }))
+    .filter(
+      (point) =>
+        Number.isFinite(point.x) &&
+        Number.isFinite(point.y) &&
+        point.x >= 0 &&
+        point.y >= 45 &&
+        point.y <= 230
+    );
+
+  if (safe.length < 8) return safe;
+
+  const sorted = safe.map((point) => point.y).sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const min = Math.max(55, median * 0.78);
+  const max = Math.min(230, median * 1.28);
+
+  return safe.filter((point, index) => {
+    if (point.y < min || point.y > max) return false;
+
+    const prev = safe[index - 1]?.y;
+    const next = safe[index + 1]?.y;
+    if (
+      Number.isFinite(prev) &&
+      Number.isFinite(next) &&
+      prev - point.y > 18 &&
+      next - point.y > 18
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function smoothChartPoints(points) {
+  const safe = Array.isArray(points) ? points : [];
+  if (safe.length < 7) return safe;
+
+  return safe.map((point, index) => {
+    const start = Math.max(0, index - 2);
+    const end = Math.min(safe.length, index + 3);
+    const window = safe
+      .slice(start, end)
+      .map((item) => Number(item.y))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+
+    if (!window.length) return point;
+    return {
+      ...point,
+      y: window[Math.floor(window.length / 2)],
+    };
+  });
+}
+
+function compactObject(value) {
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    const arr = value.map(compactObject).filter((item) => item != null);
+    return arr.length ? arr : null;
+  }
+
+  const next = {};
+  Object.entries(value).forEach(([key, item]) => {
+    if (item == null || item === "") return;
+    if (typeof item === "object") {
+      if (typeof item?.toMillis === "function" || item?.seconds != null) return;
+      const cleaned = compactObject(item);
+      if (cleaned != null) next[key] = cleaned;
+      return;
+    }
+    next[key] = item;
+  });
+
+  return Object.keys(next).length ? next : null;
+}
+
+function ageFromDob(dobISO) {
+  const raw = String(dobISO || "").trim();
+  if (!raw) return null;
+  const d = new Date(`${raw.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  const age = Math.floor((Date.now() - d.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+  return age >= 10 && age <= 100 ? age : null;
+}
+
+function estimateMaxHrFromAge(age) {
+  const value = Number(age);
+  if (!Number.isFinite(value) || value < 10 || value > 100) return null;
+  return Math.round(208 - 0.7 * value);
+}
+
 function mapStoredActivityToHistoryShape(docId, data, source) {
   const raw = data?.rawGarminActivity || data || {};
   const type = storedActivityType(data?.activityType || data?.type || data?.sport || raw?.activityType || raw?.sport);
@@ -298,14 +614,34 @@ function mapStoredActivityToHistoryShape(docId, data, source) {
     data?.movingTime,
     data?.movingTimeMin ? Number(data.movingTimeMin) * 60 : null
   );
+  const elapsedTime = finiteNumber(
+    data?.elapsedTime,
+    data?.elapsed_time,
+    data?.elapsedDurationInSeconds,
+    raw?.elapsedDurationInSeconds,
+    raw?.elapsedTimeInSeconds,
+    movingTime
+  );
   const avgHr = finiteNumber(
     data?.averageHeartRate,
     data?.averageHeartRateInBeatsPerMinute,
     data?.average_heartrate,
-    raw?.averageHeartRateInBeatsPerMinute
+    raw?.averageHeartRateInBeatsPerMinute,
+    raw?.averageHeartRate
   );
   const maxHr = finiteNumber(data?.maxHeartRate, data?.max_heartrate, raw?.maxHeartRateInBeatsPerMinute);
+  const avgPower = finiteNumber(data?.average_watts, data?.averageWatts, raw?.averagePowerInWatts, raw?.averagePower);
+  const maxPower = finiteNumber(data?.max_watts, data?.maxWatts, raw?.maxPowerInWatts, raw?.maxPower);
+  const avgCadence = finiteNumber(
+    data?.average_cadence,
+    data?.averageCadence,
+    raw?.averageRunCadenceInStepsPerMinute,
+    raw?.averageBikeCadenceInRoundsPerMinute,
+    raw?.averageCadence
+  );
   const elevation = finiteNumber(data?.elevationGain, data?.total_elevation_gain, raw?.totalElevationGainInMeters);
+  const speed = finiteNumber(data?.average_speed, data?.averageSpeed, raw?.averageSpeedInMetersPerSecond);
+  const maxSpeed = finiteNumber(data?.max_speed, data?.maxSpeed, raw?.maxSpeedInMetersPerSecond);
   const summaryPolyline = pickStoredPolyline(data, raw);
   const routeCoordinates = pickStoredCoordinates(data, raw);
 
@@ -318,17 +654,27 @@ function mapStoredActivityToHistoryShape(docId, data, source) {
     start_date_local: start,
     distance: distance || 0,
     moving_time: movingTime || 0,
-    elapsed_time: movingTime || 0,
+    elapsed_time: elapsedTime || movingTime || 0,
     average_heartrate: avgHr || undefined,
     max_heartrate: maxHr || undefined,
     total_elevation_gain: elevation || undefined,
+    average_watts: avgPower || undefined,
+    max_watts: maxPower || undefined,
+    average_cadence: avgCadence || undefined,
+    average_speed: speed || undefined,
+    max_speed: maxSpeed || undefined,
     kilojoules: finiteNumber(data?.kilojoules, raw?.kilojoules) || undefined,
     calories: finiteNumber(data?.calories, raw?.calories, raw?.activeKilocalories) || undefined,
     device_name: source?.startsWith("garmin") ? "Garmin" : data?.device_name,
     description: data?.description || data?.note || "",
+    perceivedEffort: data?.perceivedEffort || data?.effortRating || data?.effort || "",
+    effortRatingNumeric: finiteNumber(data?.effortRatingNumeric, data?.effortScore, data?.rpe) || undefined,
+    activityLabel: data?.activityLabel || data?.label || data?.sessionLabel || "",
+    photoUrls: normalizePhotoUrls(data?.photoUrls || data?.photos || data?.imageUrl),
     map: summaryPolyline ? { summary_polyline: summaryPolyline } : undefined,
     routeCoordinates: routeCoordinates.length > 1 ? routeCoordinates : undefined,
     source,
+    sourceDocId: docId,
     storedData: data,
   };
 }
@@ -381,6 +727,7 @@ export default function ActivityDetailPage() {
   const [analysis, setAnalysis] = useState("");
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
+  const [athleteProfile, setAthleteProfile] = useState(null);
   const [lapsReview, setLapsReview] = useState("");
   const [lapsReviewLoading, setLapsReviewLoading] = useState(false);
   const [lapsReviewError, setLapsReviewError] = useState("");
@@ -394,6 +741,18 @@ export default function ActivityDetailPage() {
   const [targetTrainSession, setTargetTrainSession] = useState(null);
   const [targetTrainSessionError, setTargetTrainSessionError] = useState("");
   const [linkingTrainSession, setLinkingTrainSession] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [editType, setEditType] = useState("");
+  const [editTypeOpen, setEditTypeOpen] = useState(false);
+  const [editActivityLabel, setEditActivityLabel] = useState("");
+  const [editEffort, setEditEffort] = useState("");
+  const [editEffortScore, setEditEffortScore] = useState(5);
+  const [editEffortBarWidth, setEditEffortBarWidth] = useState(0);
+  const [editMediaUris, setEditMediaUris] = useState([]);
+  const [editDeleting, setEditDeleting] = useState(false);
   const targetTrainSessionId = useMemo(() => {
     const raw = Array.isArray(params?.linkTrainSessionId)
       ? params.linkTrainSessionId[0]
@@ -415,6 +774,63 @@ export default function ActivityDetailPage() {
     const value = String(raw || "").trim();
     return value || null;
   }, [params?.linkSessionTitle]);
+  const returnToMeActivity = useMemo(() => {
+    const raw = Array.isArray(params?.from) ? params.from[0] : params?.from;
+    return raw === "meActivity";
+  }, [params?.from]);
+  const returnToTrain = useMemo(() => {
+    const raw = Array.isArray(params?.from) ? params.from[0] : params?.from;
+    return raw === "train";
+  }, [params?.from]);
+  const returnScrollY = useMemo(() => {
+    const raw = Array.isArray(params?.scrollY) ? params.scrollY[0] : params?.scrollY;
+    const value = Number(raw || 0);
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+  }, [params?.scrollY]);
+  const returnTrainWeekIndex = useMemo(() => {
+    const raw = Array.isArray(params?.returnWeekIndex)
+      ? params.returnWeekIndex[0]
+      : params?.returnWeekIndex;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
+  }, [params?.returnWeekIndex]);
+  const returnTrainDayIndex = useMemo(() => {
+    const raw = Array.isArray(params?.returnDayIndex)
+      ? params.returnDayIndex[0]
+      : params?.returnDayIndex;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 && value < 7 ? Math.round(value) : null;
+  }, [params?.returnDayIndex]);
+
+  const handleBackPress = () => {
+    if (returnToMeActivity) {
+      router.replace({
+        pathname: "/me",
+        params: {
+          tab: "activity",
+          scrollY: String(returnScrollY),
+        },
+      });
+      return;
+    }
+    if (returnToTrain) {
+      router.replace({
+        pathname: "/train",
+        params: {
+          ...(returnTrainWeekIndex != null
+            ? { returnWeekIndex: String(returnTrainWeekIndex) }
+            : {}),
+          ...(returnTrainDayIndex != null
+            ? { returnDayIndex: String(returnTrainDayIndex) }
+            : {}),
+          returnToken: String(Date.now()),
+        },
+      });
+      return;
+    }
+
+    router.back();
+  };
 
   useEffect(() => {
     const loadActivity = async () => {
@@ -447,6 +863,9 @@ export default function ActivityDetailPage() {
             return;
           }
 
+          const storedDetail = buildStoredStreamsAndLaps(stored);
+          if (storedDetail.streams) setStreams(storedDetail.streams);
+          if (storedDetail.laps.length) setLaps(storedDetail.laps);
           setActivity(stored);
           return;
         }
@@ -540,6 +959,47 @@ export default function ActivityDetailPage() {
 
     loadActivity();
   }, [id, source]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadAthleteProfile = async () => {
+      const uid = auth.currentUser?.uid;
+      if (!uid) {
+        setAthleteProfile(null);
+        return;
+      }
+
+      try {
+        const [userSnap, planPrefsSnap] = await Promise.all([
+          getDoc(doc(db, "users", uid)),
+          getDoc(doc(db, "users", uid, "planPrefs", "current")),
+        ]);
+        if (cancelled) return;
+
+        const userData = userSnap.exists() ? userSnap.data() || {} : {};
+        const planPrefs = planPrefsSnap.exists() ? planPrefsSnap.data() || {} : {};
+        const profile = {
+          ...(planPrefs || {}),
+          ...(userData?.athleteProfile || {}),
+          hr: {
+            ...(planPrefs?.hr || {}),
+            ...(userData?.athleteProfile?.hr || {}),
+          },
+        };
+        setAthleteProfile(compactObject(profile));
+      } catch (e) {
+        console.log("Athlete profile load error", e);
+        if (!cancelled) setAthleteProfile(null);
+      }
+    };
+
+    loadAthleteProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const s = useMemo(
     () => makeStyles(colors, isDark, accentFill, accentText),
@@ -654,6 +1114,33 @@ export default function ActivityDetailPage() {
   const name = activity?.name || activityTypeLabel || "Workout";
   const paceSecPerKm =
     distance && movingTime ? movingTime / (distance / 1000) : null;
+  const analysisAthleteProfile = useMemo(() => {
+    const profile = compactObject(athleteProfile);
+    if (!profile) return null;
+    const age = ageFromDob(profile?.dobISO || profile?.dob);
+    const hasAgeEstimatedMax =
+      profile?.maxHRSource === "age_estimate" || profile?.hr?.maxSource === "age_estimate";
+    const manualMaxHR = hasAgeEstimatedMax ? null : firstNumber(profile?.hr?.max, profile?.maxHR);
+    const estimatedMaxHR = firstNumber(
+      profile?.hr?.estimatedMax,
+      profile?.estimatedMaxHR,
+      estimateMaxHrFromAge(age)
+    );
+    const maxHR = manualMaxHR || estimatedMaxHR;
+    return compactObject({
+      ...profile,
+      age,
+      estimatedMaxHR,
+      maxHRSource: manualMaxHR ? "manual" : estimatedMaxHR ? "age_estimate" : profile?.maxHRSource,
+      hr: {
+        max: maxHR,
+        estimatedMax: estimatedMaxHR,
+        maxSource: manualMaxHR ? "manual" : estimatedMaxHR ? "age_estimate" : profile?.hr?.maxSource,
+        resting: firstNumber(profile?.hr?.resting, profile?.restingHR),
+        threshold: firstNumber(profile?.hr?.threshold, profile?.thresholdHR),
+      },
+    });
+  }, [athleteProfile]);
 
   // Map coords from Strava summary polyline
   const coords = useMemo(() => {
@@ -932,26 +1419,27 @@ export default function ActivityDetailPage() {
     const len = Math.min(distanceArr.length, velocityArr.length);
 
     if (len > 1) {
-      return Array.from({ length: len }, (_, i) => {
+      const rawPoints = Array.from({ length: len }, (_, i) => {
         const v = Number(velocityArr[i] || 0);
         const minPerKm = v > 0 ? 1000 / v / 60 : null;
         return {
           x: Number(distanceArr[i] || 0) / 1000,
           y: Number.isFinite(minPerKm) ? minPerKm : null,
         };
-      }).filter((p) => Number.isFinite(p.y));
+      });
+      return smoothChartPoints(filterPaceChartPoints(rawPoints));
     }
 
     let totalKm = 0;
-    return splitRows
+    const splitPoints = splitRows
       .map((row) => {
         totalKm += row.distanceKm;
         return {
           x: totalKm,
           y: Number.isFinite(row.paceSec) ? row.paceSec / 60 : null,
         };
-      })
-      .filter((p) => Number.isFinite(p.y));
+      });
+    return filterPaceChartPoints(splitPoints);
   }, [streams.distance, streams.velocity, splitRows]);
 
   const hrLinePoints = useMemo(() => {
@@ -960,22 +1448,23 @@ export default function ActivityDetailPage() {
     const len = Math.min(distanceArr.length, hrArr.length);
 
     if (len > 1) {
-      return Array.from({ length: len }, (_, i) => ({
+      const rawPoints = Array.from({ length: len }, (_, i) => ({
         x: Number(distanceArr[i] || 0) / 1000,
         y: Number(hrArr[i] || 0),
-      })).filter((p) => Number.isFinite(p.y) && p.y > 0);
+      }));
+      return smoothChartPoints(filterHeartRateChartPoints(rawPoints));
     }
 
     let totalKm = 0;
-    return splitRows
+    const splitPoints = splitRows
       .map((row) => {
         totalKm += row.distanceKm;
         return {
           x: totalKm,
           y: row.hr,
         };
-      })
-      .filter((p) => Number.isFinite(p.y) && p.y > 0);
+      });
+    return filterHeartRateChartPoints(splitPoints);
   }, [streams.distance, streams.heartrate, splitRows]);
 
   const elevationLinePoints = useMemo(() => {
@@ -1023,6 +1512,21 @@ export default function ActivityDetailPage() {
     const fallback = Number(activity?.max_heartrate || 0);
     return fallback > 0 ? fallback : null;
   }, [hrLinePoints, activity?.max_heartrate]);
+
+  const profileMaxHrValue = useMemo(() => {
+    const value = firstNumber(
+      analysisAthleteProfile?.hr?.max,
+      analysisAthleteProfile?.maxHR
+    );
+    return value && value >= 120 && value <= 230 ? value : null;
+  }, [analysisAthleteProfile]);
+  const profileMaxHrSource = useMemo(
+    () =>
+      analysisAthleteProfile?.hr?.maxSource ||
+      analysisAthleteProfile?.maxHRSource ||
+      "",
+    [analysisAthleteProfile]
+  );
 
   const minAltValue = useMemo(() => {
     if (elevationLinePoints.length === 0) return null;
@@ -1130,11 +1634,11 @@ export default function ActivityDetailPage() {
           y: gapSec / 60,
         });
       }
-      return points;
+      return smoothChartPoints(filterPaceChartPoints(points));
     }
 
     let totalKm = 0;
-    return splitRows
+    const splitPoints = splitRows
       .map((row) => {
         totalKm += row.distanceKm;
         const grade =
@@ -1155,8 +1659,8 @@ export default function ActivityDetailPage() {
           x: totalKm,
           y: gap > 0 ? gap / 60 : null,
         };
-      })
-      .filter((p) => Number.isFinite(p.y));
+      });
+    return filterPaceChartPoints(splitPoints);
   }, [streams.distance, streams.velocity, splitRows, gradeSamples]);
 
   const avgGapPaceSec = useMemo(() => {
@@ -1258,7 +1762,7 @@ export default function ActivityDetailPage() {
     const hrSamples = hrLinePoints
       .map((p) => Number(p?.y || 0))
       .filter((v) => Number.isFinite(v) && v > 0);
-    const maxHr = Number(maxHrValue || 0);
+    const maxHr = profileMaxHrValue || Math.max(Number(maxHrValue || 0), 185);
     if (!hrSamples.length || !maxHr) return [];
 
     const b1 = maxHr * 0.6;
@@ -1302,7 +1806,7 @@ export default function ActivityDetailPage() {
         range: z.range,
       };
     });
-  }, [hrLinePoints, maxHrValue]);
+  }, [hrLinePoints, maxHrValue, profileMaxHrValue]);
 
   const paceZonesSummary = useMemo(() => {
     if (!paceZones.length) return "";
@@ -1405,6 +1909,173 @@ export default function ActivityDetailPage() {
     if (Number.isFinite(avgCadenceValue) && avgCadenceValue > 0) return avgCadenceValue;
     return null;
   }, [cadenceLinePoints, activity?.max_cadence, cadenceFactor, avgCadenceValue]);
+
+  const paceInsight = useMemo(() => {
+    if (!Number.isFinite(paceSecPerKm) || paceSecPerKm <= 0) return null;
+
+    const elapsedPace =
+      distance && elapsedTime ? Number(elapsedTime) / (Number(distance) / 1000) : null;
+    if (elapsedPace && elapsedPace > paceSecPerKm * 1.12) {
+      return {
+        tone: "watch",
+        title: "Watch pacing flow",
+        text: "Elapsed pace is noticeably slower than moving pace, so stoppages or uneven flow may be costing overall session quality.",
+      };
+    }
+
+    const samples = paceLinePoints
+      .map((p) => Number(p?.y || 0) * 60)
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (samples.length > 8) {
+      const mean = samples.reduce((sum, value) => sum + value, 0) / samples.length;
+      const variance =
+        samples.reduce((sum, value) => sum + (value - mean) ** 2, 0) / samples.length;
+      const cv = Math.sqrt(variance) / mean;
+      if (cv > 0.16) {
+        return {
+          tone: "watch",
+          title: "Pace looks variable",
+          text: "There are enough pace changes to suggest surging. Smoother effort would usually be more efficient unless this was intervals or hilly terrain.",
+        };
+      }
+    }
+
+    const topZone = paceZones.length
+      ? [...paceZones].sort((a, b) => b.percentage - a.percentage)[0]
+      : null;
+    if (topZone?.label === "Z2" || topZone?.label === "Z3") {
+      return {
+        tone: "good",
+        title: "Pace is on track",
+        text: "Pace sat in a useful aerobic range, which is where most steady running should live.",
+      };
+    }
+
+    return {
+      tone: "good",
+      title: "Pace is usable",
+      text: "The pace data gives enough context to judge this session; compare it with HR and cadence to spot hidden inefficiency.",
+    };
+  }, [distance, elapsedTime, paceLinePoints, paceSecPerKm, paceZones]);
+
+  const heartRateInsight = useMemo(() => {
+    if (!avgHrValue) return null;
+    const maxForZones = profileMaxHrValue || maxHrValue;
+    const percentMax = maxForZones ? avgHrValue / maxForZones : null;
+    const usingEstimatedMax = profileMaxHrSource === "age_estimate";
+    const maxHrText = usingEstimatedMax ? "age-estimated max HR" : "max HR";
+
+    if (percentMax && percentMax >= 0.88) {
+      return {
+        tone: "watch",
+        title: "High cardiovascular load",
+        text: `Average HR is close to your ${maxHrText}, so this should count as a hard day rather than easy volume.`,
+      };
+    }
+
+    if (percentMax && percentMax >= 0.72 && percentMax <= 0.84) {
+      return {
+        tone: "good",
+        title: "HR is in a productive range",
+        text: `Heart rate sat in a productive range against your ${maxHrText}, giving fitness benefit without excessive strain.`,
+      };
+    }
+
+    if (percentMax && percentMax >= 0.65 && percentMax < 0.72) {
+      return {
+        tone: "good",
+        title: "Controlled aerobic effort",
+        text: `Average HR was about ${Math.round(percentMax * 100)}% of your ${maxHrText}, which is useful easy-to-steady aerobic work.`,
+      };
+    }
+
+    if (percentMax && percentMax < 0.65) {
+      return {
+        tone: "good",
+        title: "Low stress session",
+        text: `Heart rate stayed well controlled against your ${maxHrText}, which is useful for recovery, easy mileage, or maintaining consistency.`,
+      };
+    }
+
+    return {
+      tone: "neutral",
+      title: maxForZones ? "HR context available" : "Add HR context",
+      text: maxForZones
+        ? "Heart-rate data is available, but adding resting HR and threshold HR will make the analysis more precise."
+        : "Add DOB or max HR in your profile to make this section more precise.",
+    };
+  }, [avgHrValue, maxHrValue, profileMaxHrSource, profileMaxHrValue]);
+
+  const powerInsight = useMemo(() => {
+    if (!avgPowerValue) return null;
+    if (maxPowerValue && maxPowerValue > avgPowerValue * 1.9) {
+      return {
+        tone: "watch",
+        title: "Power is spiky",
+        text: "Max power is much higher than average power, which can point to surges that waste energy unless this was a workout with efforts.",
+      };
+    }
+
+    return {
+      tone: "good",
+      title: "Power looks controlled",
+      text: "Average power is steady enough to support efficient output; use this with HR to judge whether the same pace is getting easier over time.",
+    };
+  }, [avgPowerValue, maxPowerValue]);
+
+  const cadenceInsight = useMemo(() => {
+    if (!avgCadenceValue) return null;
+    if (normaliseActivityMode(type, distance) !== "run") {
+      return {
+        tone: "neutral",
+        title: "Cadence recorded",
+        text: "Cadence is available for this session; compare it with pace and HR to spot efficiency changes over time.",
+      };
+    }
+
+    if (avgCadenceValue > 190) {
+      return {
+        tone: "watch",
+        title: "Cadence may be too high",
+        text: "Very high cadence can mean short, choppy steps. If pace is not improving, this may be wasting energy.",
+      };
+    }
+
+    if (avgCadenceValue < 155) {
+      return {
+        tone: "watch",
+        title: "Cadence may be low",
+        text: "Low cadence can indicate overstriding or heavy ground contact, which may reduce efficiency and increase fatigue.",
+      };
+    }
+
+    return {
+      tone: "good",
+      title: "Cadence is in range",
+      text: "Cadence sits in a normal running range, so there is no obvious efficiency issue from step rate alone.",
+    };
+  }, [avgCadenceValue, distance, type]);
+
+  const terrainInsight = useMemo(() => {
+    const gain = Number(activity?.total_elevation_gain || 0);
+    const distanceKm = Number(distance || 0) > 0 ? Number(distance) / 1000 : 0;
+    if (!distanceKm || !gain) return null;
+    const gainPerKm = gain / distanceKm;
+
+    if (gainPerKm >= 18) {
+      return {
+        tone: "watch",
+        title: "Terrain added load",
+        text: "Elevation gain is high for the distance, so slower pace may be terrain cost rather than poor fitness.",
+      };
+    }
+
+    return {
+      tone: "good",
+      title: "Terrain is not a major limiter",
+      text: "Elevation load looks manageable, so pace and HR are likely a fair read of your effort.",
+    };
+  }, [activity?.total_elevation_gain, distance]);
 
   const headerDateLabel = useMemo(
     () => formatHeaderDate(activity?.start_date_local || activity?.start_date),
@@ -1705,7 +2376,7 @@ export default function ActivityDetailPage() {
           },
         ];
 
-    return orderedStats.filter((item) => item.value).slice(0, 8);
+    return orderedStats.filter((item) => item.value).slice(0, 6);
   }, [
     activity?.kilojoules,
     activity?.suffer_score,
@@ -1793,6 +2464,40 @@ export default function ActivityDetailPage() {
     paceSecPerKm,
   ]);
 
+  const sessionBenefit = useMemo(() => {
+    if (!activity) return "";
+    if (isStrengthActivity) {
+      if (avgHrValue != null && avgHrValue >= 120) {
+        return "This session builds muscular endurance while adding a useful cardiovascular load.";
+      }
+      if (movingTime && movingTime >= 45 * 60) {
+        return "This session builds strength capacity and supports better fatigue resistance.";
+      }
+      return "This session supports strength maintenance and helps keep your training routine consistent.";
+    }
+
+    const distanceKm = Number(distance || 0) > 0 ? Number(distance) / 1000 : 0;
+    const pace = Number(paceSecPerKm || 0);
+    const avgHr = Number(avgHrValue || 0);
+
+    if (distanceKm >= 12) {
+      return "This session builds endurance and improves your ability to hold form late in longer efforts.";
+    }
+    if (avgHr >= 155 || (pace > 0 && distanceKm >= 3 && distanceKm < 8)) {
+      return "This session develops aerobic power and improves your ability to sustain faster running.";
+    }
+    if (distanceKm > 0 && avgHr > 0 && avgHr < 145) {
+      return "This session builds aerobic fitness with controlled effort and supports recovery between harder days.";
+    }
+    if (distanceKm > 0) {
+      return "This session adds useful aerobic volume and helps build consistency.";
+    }
+    if (movingTime) {
+      return "This session adds training load and helps maintain momentum.";
+    }
+    return "";
+  }, [activity, avgHrValue, distance, isStrengthActivity, movingTime, paceSecPerKm]);
+
   const targetTrainSessionTitle = useMemo(() => {
     const title = String(
       targetTrainSession?.title ||
@@ -1841,6 +2546,7 @@ export default function ActivityDetailPage() {
   }, [activity?.id, targetTrainSession?.linkedActivity?.reference]);
 
   const isStoredActivity = Boolean(activity?.source);
+  const canEditStoredActivity = Boolean(isStoredActivity && activity?.sourceDocId && activity?.source);
   const hasPaceAnalytics =
     workoutBars.length > 1 ||
     paceLinePoints.length > 1 ||
@@ -2054,6 +2760,233 @@ export default function ActivityDetailPage() {
     }
   };
 
+  const openEditActivity = () => {
+    if (!canEditStoredActivity) {
+      Alert.alert("Edit activity", "Only activities saved in Train-r can be edited here.");
+      return;
+    }
+
+    setEditName(activity?.name || "");
+    setEditNotes(activity?.description || "");
+    setEditType(activity?.type || "Workout");
+    setEditTypeOpen(false);
+    setEditActivityLabel(activity?.activityLabel || "");
+    setEditEffort(String(activity?.perceivedEffort || ""));
+    setEditEffortScore(
+      Math.min(
+        10,
+        Math.max(1, Math.round(Number(activity?.effortRatingNumeric || activity?.storedData?.effortRatingNumeric || 5)))
+      )
+    );
+    setEditMediaUris(normalizePhotoUrls(activity?.photoUrls || activity?.storedData?.photoUrls));
+    setEditOpen(true);
+  };
+
+  const pickEditMedia = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Media", "Allow photo access to add media to this activity.");
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      quality: 0.84,
+    });
+
+    if (!result.canceled && Array.isArray(result.assets)) {
+      const nextUris = result.assets.map((asset) => asset?.uri).filter(Boolean);
+      setEditMediaUris((current) =>
+        [...nextUris, ...current].filter((uri, index, arr) => arr.indexOf(uri) === index).slice(0, 6)
+      );
+    }
+  };
+
+  const removeEditMedia = (uri) => {
+    setEditMediaUris((current) => current.filter((item) => item !== uri));
+  };
+
+  const applyEditEffortScore = (score) => {
+    const nextScore = Math.min(10, Math.max(1, Math.round(Number(score || 1))));
+    setEditEffortScore(nextScore);
+    setEditEffort(
+      nextScore <= 3
+        ? "Easy"
+        : nextScore <= 5
+        ? "Steady"
+        : nextScore <= 7
+        ? "Moderate"
+        : nextScore <= 9
+        ? "Hard"
+        : "Max effort"
+    );
+  };
+
+  const updateEditEffortFromTouch = (event) => {
+    const width = Number(editEffortBarWidth || 0);
+    if (!width) return;
+    const x = Math.min(width, Math.max(0, Number(event?.nativeEvent?.locationX || 0)));
+    applyEditEffortScore(Math.ceil((x / width) * 10));
+  };
+
+  const uploadEditMediaIfNeeded = async (uid, source, sourceDocId) => {
+    const uploaded = [];
+
+    for (const uri of editMediaUris) {
+      if (!uri) continue;
+      if (/^https?:\/\//i.test(String(uri))) {
+        uploaded.push(uri);
+        continue;
+      }
+
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      const mediaRef = ref(
+        storage,
+        `activity_photos/${uid}/${source}_${sourceDocId}_${Date.now()}_${uploaded.length}.jpg`
+      );
+      await uploadBytes(mediaRef, blob, { contentType: "image/jpeg" });
+      uploaded.push(await getDownloadURL(mediaRef));
+    }
+
+    return uploaded;
+  };
+
+  const saveActivityEdits = async () => {
+    try {
+      const uid = auth.currentUser?.uid;
+      if (!uid) {
+        Alert.alert("Edit activity", "Please sign in again.");
+        return;
+      }
+      if (!activity?.source || !activity?.sourceDocId) {
+        Alert.alert("Edit activity", "This activity cannot be edited here.");
+        return;
+      }
+
+      setEditSaving(true);
+
+      const nextName = editName.trim() || activity.name || "Activity";
+      const nextNotes = editNotes.trim();
+      const nextType = editType.trim() || activity.type || "Workout";
+      const nextLabel = editActivityLabel.trim();
+      const nextEffortScore = Math.min(10, Math.max(1, Math.round(Number(editEffortScore || 5))));
+      const nextEffort = editEffort.trim() || `${nextEffortScore}/10`;
+      const nextPhotoUrls = await uploadEditMediaIfNeeded(
+        uid,
+        activity.source,
+        String(activity.sourceDocId)
+      );
+      const activityRef = doc(db, "users", uid, activity.source, String(activity.sourceDocId));
+
+      await updateDoc(activityRef, {
+        name: nextName,
+        title: nextName,
+        activityName: nextName,
+        description: nextNotes,
+        note: nextNotes,
+        type: nextType,
+        activityType: nextType,
+        sport: nextType,
+        activityLabel: nextLabel,
+        label: nextLabel,
+        perceivedEffort: nextEffort,
+        effortRating: nextEffort,
+        effortRatingNumeric: nextEffortScore,
+        rpe: nextEffortScore,
+        photoUrls: nextPhotoUrls,
+        customizedAt: serverTimestamp(),
+        customizedAtMs: Date.now(),
+        updatedAt: serverTimestamp(),
+        updatedAtMs: Date.now(),
+      });
+
+      setActivity((prev) =>
+        prev
+          ? {
+              ...prev,
+              name: nextName,
+              type: nextType,
+              sport_type: nextType,
+              description: nextNotes,
+              activityLabel: nextLabel,
+              perceivedEffort: nextEffort,
+              effortRatingNumeric: nextEffortScore,
+              photoUrls: nextPhotoUrls,
+              storedData: {
+                ...(prev.storedData || {}),
+                name: nextName,
+                activityName: nextName,
+                type: nextType,
+                activityType: nextType,
+                description: nextNotes,
+                note: nextNotes,
+                activityLabel: nextLabel,
+                label: nextLabel,
+                perceivedEffort: nextEffort,
+                effortRating: nextEffort,
+                effortRatingNumeric: nextEffortScore,
+                rpe: nextEffortScore,
+                photoUrls: nextPhotoUrls,
+              },
+            }
+          : prev
+      );
+      setEditOpen(false);
+    } catch (e) {
+      console.error("Activity edit save error", e);
+      Alert.alert("Edit activity", e?.message || "Could not save this activity.");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const deleteActivity = async () => {
+    try {
+      const uid = auth.currentUser?.uid;
+      if (!uid) {
+        Alert.alert("Delete activity", "Please sign in again.");
+        return;
+      }
+      if (!activity?.source || !activity?.sourceDocId) {
+        Alert.alert("Delete activity", "This activity cannot be deleted here.");
+        return;
+      }
+
+      setEditDeleting(true);
+      await deleteDoc(doc(db, "users", uid, activity.source, String(activity.sourceDocId)));
+      setEditOpen(false);
+      router.replace({
+        pathname: "/me",
+        params: {
+          tab: "activity",
+          scrollY: String(returnScrollY),
+        },
+      });
+    } catch (e) {
+      console.error("Activity delete error", e);
+      Alert.alert("Delete activity", e?.message || "Could not delete this activity.");
+    } finally {
+      setEditDeleting(false);
+    }
+  };
+
+  const confirmDeleteActivity = () => {
+    Alert.alert(
+      "Delete activity?",
+      "This removes it from your Activity Log. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: deleteActivity,
+        },
+      ]
+    );
+  };
+
   const onRunAnalysis = async () => {
     if (!activity) return;
     try {
@@ -2082,6 +3015,9 @@ export default function ActivityDetailPage() {
           total_elevation_gain: activity.total_elevation_gain,
           paceSecPerKm,
           start_date: activity.start_date,
+          notes: activity.description || activity.perceivedEffort || "",
+          device_name: deviceLabel || activity.device_name || null,
+          athleteProfile: analysisAthleteProfile,
         }),
       });
 
@@ -2140,6 +3076,8 @@ export default function ActivityDetailPage() {
           laps: lapsForAi,
           warmup_excluded: warmupRows.length,
           cooldown_excluded: cooldownRows.length,
+          device_name: deviceLabel || activity.device_name || null,
+          athleteProfile: analysisAthleteProfile,
         }),
       });
 
@@ -2167,7 +3105,7 @@ export default function ActivityDetailPage() {
     <SafeAreaView style={s.safe}>
       <View style={s.header}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={handleBackPress}
           style={s.backBtn}
           activeOpacity={0.8}
         >
@@ -2176,7 +3114,14 @@ export default function ActivityDetailPage() {
         <Text style={s.headerTitle} numberOfLines={1}>
           Activity
         </Text>
-        <View style={{ width: 32 }} />
+        <TouchableOpacity
+          onPress={openEditActivity}
+          style={[s.backBtn, !canEditStoredActivity && s.headerBtnDisabled]}
+          activeOpacity={0.8}
+          disabled={!canEditStoredActivity}
+        >
+          <Feather name="edit-3" size={17} color={colors.text} />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -2215,12 +3160,26 @@ export default function ActivityDetailPage() {
                   <Text style={s.metaChipText}>{deviceLabel}</Text>
                 </View>
               ) : null}
+              {!!activity.activityLabel ? (
+                <View style={s.metaChip}>
+                  <Feather name="tag" size={13} color={colors.subtext} />
+                  <Text style={s.metaChipText}>{activity.activityLabel}</Text>
+                </View>
+              ) : null}
             </View>
             <Text style={s.activityTitle}>{name}</Text>
             <Text style={s.activityType}>
               {activityTypeLabel} • {formatDateTime(activity.start_date)}
             </Text>
           </View>
+
+          {activity.photoUrls?.length ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.activityMediaStrip}>
+              {activity.photoUrls.map((uri) => (
+                <Image key={uri} source={{ uri }} style={s.activityMediaImage} />
+              ))}
+            </ScrollView>
+          ) : null}
 
           {/* Route map – native only */}
           {Platform.OS !== "web" &&
@@ -2246,6 +3205,18 @@ export default function ActivityDetailPage() {
                 </MapViewComponent>
               </View>
             )}
+
+          {sessionBenefit ? (
+            <View style={s.benefitCard}>
+              <View style={s.benefitIcon}>
+                <Feather name="zap" size={15} color={accentText} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.benefitEyebrow}>Session benefit</Text>
+                <Text style={s.benefitText}>{sessionBenefit}</Text>
+              </View>
+            </View>
+          ) : null}
 
           {/* Key stats */}
           <View style={s.statsGrid}>
@@ -2605,6 +3576,7 @@ export default function ActivityDetailPage() {
                       colors={colors}
                     />
                   </View>
+                  <SectionInsight insight={heartRateInsight} colors={colors} styles={s} />
                 </View>
 
                 <View style={s.analyticsItemLast}>
@@ -2673,6 +3645,7 @@ export default function ActivityDetailPage() {
                           colors={colors}
                         />
                       </View>
+                      <SectionInsight insight={powerInsight} colors={colors} styles={s} />
                     </View>
                   ) : null}
 
@@ -2706,6 +3679,7 @@ export default function ActivityDetailPage() {
                           colors={colors}
                         />
                       </View>
+                      <SectionInsight insight={cadenceInsight} colors={colors} styles={s} />
                     </View>
                   ) : null}
                 </AnalyticsGroup>
@@ -2754,6 +3728,7 @@ export default function ActivityDetailPage() {
                       colors={colors}
                     />
                   </View>
+                  <SectionInsight insight={paceInsight} colors={colors} styles={s} />
                 </View>
 
                 {gapLinePoints.length > 1 || avgGapPaceSec ? (
@@ -2829,6 +3804,7 @@ export default function ActivityDetailPage() {
                       colors={colors}
                     />
                   </View>
+                  <SectionInsight insight={heartRateInsight} colors={colors} styles={s} />
                 </View>
 
                 {hrZones.length > 0 ? (
@@ -2916,13 +3892,14 @@ export default function ActivityDetailPage() {
                         <MetricInline
                           label="Intensity"
                           value={
-                            avgHrValue && maxHrValue
-                              ? `${Math.round((avgHrValue / maxHrValue) * 100)}`
+                            avgHrValue && (profileMaxHrValue || maxHrValue)
+                              ? `${Math.round((avgHrValue / (profileMaxHrValue || maxHrValue)) * 100)}`
                               : "-"
                           }
                           colors={colors}
                         />
                       </View>
+                      <SectionInsight insight={powerInsight} colors={colors} styles={s} />
                     </View>
                   ) : null}
 
@@ -2956,6 +3933,7 @@ export default function ActivityDetailPage() {
                           colors={colors}
                         />
                       </View>
+                      <SectionInsight insight={cadenceInsight} colors={colors} styles={s} />
                     </View>
                   ) : null}
                 </AnalyticsGroup>
@@ -3001,6 +3979,7 @@ export default function ActivityDetailPage() {
                       colors={colors}
                     />
                   </View>
+                  <SectionInsight insight={terrainInsight} colors={colors} styles={s} />
                   {elevationLinePoints.length > 1 ? (
                     <Text style={s.metricSummaryText}>
                       Elevation changed by {formatSignedMeters(elevationNetChange)} overall, with a high point
@@ -3186,6 +4165,14 @@ export default function ActivityDetailPage() {
                     colors={colors}
                     isDark={isDark}
                   />
+                  {activity.perceivedEffort ? (
+                    <DetailStat
+                      label="Effort"
+                      value={activity.perceivedEffort}
+                      colors={colors}
+                      isDark={isDark}
+                    />
+                  ) : null}
                   <DetailStat
                     label="Gear"
                     value={activity.gear?.name || "-"}
@@ -3259,6 +4246,15 @@ export default function ActivityDetailPage() {
                     isDark={isDark}
                     fullWidth
                   />
+                  {activity.perceivedEffort ? (
+                    <DetailStat
+                      label="Effort"
+                      value={activity.perceivedEffort}
+                      colors={colors}
+                      isDark={isDark}
+                      fullWidth
+                    />
+                  ) : null}
                 </>
               )}
             </View>
@@ -3321,6 +4317,238 @@ export default function ActivityDetailPage() {
           </View>
         </ScrollView>
       )}
+
+      <Modal
+        visible={editOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => {
+          if (!editSaving && !editDeleting) setEditOpen(false);
+        }}
+      >
+        <SafeAreaView style={s.editPage}>
+          <View style={s.editPageHeader}>
+            <TouchableOpacity
+              onPress={() => {
+                if (!editSaving && !editDeleting) setEditOpen(false);
+              }}
+              activeOpacity={0.85}
+              style={s.planPickerClose}
+            >
+              <Feather name="x" size={18} color={colors.text} />
+            </TouchableOpacity>
+            <View style={{ flex: 1, alignItems: "center" }}>
+              <Text style={s.editPageTitle}>Edit activity</Text>
+              <Text style={s.editPageSubtitle} numberOfLines={1}>
+                Name, media, type, label and effort
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[s.editHeaderSave, editSaving && s.linkPlanButtonDisabled]}
+              onPress={saveActivityEdits}
+              activeOpacity={0.88}
+              disabled={editSaving || editDeleting}
+            >
+              {editSaving ? (
+                <ActivityIndicator size="small" color={accentText} />
+              ) : (
+                <Text style={s.editHeaderSaveText}>Save</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            style={s.editPageScroll}
+            contentContainerStyle={s.editPageContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={s.editField}>
+              <Text style={s.editLabel}>Activity name</Text>
+              <TextInput
+                value={editName}
+                onChangeText={setEditName}
+                placeholder="Activity name"
+                placeholderTextColor={colors.subtext}
+                style={s.editInput}
+                maxLength={80}
+              />
+            </View>
+
+            <View style={s.editField}>
+              <Text style={s.editLabel}>Media</Text>
+              <TouchableOpacity
+                style={s.editMediaButton}
+                onPress={pickEditMedia}
+                activeOpacity={0.86}
+                disabled={editSaving}
+              >
+                <Feather name="image" size={17} color={colors.text} />
+                <Text style={s.editMediaButtonText}>Add photos</Text>
+              </TouchableOpacity>
+              {editMediaUris.length ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.editMediaStrip}>
+                  {editMediaUris.map((uri) => (
+                    <View key={uri} style={s.editMediaThumbWrap}>
+                      <Image source={{ uri }} style={s.editMediaThumb} />
+                      <TouchableOpacity
+                        style={s.editMediaRemove}
+                        onPress={() => removeEditMedia(uri)}
+                        activeOpacity={0.85}
+                        disabled={editSaving}
+                      >
+                        <Feather name="x" size={13} color={colors.text} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : null}
+            </View>
+
+            <View style={s.editField}>
+              <Text style={s.editLabel}>Activity type</Text>
+              <TouchableOpacity
+                style={s.editDropdown}
+                onPress={() => setEditTypeOpen((open) => !open)}
+                activeOpacity={0.86}
+                disabled={editSaving}
+              >
+                <Text style={s.editDropdownText}>
+                  {EDIT_ACTIVITY_TYPES.find((item) => item.value === editType)?.label || editType || "Workout"}
+                </Text>
+                <Feather name={editTypeOpen ? "chevron-up" : "chevron-down"} size={17} color={colors.subtext} />
+              </TouchableOpacity>
+              {editTypeOpen ? (
+                <View style={s.editDropdownMenu}>
+                  {EDIT_ACTIVITY_TYPES.map(({ value, label }) => {
+                    const selected = editType === value;
+                    return (
+                      <TouchableOpacity
+                        key={value}
+                        style={[s.editDropdownOption, selected && s.editDropdownOptionSelected]}
+                        onPress={() => {
+                          setEditType(value);
+                          setEditTypeOpen(false);
+                        }}
+                        activeOpacity={0.84}
+                        disabled={editSaving}
+                      >
+                        <Text style={[s.editDropdownOptionText, selected && s.editChipTextSelected]}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ) : null}
+            </View>
+
+            <View style={s.editField}>
+              <Text style={s.editLabel}>Activity label</Text>
+              <View style={s.editChipGrid}>
+                {EDIT_ACTIVITY_LABELS.map((value) => {
+                  const selected = editActivityLabel === value;
+                  return (
+                    <TouchableOpacity
+                      key={value}
+                      style={[s.editChip, selected && s.editChipSelected]}
+                      onPress={() => setEditActivityLabel(selected ? "" : value)}
+                      activeOpacity={0.84}
+                      disabled={editSaving}
+                    >
+                      <Text style={[s.editChipText, selected && s.editChipTextSelected]}>{value}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={s.editField}>
+              <View style={s.editEffortHeader}>
+                <Text style={s.editLabel}>How hard was it?</Text>
+                <Text style={s.editEffortValue}>{editEffortScore}/10</Text>
+              </View>
+              <View
+                style={s.editEffortBar}
+                onLayout={(event) => setEditEffortBarWidth(event.nativeEvent.layout.width)}
+                onStartShouldSetResponder={() => !editSaving}
+                onMoveShouldSetResponder={() => !editSaving}
+                onResponderGrant={updateEditEffortFromTouch}
+                onResponderMove={updateEditEffortFromTouch}
+              >
+                {Array.from({ length: 10 }, (_, index) => {
+                  const score = index + 1;
+                  const selected = score <= editEffortScore;
+                  return (
+                    <View
+                      key={score}
+                      style={[s.editEffortSegment, selected && s.editEffortSegmentSelected]}
+                    />
+                  );
+                })}
+              </View>
+              <View style={s.editChipGrid}>
+                {["Easy", "Steady", "Moderate", "Hard", "Max effort"].map((value) => {
+                  const selected = editEffort === value;
+                  return (
+                    <TouchableOpacity
+                      key={value}
+                      style={[s.editChip, selected && s.editChipSelected]}
+                      onPress={() => {
+                        setEditEffort(value);
+                        setEditEffortScore(
+                          value === "Easy"
+                            ? 3
+                            : value === "Steady"
+                            ? 5
+                            : value === "Moderate"
+                            ? 7
+                            : value === "Hard"
+                            ? 9
+                            : 10
+                        );
+                      }}
+                      activeOpacity={0.84}
+                      disabled={editSaving}
+                    >
+                      <Text style={[s.editChipText, selected && s.editChipTextSelected]}>{value}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={s.editField}>
+              <Text style={s.editLabel}>Notes</Text>
+              <TextInput
+                value={editNotes}
+                onChangeText={setEditNotes}
+                placeholder="How did it go? What should the coach know?"
+                placeholderTextColor={colors.subtext}
+                style={[s.editInput, s.editTextArea]}
+                multiline
+                maxLength={500}
+              />
+            </View>
+          </ScrollView>
+
+          <View style={s.editPageFooter}>
+            <TouchableOpacity
+              style={[s.editDeleteButton, editDeleting && s.linkPlanButtonDisabled]}
+              onPress={confirmDeleteActivity}
+              activeOpacity={0.85}
+              disabled={editSaving || editDeleting}
+            >
+              {editDeleting ? (
+                <ActivityIndicator size="small" color="#F87171" />
+              ) : (
+                <>
+                  <Feather name="trash-2" size={15} color="#F87171" />
+                  <Text style={s.editDeleteText}>Delete activity</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
 
       <Modal
         visible={planPickerOpen}
@@ -3503,6 +4731,28 @@ function MetricInline({ label, value, colors }) {
       >
         {value}
       </Text>
+    </View>
+  );
+}
+
+function SectionInsight({ insight, colors, styles }) {
+  if (!insight?.text) return null;
+  const isWatch = insight.tone === "watch";
+  const isGood = insight.tone === "good";
+  const color = isWatch ? "#F59E0B" : isGood ? "#22C55E" : colors.subtext;
+  const icon = isWatch ? "alert-triangle" : isGood ? "check-circle" : "info";
+
+  return (
+    <View style={styles.sectionInsight}>
+      <View style={[styles.sectionInsightIcon, { backgroundColor: `${color}22` }]}>
+        <Feather name={icon} size={13} color={color} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.sectionInsightTitle, { color }]}>{insight.title}</Text>
+        <Text style={[styles.sectionInsightText, { color: colors.subtext }]}>
+          {insight.text}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -3990,6 +5240,9 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: borderSoft,
     },
+    headerBtnDisabled: {
+      opacity: 0.35,
+    },
     headerTitle: {
       flex: 1,
       textAlign: "center",
@@ -4053,6 +5306,39 @@ function makeStyles(colors, isDark, accentFill, accentText) {
     map: {
       flex: 1,
     },
+    benefitCard: {
+      marginTop: 2,
+      borderRadius: 18,
+      padding: 13,
+      backgroundColor: isDark ? "rgba(230,255,59,0.10)" : "rgba(184,215,0,0.14)",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: isDark ? "rgba(230,255,59,0.24)" : "rgba(132,153,0,0.24)",
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 10,
+    },
+    benefitIcon: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: accentFill,
+    },
+    benefitEyebrow: {
+      fontSize: 10,
+      fontWeight: "900",
+      color: colors.subtext,
+      textTransform: "uppercase",
+      letterSpacing: 0.7,
+    },
+    benefitText: {
+      marginTop: 4,
+      fontSize: 14,
+      lineHeight: 19,
+      fontWeight: "800",
+      color: colors.text,
+    },
     activityTitle: {
       fontSize: 18,
       fontWeight: "900",
@@ -4064,6 +5350,16 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       fontSize: 12,
       fontWeight: "700",
       color: colors.subtext,
+    },
+    activityMediaStrip: {
+      gap: 10,
+      paddingRight: 18,
+    },
+    activityMediaImage: {
+      width: 172,
+      height: 122,
+      borderRadius: 18,
+      backgroundColor: cardBg,
     },
     statsGrid: {
       marginTop: 1,
@@ -4093,6 +5389,35 @@ function makeStyles(colors, isDark, accentFill, accentText) {
     metricInlineRowSingle: {
       marginTop: 4,
       flexDirection: "row",
+    },
+    sectionInsight: {
+      marginTop: 9,
+      borderRadius: 12,
+      padding: 10,
+      backgroundColor: panelBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 9,
+    },
+    sectionInsightIcon: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      alignItems: "center",
+      justifyContent: "center",
+      flexShrink: 0,
+    },
+    sectionInsightTitle: {
+      fontSize: 11,
+      fontWeight: "900",
+      marginBottom: 2,
+    },
+    sectionInsightText: {
+      fontSize: 11,
+      lineHeight: 16,
+      fontWeight: "650",
     },
     sectionTitle: {
       fontSize: 13,
@@ -4305,6 +5630,270 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       backgroundColor: cardBg,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: borderSoft,
+    },
+    editSheet: {
+      maxHeight: "86%",
+      borderRadius: 22,
+      padding: 16,
+      backgroundColor: cardBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    editPage: {
+      flex: 1,
+      backgroundColor: colors.bg,
+    },
+    editPageHeader: {
+      minHeight: 64,
+      paddingHorizontal: 18,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: borderSoft,
+      backgroundColor: colors.bg,
+    },
+    editPageTitle: {
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: "900",
+    },
+    editPageSubtitle: {
+      marginTop: 3,
+      color: colors.subtext,
+      fontSize: 11,
+      fontWeight: "700",
+    },
+    editHeaderSave: {
+      minWidth: 58,
+      minHeight: 34,
+      borderRadius: 17,
+      paddingHorizontal: 13,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: accentFill,
+    },
+    editHeaderSaveText: {
+      color: accentText,
+      fontSize: 13,
+      fontWeight: "900",
+    },
+    editPageScroll: {
+      flex: 1,
+    },
+    editPageContent: {
+      padding: 18,
+      paddingBottom: 120,
+      gap: 18,
+    },
+    editPageFooter: {
+      position: "absolute",
+      left: 0,
+      right: 0,
+      bottom: 0,
+      paddingHorizontal: 18,
+      paddingTop: 12,
+      paddingBottom: 18,
+      backgroundColor: colors.bg,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: borderSoft,
+    },
+    editField: {
+      gap: 7,
+    },
+    editLabel: {
+      fontSize: 11,
+      fontWeight: "900",
+      color: colors.subtext,
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+    },
+    editInput: {
+      minHeight: 48,
+      borderRadius: 14,
+      paddingHorizontal: 13,
+      paddingVertical: 11,
+      backgroundColor: panelBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+      color: colors.text,
+      fontSize: 14,
+      fontWeight: "700",
+    },
+    editTextArea: {
+      minHeight: 112,
+      textAlignVertical: "top",
+      lineHeight: 20,
+      fontWeight: "600",
+    },
+    editMediaButton: {
+      minHeight: 48,
+      borderRadius: 15,
+      paddingHorizontal: 14,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 9,
+      backgroundColor: panelBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    editMediaButtonText: {
+      color: colors.text,
+      fontSize: 14,
+      fontWeight: "800",
+    },
+    editMediaStrip: {
+      gap: 10,
+      paddingTop: 2,
+      paddingRight: 18,
+    },
+    editMediaThumbWrap: {
+      width: 92,
+      height: 92,
+      borderRadius: 18,
+      overflow: "hidden",
+      backgroundColor: panelBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    editMediaThumb: {
+      width: "100%",
+      height: "100%",
+    },
+    editMediaRemove: {
+      position: "absolute",
+      top: 7,
+      right: 7,
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "rgba(0,0,0,0.56)",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: "rgba(255,255,255,0.22)",
+    },
+    editDropdown: {
+      minHeight: 50,
+      borderRadius: 15,
+      paddingHorizontal: 14,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      backgroundColor: panelBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    editDropdownText: {
+      color: colors.text,
+      fontSize: 14,
+      fontWeight: "800",
+    },
+    editDropdownMenu: {
+      overflow: "hidden",
+      borderRadius: 16,
+      backgroundColor: panelBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    editDropdownOption: {
+      minHeight: 44,
+      paddingHorizontal: 14,
+      justifyContent: "center",
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: borderSoft,
+    },
+    editDropdownOptionSelected: {
+      backgroundColor: accentFill,
+      borderBottomColor: accentFill,
+    },
+    editDropdownOptionText: {
+      color: colors.text,
+      fontSize: 13,
+      fontWeight: "800",
+    },
+    editChipGrid: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    editChip: {
+      borderRadius: 999,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+      backgroundColor: panelBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    editChipSelected: {
+      backgroundColor: accentFill,
+      borderColor: accentFill,
+    },
+    editChipText: {
+      color: colors.text,
+      fontSize: 12,
+      fontWeight: "800",
+    },
+    editChipTextSelected: {
+      color: accentText,
+    },
+    editEffortHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    editEffortValue: {
+      color: colors.text,
+      fontSize: 13,
+      fontWeight: "900",
+    },
+    editEffortBar: {
+      height: 34,
+      borderRadius: 17,
+      padding: 5,
+      flexDirection: "row",
+      gap: 4,
+      backgroundColor: panelBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    editEffortSegment: {
+      flex: 1,
+      borderRadius: 999,
+      backgroundColor: isDark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.08)",
+    },
+    editEffortSegmentSelected: {
+      backgroundColor: accentFill,
+    },
+    editSaveButton: {
+      marginTop: 14,
+      minHeight: 48,
+      borderRadius: 999,
+      backgroundColor: accentFill,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    editSaveText: {
+      color: accentText,
+      fontSize: 14,
+      fontWeight: "900",
+    },
+    editDeleteButton: {
+      marginTop: 10,
+      minHeight: 44,
+      borderRadius: 999,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: "rgba(248,113,113,0.42)",
+      backgroundColor: "rgba(248,113,113,0.10)",
+      alignItems: "center",
+      justifyContent: "center",
+      flexDirection: "row",
+      gap: 8,
+    },
+    editDeleteText: {
+      color: "#F87171",
+      fontSize: 13,
+      fontWeight: "900",
     },
     planPickerHeader: {
       flexDirection: "row",

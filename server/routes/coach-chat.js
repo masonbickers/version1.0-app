@@ -186,6 +186,10 @@ function buildLiveContextFacts(context) {
   const currentWeekSchedule = Array.isArray(training?.currentWeekSchedule)
     ? training.currentWeekSchedule.filter(Boolean)
     : [];
+  const garminActivities = training?.garminActivities || null;
+  const recentGarmin = Array.isArray(garminActivities?.recent)
+    ? garminActivities.recent.filter(Boolean)
+    : [];
 
   if (clock?.todayLabel || clock?.localTime || clock?.timezone) {
     lines.push(
@@ -225,6 +229,37 @@ function buildLiveContextFacts(context) {
         .map((item) => formatSessionDetail(item, { includeDate: true }))
         .join(" | ")}`
     );
+  }
+
+  if (garminActivities?.storedCount || recentGarmin.length) {
+    const last7 = garminActivities?.last7d || {};
+    const summary = [
+      `${garminActivities.storedCount || recentGarmin.length} stored Garmin activities`,
+      last7.count ? `${last7.count} in the last 7 days` : null,
+      last7.distanceKm ? `${last7.distanceKm} km in 7 days` : null,
+      last7.durationMin ? `${last7.durationMin} min in 7 days` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    lines.push(`Garmin activity history: ${summary}.`);
+    if (recentGarmin.length) {
+      lines.push(
+        `Recent Garmin activities: ${recentGarmin
+          .slice(0, 6)
+          .map((item) =>
+            [
+              item?.date || item?.startIso || null,
+              item?.name || item?.type || "Garmin activity",
+              item?.distanceKm ? `${item.distanceKm} km` : null,
+              item?.durationMin ? `${item.durationMin} min` : null,
+              item?.averageHeartRate ? `${item.averageHeartRate} bpm avg HR` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          )
+          .join(" | ")}`
+      );
+    }
   }
 
   return lines.filter(Boolean).join("\n");
@@ -548,6 +583,7 @@ Grounding rules:
 - Do not invent meals, sessions, injuries, or targets.
 - If the user asks about nutrition, use their real targets/intake where available.
 - If the user asks about training or recovery, use their recent sessions and current plan where available.
+- If USER_CONTEXT_JSON.training.garminActivities is present, use it as imported Garmin activity history for recent completed workouts.
 - If the user asks for changes to their plan, you may update it conservatively.
 
 Plan update rules:

@@ -153,6 +153,14 @@ function createWelcomeMessage() {
   };
 }
 
+function getUserChatStorageKeys(uid) {
+  const suffix = String(uid || "guest").trim() || "guest";
+  return {
+    visible: `${VISIBLE_CHAT_STORAGE_KEY}_${suffix}`,
+    memory: `${MEMORY_CHAT_STORAGE_KEY}_${suffix}`,
+  };
+}
+
 function getMessageTimestamp(message) {
   const explicit = Number(message?.createdAt || 0);
   if (Number.isFinite(explicit) && explicit > 0) return explicit;
@@ -834,6 +842,131 @@ function summariseWeights(rows) {
   };
 }
 
+function readGarminActivityStartMs(activity = {}) {
+  const raw = activity.rawGarminActivity || {};
+  const candidates = [
+    activity.activityStartTimeMs,
+    activity.startTimeMs,
+    activity.startDateMs,
+    activity.startTime,
+    activity.startDate,
+    activity.startedAt,
+    activity.startDateLocal,
+    activity.startDateGMT,
+    activity.beginTimestamp,
+    activity.beginTimestampGMT,
+    activity.summary?.startTimeInSeconds * 1000,
+    activity.summary?.summaryStartTimeInSeconds * 1000,
+    activity.activitySummary?.startTimeInSeconds * 1000,
+    activity.activitySummary?.summaryStartTimeInSeconds * 1000,
+    activity.summaryStartTimeInSeconds * 1000,
+    activity.startTimeInSeconds * 1000,
+    raw.activityStartTimeMs,
+    raw.startTimeMs,
+    raw.startDateMs,
+    raw.startTime,
+    raw.startDate,
+    raw.startedAt,
+    raw.startDateLocal,
+    raw.startDateGMT,
+    raw.beginTimestamp,
+    raw.beginTimestampGMT,
+    raw.summary?.startTimeInSeconds * 1000,
+    raw.summary?.summaryStartTimeInSeconds * 1000,
+    raw.activitySummary?.startTimeInSeconds * 1000,
+    raw.activitySummary?.summaryStartTimeInSeconds * 1000,
+    raw.summaryStartTimeInSeconds * 1000,
+    raw.startTimeInSeconds * 1000,
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = safeToDate(candidate);
+    if (parsed) return parsed.getTime();
+  }
+
+  return null;
+}
+
+function normaliseCoachGarminActivity(activity = {}, source = "garmin_activities") {
+  const startMs = readGarminActivityStartMs(activity);
+  const distanceMeters =
+    Number(activity.distanceInMeters || 0) ||
+    Number(activity.distanceM || 0) ||
+    Number(activity.distanceMeters || 0) ||
+    (Number(activity.distanceKm || 0) > 0 ? Number(activity.distanceKm) * 1000 : 0);
+  const durationSec =
+    Number(activity.durationInSeconds || 0) ||
+    Number(activity.durationSec || 0) ||
+    Number(activity.elapsedDurationInSeconds || 0) ||
+    Number(activity.movingDurationInSeconds || 0);
+  const paceSecPerKm =
+    Number(activity.averagePaceSecPerKm || 0) ||
+    (distanceMeters > 0 && durationSec > 0 ? durationSec / (distanceMeters / 1000) : 0);
+
+  return removeUndefinedDeep({
+    id: String(activity.id || activity.activityId || ""),
+    source,
+    provider: "garmin",
+    name: activity.activityName || activity.name || activity.title || "Garmin activity",
+    type: activity.activityType || activity.type || activity.sport || "Garmin activity",
+    startIso: startMs ? new Date(startMs).toISOString() : null,
+    date: startMs ? toISODate(new Date(startMs)) : null,
+    distanceKm: distanceMeters > 0 ? roundOrNull(distanceMeters / 1000, 2) : null,
+    durationMin: durationSec > 0 ? roundOrNull(durationSec / 60, 1) : null,
+    averagePaceSecPerKm: paceSecPerKm > 0 ? Math.round(paceSecPerKm) : null,
+    averageHeartRate:
+      Number(activity.averageHeartRateInBeatsPerMinute || activity.avgHr || activity.averageHeartRate || 0) ||
+      null,
+    maxHeartRate:
+      Number(activity.maxHeartRateInBeatsPerMinute || activity.maxHr || activity.maxHeartRate || 0) ||
+      null,
+    calories: Number(activity.activeKilocalories || activity.calories || 0) || null,
+    deviceName:
+      activity.deviceName ||
+      activity.device_name ||
+      activity.rawGarminActivity?.deviceName ||
+      activity.rawGarminActivity?.device_name ||
+      null,
+    linkedSessionKey: activity.linkedSessionKey || null,
+    linkedTrainSessionId: activity.linkedTrainSessionId || null,
+  });
+}
+
+function summariseGarminActivitiesForCoach(rows) {
+  const activities = (Array.isArray(rows) ? rows : [])
+    .map((row) => normaliseCoachGarminActivity(row, row?.source || "garmin_activities"))
+    .filter((row) => row?.id || row?.startIso || row?.name)
+    .sort((a, b) => safeToDate(b.startIso || b.date) - safeToDate(a.startIso || a.date));
+
+  const since7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const since30d = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+  const buildTotals = (sinceMs) => {
+    const windowRows = activities.filter((row) => {
+      const start = safeToDate(row.startIso || row.date);
+      return start && start.getTime() >= sinceMs;
+    });
+    return {
+      count: windowRows.length,
+      distanceKm: roundOrNull(
+        windowRows.reduce((sum, row) => sum + Number(row.distanceKm || 0), 0),
+        1
+      ),
+      durationMin: Math.round(
+        windowRows.reduce((sum, row) => sum + Number(row.durationMin || 0), 0)
+      ),
+    };
+  };
+
+  return {
+    source: "garmin",
+    storedCount: activities.length,
+    last7d: buildTotals(since7d),
+    last30d: buildTotals(since30d),
+    recent: activities.slice(0, 12),
+  };
+}
+
 export default function CoachChatPage() {
   const { isDark } = useTheme();
 
@@ -855,12 +988,16 @@ export default function CoachChatPage() {
   const [recentTrainSummary, setRecentTrainSummary] = useState(() =>
     createEmptyRecentTrainingSummary()
   );
+  const [garminActivitySummary, setGarminActivitySummary] = useState(() =>
+    summariseGarminActivitiesForCoach([])
+  );
   const [weightSummary, setWeightSummary] = useState(null);
   const [sessionLogMap, setSessionLogMap] = useState({});
 
   const [user, setUser] = useState(null);
 
   const scrollViewRef = useRef(null);
+  const conversationVersionRef = useRef(0);
   const s = makeStyles();
   const isDev = typeof __DEV__ !== "undefined" && __DEV__;
   const devLog = useCallback(
@@ -902,55 +1039,86 @@ export default function CoachChatPage() {
 
   // auth subscription
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u || null));
+    const unsub = onAuthStateChanged(auth, (u) => {
+      conversationVersionRef.current += 1;
+      setUser(u || null);
+      setHydrated(false);
+      setMessages([createWelcomeMessage()]);
+      setMemoryMessages([]);
+      setInput("");
+      setIsSending(false);
+    });
     return () => unsub();
   }, []);
 
   // load chat from storage
   useEffect(() => {
+    const uid = user?.uid || null;
+    const versionAtStart = conversationVersionRef.current;
+
+    if (!uid) {
+      setMessages([createWelcomeMessage()]);
+      setMemoryMessages([]);
+      setHydrated(true);
+      return;
+    }
+
     const loadChat = async () => {
       try {
+        const storageKeys = getUserChatStorageKeys(uid);
         const [visibleRaw, memoryRaw] = await Promise.all([
-          AsyncStorage.getItem(VISIBLE_CHAT_STORAGE_KEY),
-          AsyncStorage.getItem(MEMORY_CHAT_STORAGE_KEY),
+          AsyncStorage.getItem(storageKeys.visible),
+          AsyncStorage.getItem(storageKeys.memory),
         ]);
+
+        if (versionAtStart !== conversationVersionRef.current) return;
 
         if (visibleRaw) {
           const parsedVisible = JSON.parse(visibleRaw);
           if (Array.isArray(parsedVisible) && parsedVisible.length > 0) {
             setMessages(parsedVisible);
+          } else {
+            setMessages([createWelcomeMessage()]);
           }
+        } else {
+          setMessages([createWelcomeMessage()]);
         }
 
         if (memoryRaw) {
           const parsedMemory = JSON.parse(memoryRaw);
           if (Array.isArray(parsedMemory)) setMemoryMessages(parsedMemory);
+        } else {
+          setMemoryMessages([]);
         }
       } catch (err) {
         console.log("[coach-chat] failed to load chat:", err);
       } finally {
-        setHydrated(true);
+        if (versionAtStart === conversationVersionRef.current) {
+          setHydrated(true);
+        }
       }
     };
 
     loadChat();
-  }, []);
+  }, [user?.uid]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !user?.uid) return;
+    const storageKeys = getUserChatStorageKeys(user.uid);
     AsyncStorage.setItem(
-      VISIBLE_CHAT_STORAGE_KEY,
+      storageKeys.visible,
       JSON.stringify(messages.slice(-80))
     ).catch((err) => console.log("[coach-chat] save visible err:", err));
-  }, [messages, hydrated]);
+  }, [messages, hydrated, user?.uid]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !user?.uid) return;
+    const storageKeys = getUserChatStorageKeys(user.uid);
     AsyncStorage.setItem(
-      MEMORY_CHAT_STORAGE_KEY,
+      storageKeys.memory,
       JSON.stringify(memoryMessages.slice(-200))
     ).catch((err) => console.log("[coach-chat] save memory err:", err));
-  }, [memoryMessages, hydrated]);
+  }, [memoryMessages, hydrated, user?.uid]);
 
   useEffect(() => {
     if (!user) {
@@ -1051,6 +1219,66 @@ export default function CoachChatPage() {
     );
 
     return () => unsub();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setGarminActivitySummary(summariseGarminActivitiesForCoach([]));
+      return;
+    }
+
+    const latestBySource = {
+      garmin_activities: [],
+      garminActivities: [],
+    };
+
+    const recompute = () => {
+      const rows = Object.entries(latestBySource).flatMap(([source, list]) =>
+        (list || []).map((row) => ({ ...row, source }))
+      );
+      setGarminActivitySummary(summariseGarminActivitiesForCoach(rows));
+    };
+
+    const unsubModern = onSnapshot(
+      query(
+        collection(db, "users", user.uid, "garmin_activities"),
+        orderBy("createdAtMs", "desc"),
+        limit(60)
+      ),
+      (snap) => {
+        latestBySource.garmin_activities = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() || {}),
+        }));
+        recompute();
+      },
+      (err) => {
+        console.log("[coach-chat] garmin activities snapshot error:", err);
+        latestBySource.garmin_activities = [];
+        recompute();
+      }
+    );
+
+    const unsubLegacy = onSnapshot(
+      query(collection(db, "users", user.uid, "garminActivities"), limit(60)),
+      (snap) => {
+        latestBySource.garminActivities = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() || {}),
+        }));
+        recompute();
+      },
+      (err) => {
+        console.log("[coach-chat] legacy garmin activities snapshot error:", err);
+        latestBySource.garminActivities = [];
+        recompute();
+      }
+    );
+
+    return () => {
+      unsubModern?.();
+      unsubLegacy?.();
+    };
   }, [user]);
 
   useEffect(() => {
@@ -1453,6 +1681,7 @@ export default function CoachChatPage() {
           todayLabel: formatDayDate(new Date()),
         },
         recentTraining: recentTrainSummary,
+        garminActivities: garminActivitySummary,
       }),
       nutrition: nutritionSummary
         ? {
@@ -1470,6 +1699,7 @@ export default function CoachChatPage() {
     companionPlan,
     currentWeekSchedule,
     exactSchedule,
+    garminActivitySummary,
     nutritionSummary,
     plan,
     planPrefs,
@@ -1497,6 +1727,9 @@ export default function CoachChatPage() {
     if (recentTrainSummary?.last7d?.sessions) {
       badges.push(`${recentTrainSummary.last7d.sessions} sessions in 7d`);
     }
+    if (garminActivitySummary?.last7d?.count) {
+      badges.push(`${garminActivitySummary.last7d.count} Garmin activities in 7d`);
+    }
     if (nutritionSummary?.goal) badges.push("Nutrition target linked");
     if (nutritionSummary?.recentMeals?.length) {
       badges.push(`${nutritionSummary.recentMeals.length} recent meals`);
@@ -1507,7 +1740,7 @@ export default function CoachChatPage() {
     if (planPrefs?.injuries) badges.push("Injury notes loaded");
 
     return badges.slice(0, 6);
-  }, [activePlans, exactSchedule.length, nutritionSummary, plan, planPrefs?.injuries, recentTrainSummary, weightSummary]);
+  }, [activePlans, exactSchedule.length, garminActivitySummary, nutritionSummary, plan, planPrefs?.injuries, recentTrainSummary, weightSummary]);
 
   const contextHighlights = useMemo(() => {
     const highlights = [];
@@ -1532,6 +1765,12 @@ export default function CoachChatPage() {
         label: `${recentTrainSummary.last7d.sessions} sessions in 7d`,
       });
     }
+    if (garminActivitySummary?.last7d?.count) {
+      highlights.push({
+        icon: "watch",
+        label: `${garminActivitySummary.last7d.count} Garmin activities`,
+      });
+    }
     if (nutritionSummary?.goal) {
       highlights.push({ icon: "coffee", label: "Nutrition linked" });
     }
@@ -1543,16 +1782,19 @@ export default function CoachChatPage() {
     }
 
     return highlights.slice(0, 4);
-  }, [activePlans.length, exactSchedule.length, nutritionSummary?.goal, plan?.name, recentTrainSummary?.last7d?.sessions, weightSummary?.latestKg]);
+  }, [activePlans.length, exactSchedule.length, garminActivitySummary?.last7d?.count, nutritionSummary?.goal, plan?.name, recentTrainSummary?.last7d?.sessions, weightSummary?.latestKg]);
 
   const handleClearChat = async () => {
+    conversationVersionRef.current += 1;
     const reset = [createWelcomeMessage()];
     setMessages(reset);
     setMemoryMessages([]);
+    setIsSending(false);
     try {
+      const storageKeys = getUserChatStorageKeys(user?.uid);
       await Promise.all([
-        AsyncStorage.setItem(VISIBLE_CHAT_STORAGE_KEY, JSON.stringify(reset)),
-        AsyncStorage.setItem(MEMORY_CHAT_STORAGE_KEY, JSON.stringify([])),
+        AsyncStorage.setItem(storageKeys.visible, JSON.stringify(reset)),
+        AsyncStorage.setItem(storageKeys.memory, JSON.stringify([])),
       ]);
     } catch (err) {
       console.log("[coach-chat] failed to clear visible chat:", err);
@@ -1574,9 +1816,17 @@ export default function CoachChatPage() {
     setMemoryMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsSending(true);
+    const conversationVersion = conversationVersionRef.current;
+
+    const isCurrentConversation = () =>
+      conversationVersion === conversationVersionRef.current;
 
     try {
       if (!API_URL) throw new Error("API_URL missing (check EXPO_PUBLIC_API_URL).");
+      const currentUser = auth.currentUser;
+      if (!currentUser?.uid) throw new Error("Please sign in again.");
+      const idToken = await currentUser.getIdToken();
+      if (!isCurrentConversation()) return;
 
       // Use a ref to avoid stale state when messages are sent quickly.
       const mem = [...(memoryMessagesRef.current || []), userMessage]
@@ -1613,11 +1863,15 @@ export default function CoachChatPage() {
 
       const res = await fetch(`${API_URL}/coach-chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
         body: JSON.stringify(payload),
       });
 
       const rawText = await res.text();
+      if (!isCurrentConversation()) return;
       devLog("[coach-chat] status:", res.status);
       // Avoid logging raw responses in production (may contain user data).
       devLog("[coach-chat] raw response:", rawText);
@@ -1651,11 +1905,13 @@ export default function CoachChatPage() {
         createdAt: Date.now(),
       };
 
+      if (!isCurrentConversation()) return;
       setMessages((prev) => [...prev, assistantMessage]);
 
       const parts = splitReplyForTypewriter(replyText);
       let visibleReply = "";
       for (const part of parts) {
+        if (!isCurrentConversation()) return;
         visibleReply = visibleReply ? `${visibleReply} ${part}` : part;
         setMessages((prev) =>
           prev.map((msg) =>
@@ -1672,6 +1928,7 @@ export default function CoachChatPage() {
         content: replyText,
       };
 
+      if (!isCurrentConversation()) return;
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMessage.id ? completedAssistantMessage : msg
@@ -1707,6 +1964,7 @@ export default function CoachChatPage() {
         }
       }
     } catch (err) {
+      if (!isCurrentConversation()) return;
       devLog("[coach-chat] error:", err);
 
       const errorMessage = {
@@ -1719,7 +1977,9 @@ export default function CoachChatPage() {
       setMessages((prev) => [...prev, errorMessage]);
       setMemoryMessages((prev) => [...prev, errorMessage]);
     } finally {
-      setIsSending(false);
+      if (isCurrentConversation()) {
+        setIsSending(false);
+      }
     }
   }, [
     chatContext,

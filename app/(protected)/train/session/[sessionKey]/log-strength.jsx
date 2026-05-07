@@ -25,6 +25,7 @@ import {
 } from "react-native";
 
 import { auth, db } from "../../../../../firebaseConfig";
+import { useLiveActivity } from "../../../../../providers/LiveActivityProvider";
 import { useTheme } from "../../../../../providers/ThemeProvider";
 import { decodeSessionKey } from "../../../../../src/train/utils/sessionHelpers";
 
@@ -632,6 +633,7 @@ export default function StrengthLogSessionScreen() {
   const router = useRouter();
   const { sessionKey, status: statusParam } = useLocalSearchParams();
   const { colors, isDark } = useTheme();
+  const { liveActivity, setLiveActivity, clearLiveActivity } = useLiveActivity();
 
   const encodedKey = useMemo(
     () => (Array.isArray(sessionKey) ? sessionKey[0] : String(sessionKey || "")),
@@ -639,6 +641,19 @@ export default function StrengthLogSessionScreen() {
   );
 
   const decodedKey = useMemo(() => decodeSessionKey(encodedKey), [encodedKey]);
+  const liveRoute = useMemo(
+    () =>
+      encodedKey
+        ? `/train/session/${encodeURIComponent(encodedKey)}/log-strength`
+        : null,
+    [encodedKey]
+  );
+  const matchesPersistedLiveSession = useMemo(
+    () =>
+      (liveRoute && String(liveActivity?.route || "") === String(liveRoute)) ||
+      (encodedKey && String(liveActivity?.sessionKey || "") === String(encodedKey)),
+    [encodedKey, liveActivity?.route, liveActivity?.sessionKey, liveRoute]
+  );
 
   const initialStatus = String(Array.isArray(statusParam) ? statusParam[0] : statusParam || "").toLowerCase();
   const defaultStatus = initialStatus === "skipped" ? "skipped" : "completed";
@@ -1147,6 +1162,70 @@ export default function StrengthLogSessionScreen() {
 
     return bits.join(" · ");
   }, [dayLabel, session?.targetDurationMin]);
+
+  const buildLiveActivityDraft = useCallback(() => {
+    if (!liveRoute || !encodedKey || status === "skipped") return null;
+
+    const durationSec = Math.max(0, Math.round(getElapsedNow()));
+    if (!isTimerRunning && durationSec <= 0 && !liveSummary.hasLoggedWork) return null;
+
+    return {
+      isActive: true,
+      route: liveRoute,
+      sessionKey: encodedKey,
+      status: isTimerRunning ? "running" : "paused",
+      mode: "strength",
+      title: sessionTitle || "Strength session",
+      updatedAt: Date.now(),
+      startedAt:
+        Number(liveActivity?.startedAt || 0) > 0
+          ? Number(liveActivity.startedAt)
+          : Math.max(0, durationSec) > 0
+          ? Date.now() - durationSec * 1000
+          : Date.now(),
+      snapshot: {
+        runState: isTimerRunning ? "running" : "paused",
+        liveDurationSec: durationSec,
+        strengthEntryById: entryById || {},
+        strengthNotes: notes || "",
+        strengthRestSecLeft: Number(restSecLeft || 0),
+        strengthRestExerciseId: restExerciseId || null,
+      },
+    };
+  }, [
+    encodedKey,
+    entryById,
+    getElapsedNow,
+    isTimerRunning,
+    liveActivity?.startedAt,
+    liveRoute,
+    liveSummary.hasLoggedWork,
+    notes,
+    restExerciseId,
+    restSecLeft,
+    sessionTitle,
+    status,
+  ]);
+
+  const leaveToTrain = useCallback(() => {
+    const draft = buildLiveActivityDraft();
+    if (draft) setLiveActivity(draft);
+    else if (matchesPersistedLiveSession) clearLiveActivity();
+    router.replace("/train");
+  }, [
+    buildLiveActivityDraft,
+    clearLiveActivity,
+    matchesPersistedLiveSession,
+    router,
+    setLiveActivity,
+  ]);
+
+  useEffect(() => {
+    const draft = buildLiveActivityDraft();
+    if (!draft) return;
+    setLiveActivity(draft);
+  }, [buildLiveActivityDraft, setLiveActivity]);
+
   const restExerciseTitle = useMemo(() => {
     if (!restExerciseId) return "";
     const match = strengthExercises.find((item) => item?.id === restExerciseId);
@@ -1635,6 +1714,32 @@ export default function StrengthLogSessionScreen() {
         source: "strength_log",
       };
 
+      const reviewBeforePersist = true;
+      if (reviewBeforePersist) {
+        setLiveActivity((prev) => ({
+          ...(prev && typeof prev === "object" ? prev : {}),
+          isActive: true,
+          route: `/train/session/${encodeURIComponent(encodedKey)}/log-strength`,
+          sessionKey: encodedKey,
+          status: "paused",
+          mode: "strength",
+          title: sessionTitleValue,
+          updatedAt: Date.now(),
+          startedAt:
+            Number(prev?.startedAt || liveActivity?.startedAt || 0) > 0
+              ? Number(prev?.startedAt || liveActivity?.startedAt)
+              : Date.now() - durationSecNow * 1000,
+          pendingSaveDraft: {
+            mode: "strength",
+            sessionKey: encodedKey,
+            payload: basePayload,
+          },
+        }));
+
+        router.push(`/train/session/${encodeURIComponent(encodedKey)}/complete`);
+        return;
+      }
+
       let trainSessionRef =
         existingTrainSessionId
           ? doc(db, "users", uid, "trainSessions", existingTrainSessionId)
@@ -1726,6 +1831,7 @@ export default function StrengthLogSessionScreen() {
 
       setExistingTrainSessionId(trainSessionRef.id);
       setHasExistingSessionLog(true);
+      if (matchesPersistedLiveSession) clearLiveActivity();
       hasPersistedDraftRef.current = false;
       lastDraftSignatureRef.current = draftSignature;
 
@@ -1813,7 +1919,14 @@ export default function StrengthLogSessionScreen() {
         [
           {
             text: "OK",
-            onPress: () => router.replace(`/train/history/${trainSessionRef.id}`),
+            onPress: () =>
+              router.replace({
+                pathname: "/train/session/[sessionKey]/complete",
+                params: {
+                  sessionKey: encodedKey,
+                  savedSessionId: trainSessionRef.id,
+                },
+              }),
           },
         ]
       );
@@ -1834,6 +1947,8 @@ export default function StrengthLogSessionScreen() {
     hasExistingSessionLog,
     isTimerRunning,
     liveSummary.hasLoggedWork,
+    liveActivity?.startedAt,
+    matchesPersistedLiveSession,
     notes,
     plan?.name,
     plan?.primaryActivity,
@@ -1841,6 +1956,8 @@ export default function StrengthLogSessionScreen() {
     session,
     status,
     strengthExercises,
+    clearLiveActivity,
+    setLiveActivity,
   ]);
 
   if (loading) {
@@ -1859,7 +1976,7 @@ export default function StrengthLogSessionScreen() {
         <View style={styles.centerWrap}>
           <Text style={[styles.errorText, { color: colors.text }]}>{error || "Session not found."}</Text>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={leaveToTrain}
             style={[styles.primaryBtn, { marginTop: 14, backgroundColor: colors.primary }]}
             activeOpacity={0.9}
           >
@@ -1879,11 +1996,11 @@ export default function StrengthLogSessionScreen() {
         >
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={leaveToTrain}
             style={[styles.iconBtn, { borderColor: "transparent", backgroundColor: cardSoft }]}
             activeOpacity={0.85}
           >
-            <Feather name="chevron-left" size={20} color={colors.text} />
+            <Feather name="x" size={20} color={colors.text} />
           </TouchableOpacity>
 
           <View style={styles.headerCenter}>
