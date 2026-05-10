@@ -165,6 +165,17 @@ function collectHardFailures(plan, ctx) {
           `${ctx}/w${week.weekIndex}: planned/budgeted mismatch ${type} (${plannedKm} vs ${budgetedComputedKm})`
         );
       }
+      if (plannedKm != null && distanceKm != null && Math.abs(plannedKm - distanceKm) > 0.01) {
+        failures.push(`${ctx}/w${week.weekIndex}: planned/distanceKm mismatch ${type} (${plannedKm} vs ${distanceKm})`);
+      }
+      if (plannedKm != null && distanceMeters != null) {
+        const expectedPlannedM = Math.round(plannedKm * 1000);
+        if (Math.abs(expectedPlannedM - distanceMeters) > 1) {
+          failures.push(
+            `${ctx}/w${week.weekIndex}: planned/distanceMeters mismatch ${type} (${expectedPlannedM} vs ${distanceMeters})`
+          );
+        }
+      }
 
       if (computedKm != null && estimatedM != null) {
         const expectedM = Math.round(computedKm * 1000);
@@ -187,18 +198,6 @@ function collectHardFailures(plan, ctx) {
       if (computedKm != null && executableKm != null && Math.abs(computedKm - executableKm) > 0.01) {
         failures.push(`${ctx}/w${week.weekIndex}: computed/executable mismatch ${type} (${computedKm} vs ${executableKm})`);
       }
-      if (computedKm != null && distanceKm != null && Math.abs(computedKm - distanceKm) > 0.01) {
-        failures.push(`${ctx}/w${week.weekIndex}: computed/distanceKm mismatch ${type} (${computedKm} vs ${distanceKm})`);
-      }
-      if (computedKm != null && distanceMeters != null) {
-        const expectedDistanceM = Math.round(computedKm * 1000);
-        if (Math.abs(expectedDistanceM - distanceMeters) > 1) {
-          failures.push(
-            `${ctx}/w${week.weekIndex}: computed/distanceMeters mismatch ${type} (${expectedDistanceM} vs ${distanceMeters})`
-          );
-        }
-      }
-
       const explicitDistanceM = steps.reduce((sum, st) => sum + sumDistanceMetersFromStep(st), 0);
       const warmupKm = Math.max(0, toNum(s?.warmupKm) ?? 0);
       const cooldownKm = Math.max(0, toNum(s?.cooldownKm) ?? 0);

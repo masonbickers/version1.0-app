@@ -63,6 +63,8 @@ function ensureMeta(s) {
 function getMinEasyKmPerRun(weeklyKm) {
   const rule = toNum(RULES?.easy?.minKmPerRun);
   if (rule != null) return Math.max(0, rule);
+  if (weeklyKm <= 6) return 1.5;
+  if (weeklyKm < 10) return 2;
   const easyCfg = RULES?.fillSessionsPolicy?.easy || {};
   const at18 = toNum(easyCfg?.minKmPerRunWhenWeeklyAtLeast18) ?? 4.5;
   const below18 = toNum(easyCfg?.minKmPerRunWhenWeeklyBelow18) ?? 3.5;
@@ -205,7 +207,10 @@ function prefersThresholdByGoal(goalKey) {
   }
   return goalKey === "half" || goalKey === "marathon" || goalKey === "ultra";
 }
-function getLongAbsMin() {
+function getLongAbsMin(goalKey = null) {
+  const goal = String(goalKey || "").toLowerCase();
+  if (goal === "return") return 1.5;
+  if (goal === "general") return 2.5;
   return toNum(RULES?.longRun?.minKm) ?? 6;
 }
 function getLongAbsMax() {
@@ -548,7 +553,7 @@ function allocateWeekKmDeterministic({
     longTarget = round1(
       Math.min(
         totalWeeklyKm,
-        clamp(longTargetRaw, getLongAbsMin(), Math.min(getLongAbsMax(), longCapByPct))
+        clamp(longTargetRaw, getLongAbsMin(goalKey), Math.min(getLongAbsMax(), longCapByPct))
       )
     );
 
@@ -720,11 +725,13 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
     // Determine quality days from skeleton intents
     const qualityIntents = new Set(["INTERVALS_PRIMARY", "THRESHOLD_PRIMARY", "TEMPO_PRIMARY", "HILLS_PRIMARY"]);
 
-    // Simplified session composition:
-    // - <=3 runs: 1 quality session
-    // - >=4 runs: up to 2 quality sessions
-    // - always 1 long run (handled below)
-    const requestedQualitySessions = sessionsPerWeek >= 4 ? 2 : 1;
+    const skeletonHardDaysTarget = toNum(sk?.hardDaysTarget);
+    const requestedQualitySessions =
+      skeletonHardDaysTarget != null
+        ? Math.max(0, Math.round(skeletonHardDaysTarget))
+        : sessionsPerWeek >= 4
+        ? 2
+        : 1;
     const maxQualitySlots = Math.max(0, runDays.length - 1); // reserve one slot for LONG
     let desiredHard = Math.min(requestedQualitySessions, maxQualitySlots);
     let qualityCandidates = runDays

@@ -11,6 +11,7 @@ import {
 } from "firebase/firestore";
 
 import { auth, db } from "../../firebaseConfig";
+import { reconcileMissedPlanSessions } from "../train/utils/sessionRecordHelpers";
 
 const DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const JS_DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -587,7 +588,7 @@ export function useHomeDashboardData(options = {}) {
         companion && primary && companion.id !== primary.id ? companion : null;
       const activePlanIds = [primary?.id, resolvedCompanion?.id].filter(Boolean);
 
-      const sessionLogMap = {};
+      let sessionLogMap = {};
       if (activePlanIds.length) {
         try {
           const ref = collection(db, "users", uid, "sessionLogs");
@@ -601,6 +602,21 @@ export function useHomeDashboardData(options = {}) {
         } catch {
           partialErrors.push("session_logs");
         }
+      }
+
+      try {
+        const reconcileResult = await reconcileMissedPlanSessions({
+          uid,
+          plans: [primary, resolvedCompanion].filter(Boolean),
+          sessionLogMap,
+          today: now,
+          source: "home_auto_missed_reconcile",
+        });
+        if (reconcileResult?.sessionLogMap) {
+          sessionLogMap = reconcileResult.sessionLogMap;
+        }
+      } catch {
+        partialErrors.push("missed_sessions");
       }
 
       let weightKg = null;

@@ -889,12 +889,12 @@ function chooseTemplateWeeksWithBridge({
 
   if (!generated.length) {
     const fallback = requested < templateLen
-      ? template.slice(templateLen - requested)
+      ? template.slice(0, requested)
       : template;
     return {
       weeks: normaliseWeekSequence(fallback),
       bridgeMeta: {
-        strategy: requested < templateLen ? "template_tail_trim" : "template_only_no_generated",
+        strategy: requested < templateLen ? "template_head_trim" : "template_only_no_generated",
         requestedWeeks: requested,
         templateWeeks: templateLen,
         generatedWeeks: 0,
@@ -925,9 +925,9 @@ function chooseTemplateWeeksWithBridge({
   }
 
   return {
-    weeks: normaliseWeekSequence(template.slice(templateLen - requested)),
+    weeks: normaliseWeekSequence(generated.slice(0, requested)),
     bridgeMeta: {
-      strategy: "template_tail_trim",
+      strategy: "generated_shorter_than_template",
       requestedWeeks: requested,
       templateWeeks: templateLen,
       generatedWeeks: generated.length,

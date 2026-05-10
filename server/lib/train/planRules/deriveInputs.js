@@ -590,12 +590,28 @@ function applyExplicitPaceOverrides(paces, sourceProfile) {
 }
 
 function deriveMaxHrFromAge(profile) {
-  const age = toNumberOrNull(profile?.current?.age ?? profile?.age);
+  const age = toNumberOrNull(
+    profile?.current?.age ??
+      profile?.age ??
+      ageFromBirthDate(profile?.preferences?.profile?.birthDate)
+  );
   if (!Number.isFinite(age) || age < 12 || age > 100) return null;
 
   const maxHr = Math.round(220 - age);
   if (!Number.isFinite(maxHr) || maxHr < 120 || maxHr > 220) return null;
   return maxHr;
+}
+
+function ageFromBirthDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const d = new Date(`${raw}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  let age = now.getUTCFullYear() - d.getUTCFullYear();
+  const monthDelta = now.getUTCMonth() - d.getUTCMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && now.getUTCDate() < d.getUTCDate())) age -= 1;
+  return age;
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -604,7 +620,11 @@ function deriveMaxHrFromAge(profile) {
 
 function deriveHrZonesFromProfile(profile) {
   const hr = profile?.hr || profile?.current?.hr || {};
-  const age = toNumberOrNull(profile?.current?.age ?? profile?.age);
+  const age = toNumberOrNull(
+    profile?.current?.age ??
+      profile?.age ??
+      ageFromBirthDate(profile?.preferences?.profile?.birthDate)
+  );
   const explicitMax = toNumberOrNull(hr.max);
   const derivedMax = deriveMaxHrFromAge(profile);
   const baselineMax = derivedMax ?? explicitMax;
@@ -747,12 +767,24 @@ export function normaliseAthleteProfile(athleteProfile = {}) {
 
   const experience = normaliseExperienceLabel(sourceProfile?.current?.experience);
   const experienceKey = normaliseExperienceKey(experience);
+  const goalDistanceInput =
+    sourceProfile?.goal?.distance || sourceProfile?.goalDistance || "10K";
+  const goalDistanceKey = normaliseGoalDistanceKey(goalDistanceInput, {
+    fallback: "10K",
+    allowGeneral: true,
+    allowReturn: true,
+  });
+  const goalPolicyKey = goalKeyToPolicyKey(goalDistanceKey, "other");
+  const byDistanceKey = goalKeyToByDistanceKey(goalDistanceKey, "10k");
 
   const weeklyKmRaw = toNumberOrNull(sourceProfile?.current?.weeklyKm);
-  const weeklyKm = weeklyKmRaw && weeklyKmRaw > 0 ? weeklyKmRaw : 15;
+  const weeklyKmDefault = goalDistanceKey === "RETURN" ? 4 : goalDistanceKey === "GENERAL" ? 6 : 15;
+  const weeklyKm = weeklyKmRaw && weeklyKmRaw > 0 ? weeklyKmRaw : weeklyKmDefault;
 
   const longestRunRaw = toNumberOrNull(sourceProfile?.current?.longestRunKm);
-  const longestRunDefault = Math.max(RULES.longRun.minKm, weeklyKm * RULES.longRun.startPctOfWeekly);
+  const longRunMinKm =
+    goalDistanceKey === "RETURN" ? 1.5 : goalDistanceKey === "GENERAL" ? 2.5 : RULES.longRun.minKm;
+  const longestRunDefault = Math.max(longRunMinKm, weeklyKm * RULES.longRun.startPctOfWeekly);
   const longestRunKm = longestRunRaw && longestRunRaw > 0 ? longestRunRaw : longestRunDefault;
 
   const sessionsRaw =
@@ -773,14 +805,6 @@ export function normaliseAthleteProfile(athleteProfile = {}) {
 
   const runDaysClean = ensureRunDaysCount(uniqOrderedDays(runDaysRaw), sessionsPerWeek);
   const longRunDay = chooseLongRunDay(availability?.longRunDay, runDaysClean);
-
-  const goalDistanceInput =
-    sourceProfile?.goal?.distance || sourceProfile?.goalDistance || "10K";
-  const goalDistanceKey = normaliseGoalDistanceKey(goalDistanceInput, {
-    fallback: "10K",
-  });
-  const goalPolicyKey = goalKeyToPolicyKey(goalDistanceKey, "other");
-  const byDistanceKey = goalKeyToByDistanceKey(goalDistanceKey, "10k");
 
   const planLengthRaw =
     toNumberOrNull(sourceProfile?.goal?.planLengthWeeks) ??

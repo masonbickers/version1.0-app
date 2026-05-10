@@ -196,21 +196,21 @@ export default function CreateHome() {
         </View>
 
         <View style={s.header}>
-          <Text style={s.kicker}>PROGRAM BUILDER</Text>
+          <Text style={s.kicker}>Training</Text>
           <Text style={s.title}>Create a Plan</Text>
           <Text style={s.subtitle}>
-            Start with the most important builders for beta. Pick a plan type,
-            set your schedule, and refine it afterwards.
+            Choose the training block you want to build, set the schedule, then
+            refine it from your plan view.
           </Text>
 
           <View style={s.pillRow}>
             <View style={s.pill}>
               <Feather name="check-circle" size={14} color={onAccent} />
-              <Text style={s.pillText}>Beta-ready builders only</Text>
+              <Text style={s.pillText}>Structured plans</Text>
             </View>
             <View style={s.pillMuted}>
               <Feather name="edit-3" size={14} color={colors.subtext} />
-              <Text style={s.pillMutedText}>Editable after creation</Text>
+              <Text style={s.pillMutedText}>Editable later</Text>
             </View>
           </View>
 
@@ -240,7 +240,7 @@ export default function CreateHome() {
           <View style={s.sectionHeader}>
             <Text style={s.sectionTitle}>Start here</Text>
             <Text style={s.sectionSubtitle}>
-              These are the main create flows to support your beta.
+              Core builders for the main training blocks.
             </Text>
           </View>
 
@@ -283,7 +283,7 @@ export default function CreateHome() {
           <View style={s.sectionHeader}>
             <Text style={s.sectionTitle}>Hybrid</Text>
             <Text style={s.sectionSubtitle}>
-              Use this if your Hyrox builder is tested and stable in your app.
+              Combine running and station work into one block.
             </Text>
           </View>
 
@@ -326,7 +326,7 @@ export default function CreateHome() {
           <View style={s.sectionHeader}>
             <Text style={s.sectionTitle}>Experimental</Text>
             <Text style={s.sectionSubtitle}>
-              Visible for beta, but clearly marked so users know it may change.
+              Draft builders that may need more review after creation.
             </Text>
           </View>
 
@@ -369,7 +369,7 @@ export default function CreateHome() {
           <View style={s.sectionHeader}>
             <Text style={s.sectionTitle}>Coming soon</Text>
             <Text style={s.sectionSubtitle}>
-              Hidden from the main beta flow, but shown here to set expectations.
+              Planned builders that are not available yet.
             </Text>
           </View>
 
@@ -404,8 +404,8 @@ export default function CreateHome() {
         <View style={s.footerHint}>
           <Feather name="info" size={14} color={colors.subtext} />
           <Text style={s.footerHintText}>
-            For beta, keep the main user path focused on Run, Strength, and
-            optionally Hyrox. Only expose AI if it has been tested in your build.
+            New plans are saved to your training area and can be edited after
+            creation.
           </Text>
         </View>
       </ScrollView>
@@ -414,36 +414,41 @@ export default function CreateHome() {
 }
 
 function makeStyles(colors, isDark, accent, onAccent) {
-  const silverLight = colors?.sapSilverLight || "#F3F4F6";
-  const silverMedium = colors?.sapSilverMedium || "#E1E3E8";
+  const bg = colors?.bg || (isDark ? "#050506" : "#F5F5F7");
+  const card = colors?.card || (isDark ? "#111217" : "#FFFFFF");
+  const card2 = colors?.card2 || (isDark ? "#17181D" : "#F3F4F6");
+  const border = colors?.border || (isDark ? "rgba(255,255,255,0.12)" : "rgba(17,17,17,0.12)");
+  const quietSurface = card;
+  const quietInset = card2;
+  const softAccent = isDark ? "rgba(230,255,59,0.12)" : "rgba(230,255,59,0.22)";
 
   return StyleSheet.create({
     safe: {
       flex: 1,
-      backgroundColor: isDark ? "#050506" : "#F5F5F7",
+      backgroundColor: bg,
     },
     scrollContent: {
-      paddingHorizontal: 18,
-      paddingTop: 0,
-      paddingBottom: 40,
+      paddingHorizontal: 20,
+      paddingTop: 8,
+      paddingBottom: 52,
     },
 
     headerRow: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
-      marginBottom: 8,
+      marginBottom: 18,
     },
     backBtn: {
       flexDirection: "row",
       alignItems: "center",
       gap: 6,
       borderRadius: 999,
-      paddingHorizontal: 10,
-      paddingVertical: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors?.border,
-      backgroundColor: isDark ? "#111217" : "#E5E7EB",
+      borderColor: border,
+      backgroundColor: quietInset,
     },
     backText: {
       fontSize: 13,
@@ -452,26 +457,27 @@ function makeStyles(colors, isDark, accent, onAccent) {
     },
 
     header: {
-      marginBottom: 20,
+      marginBottom: 24,
     },
     kicker: {
-      fontSize: 11,
+      fontSize: 12,
       textTransform: "uppercase",
-      letterSpacing: 0.8,
+      letterSpacing: 0.6,
       color: colors?.subtext,
-      marginBottom: 4,
+      marginBottom: 8,
       fontWeight: "800",
     },
     title: {
-      fontSize: 30,
-      fontWeight: "800",
+      fontSize: 32,
+      lineHeight: 38,
+      fontWeight: "900",
       color: colors?.text,
-      marginBottom: 4,
+      marginBottom: 8,
     },
     subtitle: {
-      fontSize: 14,
+      fontSize: 15,
       color: colors?.subtext,
-      lineHeight: 20,
+      lineHeight: 22,
       fontWeight: "600",
     },
 
@@ -486,17 +492,12 @@ function makeStyles(colors, isDark, accent, onAccent) {
       alignItems: "center",
       gap: 6,
       paddingHorizontal: 12,
-      paddingVertical: 6,
+      paddingVertical: 8,
       borderRadius: 999,
       backgroundColor: accent,
-      shadowColor: "#000",
-      shadowOpacity: 0.25,
-      shadowRadius: 12,
-      shadowOffset: { width: 0, height: 6 },
-      elevation: 3,
     },
     pillText: {
-      fontSize: 11,
+      fontSize: 12,
       color: onAccent,
       fontWeight: "800",
       letterSpacing: 0.3,
@@ -506,29 +507,25 @@ function makeStyles(colors, isDark, accent, onAccent) {
       alignItems: "center",
       gap: 6,
       paddingHorizontal: 10,
-      paddingVertical: 6,
+      paddingVertical: 8,
       borderRadius: 999,
-      backgroundColor: isDark ? "#111217" : "#E5E7EB",
+      backgroundColor: quietInset,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: colors?.border,
+      borderColor: border,
     },
     pillMutedText: {
-      fontSize: 11,
+      fontSize: 12,
       color: colors?.subtext,
-      fontWeight: "600",
+      fontWeight: "700",
     },
 
     warningBox: {
-      marginTop: 12,
-      padding: 12,
-      borderRadius: 16,
-      backgroundColor: isDark
-        ? "rgba(230,255,59,0.08)"
-        : "rgba(230,255,59,0.22)",
+      marginTop: 16,
+      padding: 14,
+      borderRadius: 18,
+      backgroundColor: softAccent,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: isDark
-        ? "rgba(230,255,59,0.35)"
-        : "rgba(17,17,17,0.08)",
+      borderColor: isDark ? "rgba(230,255,59,0.28)" : "rgba(17,17,17,0.08)",
     },
     warningHead: {
       flexDirection: "row",
@@ -543,10 +540,10 @@ function makeStyles(colors, isDark, accent, onAccent) {
       textTransform: "uppercase",
     },
     warningText: {
-      marginTop: 6,
+      marginTop: 8,
       color: colors?.subtext,
-      fontSize: 12,
-      lineHeight: 17,
+      fontSize: 13,
+      lineHeight: 19,
       fontWeight: "600",
     },
 
@@ -563,14 +560,14 @@ function makeStyles(colors, isDark, accent, onAccent) {
     },
 
     section: {
-      marginBottom: 26,
+      marginBottom: 28,
     },
     sectionHeader: {
-      marginBottom: 8,
+      marginBottom: 10,
     },
     sectionTitle: {
-      fontSize: 16,
-      fontWeight: "800",
+      fontSize: 18,
+      fontWeight: "900",
       color: colors?.text,
       textTransform: "uppercase",
       letterSpacing: 0.5,
@@ -586,12 +583,12 @@ function makeStyles(colors, isDark, accent, onAccent) {
     card: {
       flexDirection: "row",
       alignItems: "center",
-      borderRadius: 18,
-      padding: 14,
+      borderRadius: 20,
+      padding: 16,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMedium,
-      backgroundColor: isDark ? "#111217" : silverLight,
-      marginBottom: 8,
+      borderColor: border,
+      backgroundColor: quietSurface,
+      marginBottom: 10,
     },
     cardDisabled: {
       opacity: 0.65,
@@ -601,17 +598,17 @@ function makeStyles(colors, isDark, accent, onAccent) {
       marginRight: 12,
     },
     iconBg: {
-      height: 44,
-      width: 44,
-      borderRadius: 14,
-      backgroundColor: isDark ? "#050609" : "#FFFFFF",
+      height: 46,
+      width: 46,
+      borderRadius: 16,
+      backgroundColor: quietInset,
       alignItems: "center",
       justifyContent: "center",
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMedium,
+      borderColor: border,
     },
     iconBgDisabled: {
-      backgroundColor: isDark ? "#0B0C10" : "#FFFFFF",
+      backgroundColor: quietInset,
     },
 
     cardMain: {
@@ -625,15 +622,16 @@ function makeStyles(colors, isDark, accent, onAccent) {
       gap: 8,
     },
     cardTitle: {
-      fontSize: 15,
-      fontWeight: "800",
+      fontSize: 16,
+      lineHeight: 20,
+      fontWeight: "900",
       color: colors?.text,
       flex: 1,
     },
     cardDesc: {
-      fontSize: 12,
+      fontSize: 13,
       color: colors?.subtext,
-      lineHeight: 17,
+      lineHeight: 19,
       fontWeight: "600",
     },
 
@@ -648,9 +646,9 @@ function makeStyles(colors, isDark, accent, onAccent) {
       paddingHorizontal: 8,
       paddingVertical: 3,
       borderRadius: 999,
-      backgroundColor: isDark ? "#0B0C10" : "#E5F0FF",
+      backgroundColor: quietInset,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMedium,
+      borderColor: border,
       alignSelf: "flex-start",
     },
     tagText: {
@@ -665,9 +663,9 @@ function makeStyles(colors, isDark, accent, onAccent) {
       paddingHorizontal: 8,
       paddingVertical: 3,
       borderRadius: 999,
-      backgroundColor: isDark ? "#0B0C10" : "#E5E7EB",
+      backgroundColor: quietInset,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: silverMedium,
+      borderColor: border,
     },
     tagTextDisabled: {
       fontSize: 10,
@@ -695,7 +693,9 @@ function makeStyles(colors, isDark, accent, onAccent) {
       paddingHorizontal: 8,
       paddingVertical: 3,
       borderRadius: 999,
-      backgroundColor: isDark ? "#0F172A" : "#E5E7EB",
+      backgroundColor: quietInset,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: border,
     },
     badgeTextMuted: {
       fontSize: 10,
@@ -709,9 +709,9 @@ function makeStyles(colors, isDark, accent, onAccent) {
       paddingHorizontal: 8,
       paddingVertical: 3,
       borderRadius: 999,
-      backgroundColor: isDark ? "rgba(230,255,59,0.10)" : "rgba(230,255,59,0.35)",
+      backgroundColor: softAccent,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: isDark ? "rgba(230,255,59,0.35)" : "rgba(17,17,17,0.08)",
+      borderColor: isDark ? "rgba(230,255,59,0.24)" : "rgba(17,17,17,0.08)",
     },
     badgeTextBeta: {
       fontSize: 10,
@@ -725,7 +725,12 @@ function makeStyles(colors, isDark, accent, onAccent) {
       flexDirection: "row",
       alignItems: "flex-start",
       gap: 6,
-      marginTop: 4,
+      marginTop: 2,
+      padding: 14,
+      borderRadius: 18,
+      backgroundColor: quietSurface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: border,
     },
     footerHintText: {
       fontSize: 11,

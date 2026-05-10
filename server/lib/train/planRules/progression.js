@@ -166,6 +166,7 @@ function getLongRunMaxIncrease({ goal, baseInc }) {
 function getSpecLongRunPolicy(spec) {
   const lr = spec?.longRun || {};
   return {
+    minKm: toNum(lr.minKm) ?? null,
     minOfCurrentLongest: toNum(lr.minOfCurrentLongest) ?? null,
     targetWeeklyFraction: toNum(lr.targetWeeklyFraction) ?? null,
     maxKm: toNum(lr.maxKm) ?? null,
@@ -265,12 +266,21 @@ export function buildProgressionTargets({
   const targets = [];
 
   const diff = normaliseProgressionDifficulty(difficulty);
-  const goal = normaliseGoalDistanceKey(goalDistance, { fallback: "10K" });
+  const goal = normaliseGoalDistanceKey(goalDistance, {
+    fallback: "10K",
+    allowGeneral: true,
+    allowReturn: true,
+  });
   const distanceKey = goalKeyToByDistanceKey(goal, "10k");
 
   const specPolicy = getSpecLongRunPolicy(planSpec);
 
-  const weeklyMinKm = toNum(RULES?.weeklyGrowth?.minKm) ?? 8;
+  const weeklyMinKm =
+    goal === "RETURN"
+      ? 4
+      : goal === "GENERAL"
+      ? 6
+      : toNum(RULES?.weeklyGrowth?.minKm) ?? 8;
   const weeklyMaxPctGrow = toNum(RULES?.weeklyGrowth?.maxPct) ?? 0.1;
   const weeklyMaxKmGrow = toNum(RULES?.weeklyGrowth?.maxKm) ?? 6;
   const startFromUserWeeklyKm = RULES?.weeklyGrowth?.startFromUserWeeklyKm !== false;
@@ -279,7 +289,7 @@ export function buildProgressionTargets({
   const longMaxPctRule = toNum(RULES?.longRun?.maxPctOfWeekly) ?? 0.4;
   const longMaxPct = getLongRunMaxPct({ goal, basePct: longMaxPctRule });
 
-  const longAbsMin = toNum(RULES?.longRun?.minKm) ?? 6;
+  const longAbsMin = toNum(specPolicy?.minKm) ?? toNum(RULES?.longRun?.minKm) ?? 6;
 
   // ✅ unify max long run from: RULES.byDistance -> deriveInputs -> goal caps -> RULES.longRun.maxKm
   const byD = RULES?.byDistance?.[distanceKey] || {};

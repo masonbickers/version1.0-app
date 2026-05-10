@@ -119,6 +119,18 @@ function hasRecentTimesAnchor(profile) {
   return candidates.some((v) => Number.isFinite(parseTimeToSeconds(v)));
 }
 
+function ageFromBirthDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const d = new Date(`${raw}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  let age = now.getUTCFullYear() - d.getUTCFullYear();
+  const monthDelta = now.getUTCMonth() - d.getUTCMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && now.getUTCDate() < d.getUTCDate())) age -= 1;
+  return age;
+}
+
 function validateInputContract(profile) {
   const errors = [];
   const bounds = RULES?.normalization || {};
@@ -144,17 +156,23 @@ function validateInputContract(profile) {
   const current = isPlainObject(profile?.current) ? profile.current : {};
   const availability = isPlainObject(profile?.availability) ? profile.availability : {};
   const preferences = isPlainObject(profile?.preferences) ? profile.preferences : {};
+  let goalDistanceKey = null;
 
   // 1) goal.distance
   const goalDistanceRaw = goal.distance;
   if (typeof goalDistanceRaw !== "string" || !goalDistanceRaw.trim()) {
     errors.push("Missing required field athleteProfile.goal.distance.");
-  } else if (
-    !normaliseGoalDistanceKey(goalDistanceRaw, { fallback: null })
-  ) {
-    errors.push(
-      `Invalid athleteProfile.goal.distance. Supported values include: ${allowedGoalDistances.join(", ")}.`
-    );
+  } else {
+    goalDistanceKey = normaliseGoalDistanceKey(goalDistanceRaw, {
+      fallback: null,
+      allowGeneral: true,
+      allowReturn: true,
+    });
+    if (!goalDistanceKey) {
+      errors.push(
+        `Invalid athleteProfile.goal.distance. Supported values include: ${allowedGoalDistances.join(", ")}.`
+      );
+    }
   }
 
   // 2) goal.planLengthWeeks
@@ -173,7 +191,9 @@ function validateInputContract(profile) {
   const weeklyKm = toNumberOrNull(current.weeklyKm);
   if (current.weeklyKm === undefined || current.weeklyKm === null || current.weeklyKm === "") {
     errors.push("Missing required field athleteProfile.current.weeklyKm.");
-  } else if (!Number.isFinite(weeklyKm) || weeklyKm <= 0) {
+  } else if (!Number.isFinite(weeklyKm) || weeklyKm < 0) {
+    errors.push("Invalid athleteProfile.current.weeklyKm. Expected a non-negative number.");
+  } else if (weeklyKm <= 0 && !["GENERAL", "RETURN"].includes(goalDistanceKey)) {
     errors.push("Invalid athleteProfile.current.weeklyKm. Expected a positive number.");
   }
 
@@ -181,7 +201,9 @@ function validateInputContract(profile) {
   const longestRunKm = toNumberOrNull(current.longestRunKm);
   if (current.longestRunKm === undefined || current.longestRunKm === null || current.longestRunKm === "") {
     errors.push("Missing required field athleteProfile.current.longestRunKm.");
-  } else if (!Number.isFinite(longestRunKm) || longestRunKm <= 0) {
+  } else if (!Number.isFinite(longestRunKm) || longestRunKm < 0) {
+    errors.push("Invalid athleteProfile.current.longestRunKm. Expected a non-negative number.");
+  } else if (longestRunKm <= 0 && !["GENERAL", "RETURN"].includes(goalDistanceKey)) {
     errors.push("Invalid athleteProfile.current.longestRunKm. Expected a positive number.");
   }
 
@@ -283,7 +305,10 @@ function validateInputContract(profile) {
  * HR: age baseline max (220-age) > resting/LTHR overrides where provided
  */
 function deriveMaxHrFromAge(profile) {
-  const ageRaw = profile?.current?.age ?? profile?.age;
+  const ageRaw =
+    profile?.current?.age ??
+    profile?.age ??
+    ageFromBirthDate(profile?.preferences?.profile?.birthDate);
   const age = Number(ageRaw);
   if (!Number.isFinite(age) || age < 12 || age > 100) return null;
 

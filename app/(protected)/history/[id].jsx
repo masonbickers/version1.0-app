@@ -9,8 +9,11 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
+  query,
   serverTimestamp,
   updateDoc,
+  where,
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { useEffect, useMemo, useState } from "react";
@@ -239,6 +242,124 @@ function firstNumber(...values) {
     if (Number.isFinite(n)) return n;
   }
   return null;
+}
+
+function hasStatDisplayValue(value) {
+  if (value == null) return false;
+  const text = String(value).trim();
+  return text.length > 0 && text !== "-" && text !== "—";
+}
+
+function formatCount(value, suffix = "") {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return `${Math.round(n)}${suffix}`;
+}
+
+function formatWeightKg(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return `${Number.isInteger(n) ? n : n.toFixed(1)} kg`;
+}
+
+function formatRestLabel(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n < 60) return `${Math.round(n)} sec rest`;
+  const mins = Math.floor(n / 60);
+  const secs = Math.round(n % 60);
+  if (!secs) return `${mins} min rest`;
+  return `${mins}m ${secs}s rest`;
+}
+
+function formatRpeLabel(value, prefix = "RPE") {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return `${prefix} ${Number.isInteger(n) ? n : n.toFixed(1)}`;
+}
+
+function readStepLabel(step) {
+  return String(
+    step?.label ||
+      step?.title ||
+      step?.name ||
+      step?.type ||
+      step?.kind ||
+      step?.intensity ||
+      "Step"
+  ).trim();
+}
+
+function formatRunStep(step) {
+  const repeat = Number(step?.repeat || step?.reps || 0);
+  const label = readStepLabel(step);
+  const distanceMeters = firstNumber(step?.distanceMeters, step?.distanceM, step?.meters);
+  const distanceKm = firstNumber(step?.distanceKm, step?.km);
+  const durationSec = firstNumber(step?.durationSec, step?.seconds, step?.timeSec);
+  const durationMin = firstNumber(step?.durationMin, step?.minutes);
+  const pace = String(step?.pace || step?.targetPace || step?.paceLabel || "").trim();
+  const effort = String(step?.effort || step?.target || step?.zone || step?.rpe || "").trim();
+
+  const bits = [
+    repeat > 1 ? `${Math.round(repeat)}x` : null,
+    label,
+    distanceMeters ? `${Math.round(distanceMeters)} m` : distanceKm ? `${distanceKm} km` : null,
+    durationSec ? `${Math.round(durationSec / 60)} min` : durationMin ? `${durationMin} min` : null,
+    pace,
+    effort,
+  ].filter(Boolean);
+
+  return bits.join(" · ");
+}
+
+function flattenRunSteps(steps, depth = 0) {
+  if (!Array.isArray(steps) || depth > 3) return [];
+  const out = [];
+  steps.forEach((step) => {
+    const nested = Array.isArray(step?.steps)
+      ? step.steps
+      : Array.isArray(step?.children)
+      ? step.children
+      : [];
+    const current = formatRunStep(step);
+    if (current) out.push(current);
+    if (nested.length) {
+      out.push(...flattenRunSteps(nested, depth + 1));
+    }
+  });
+  return out;
+}
+
+function strengthBlocksToEntries(blocks) {
+  const out = [];
+  (Array.isArray(blocks) ? blocks : []).forEach((block, blockIdx) => {
+    const blockTitle = String(block?.title || block?.name || `Block ${blockIdx + 1}`).trim();
+    const items = firstArray(block?.items, block?.exercises, block?.movements);
+    items.forEach((item, itemIdx) => {
+      out.push({
+        id: item?.id || `planned-${blockIdx}-${itemIdx}`,
+        title: item?.title || item?.name || item?.exerciseName || `Exercise ${itemIdx + 1}`,
+        blockTitle: blockTitle || "Main block",
+        prescribed: {
+          sets: firstNumber(item?.sets, item?.targetSets),
+          reps: firstNumber(item?.reps, item?.targetReps),
+          loadKg: firstNumber(item?.loadKg, item?.weightKg),
+          restSec: firstNumber(item?.restSec, item?.restSeconds),
+          rpe: firstNumber(item?.rpe, item?.targetRpe),
+        },
+        performed: {},
+      });
+    });
+  });
+  return out;
+}
+
+function normaliseExerciseKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 
 function normalizePhotoUrls(value) {
@@ -523,6 +644,47 @@ function filterHeartRateChartPoints(points) {
   });
 }
 
+function buildStreamChartAxisPoints({ distanceValues, timeValues, valueValues, fallbackDurationSec }) {
+  const values = Array.isArray(valueValues) ? valueValues : [];
+  if (values.length < 2) return { points: [], unit: "km" };
+
+  const distance = Array.isArray(distanceValues) ? distanceValues : [];
+  const distancePoints = values
+    .map((value, index) => ({
+      x: Number(distance[index]) / 1000,
+      y: Number(value),
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  const distanceXs = distancePoints.map((point) => point.x);
+  const distanceRange = distanceXs.length > 1 ? Math.max(...distanceXs) - Math.min(...distanceXs) : 0;
+  if (distancePoints.length > 1 && distanceRange >= 0.02) {
+    return { points: distancePoints, unit: "km" };
+  }
+
+  const time = Array.isArray(timeValues) ? timeValues : [];
+  const timePoints = values
+    .map((value, index) => ({
+      x: Number(time[index]) / 60,
+      y: Number(value),
+    }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+  const timeXs = timePoints.map((point) => point.x);
+  const timeRange = timeXs.length > 1 ? Math.max(...timeXs) - Math.min(...timeXs) : 0;
+  if (timePoints.length > 1 && timeRange > 0) {
+    return { points: timePoints, unit: "min" };
+  }
+
+  const durationSec = Number(fallbackDurationSec || 0);
+  const durationMin = durationSec > 0 ? durationSec / 60 : Math.max(values.length - 1, 1);
+  return {
+    points: values.map((value, index) => ({
+      x: values.length > 1 ? (index / (values.length - 1)) * durationMin : 0,
+      y: Number(value),
+    })),
+    unit: durationSec > 0 ? "min" : "samples",
+  };
+}
+
 function smoothChartPoints(points) {
   const safe = Array.isArray(points) ? points : [];
   if (safe.length < 7) return safe;
@@ -668,9 +830,11 @@ function mapStoredActivityToHistoryShape(docId, data, source) {
     device_name: source?.startsWith("garmin") ? "Garmin" : data?.device_name,
     description: data?.description || data?.note || "",
     perceivedEffort: data?.perceivedEffort || data?.effortRating || data?.effort || "",
-    effortRatingNumeric: finiteNumber(data?.effortRatingNumeric, data?.effortScore, data?.rpe) || undefined,
-    activityLabel: data?.activityLabel || data?.label || data?.sessionLabel || "",
-    photoUrls: normalizePhotoUrls(data?.photoUrls || data?.photos || data?.imageUrl),
+	    effortRatingNumeric: finiteNumber(data?.effortRatingNumeric, data?.effortScore, data?.rpe) || undefined,
+	    activityLabel: data?.activityLabel || data?.label || data?.sessionLabel || "",
+	    linkedTrainSessionId: data?.linkedTrainSessionId || raw?.linkedTrainSessionId || null,
+	    linkedSessionKey: data?.linkedSessionKey || raw?.linkedSessionKey || null,
+	    photoUrls: normalizePhotoUrls(data?.photoUrls || data?.photos || data?.imageUrl),
     map: summaryPolyline ? { summary_polyline: summaryPolyline } : undefined,
     routeCoordinates: routeCoordinates.length > 1 ? routeCoordinates : undefined,
     source,
@@ -739,8 +903,10 @@ export default function ActivityDetailPage() {
   const [linkedPlanSession, setLinkedPlanSession] = useState(null);
   const [targetPlanSessionOption, setTargetPlanSessionOption] = useState(null);
   const [targetTrainSession, setTargetTrainSession] = useState(null);
+  const [targetPlannedSession, setTargetPlannedSession] = useState(null);
   const [targetTrainSessionError, setTargetTrainSessionError] = useState("");
   const [linkingTrainSession, setLinkingTrainSession] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editName, setEditName] = useState("");
@@ -753,20 +919,43 @@ export default function ActivityDetailPage() {
   const [editEffortBarWidth, setEditEffortBarWidth] = useState(0);
   const [editMediaUris, setEditMediaUris] = useState([]);
   const [editDeleting, setEditDeleting] = useState(false);
+  const linkedActivityReferences = useMemo(() => {
+    const refs = [
+      activity?.id,
+      activity?.sourceDocId,
+      activity?.storedData?.activityId,
+      activity?.storedData?.id,
+      id,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    return [...new Set(refs)];
+  }, [
+    activity?.id,
+    activity?.sourceDocId,
+    activity?.storedData?.activityId,
+    activity?.storedData?.id,
+    id,
+  ]);
   const targetTrainSessionId = useMemo(() => {
     const raw = Array.isArray(params?.linkTrainSessionId)
       ? params.linkTrainSessionId[0]
       : params?.linkTrainSessionId;
-    const value = String(raw || "").trim();
+    const value = String(
+      raw ||
+        activity?.linkedTrainSessionId ||
+        activity?.storedData?.linkedTrainSessionId ||
+        ""
+    ).trim();
     return value || null;
-  }, [params?.linkTrainSessionId]);
+  }, [activity?.linkedTrainSessionId, activity?.storedData?.linkedTrainSessionId, params?.linkTrainSessionId]);
   const targetPlanSessionKey = useMemo(() => {
     const raw = Array.isArray(params?.linkSessionKey)
       ? params.linkSessionKey[0]
       : params?.linkSessionKey;
-    const value = String(raw || "").trim();
+    const value = String(raw || activity?.linkedSessionKey || activity?.storedData?.linkedSessionKey || "").trim();
     return value || null;
-  }, [params?.linkSessionKey]);
+  }, [activity?.linkedSessionKey, activity?.storedData?.linkedSessionKey, params?.linkSessionKey]);
   const targetPlanSessionTitleParam = useMemo(() => {
     const raw = Array.isArray(params?.linkSessionTitle)
       ? params.linkSessionTitle[0]
@@ -1010,7 +1199,7 @@ export default function ActivityDetailPage() {
     let cancelled = false;
 
     const loadTargetTrainSession = async () => {
-      if (!targetTrainSessionId) {
+      if (!targetTrainSessionId && !linkedActivityReferences.length) {
         setTargetTrainSession(null);
         setTargetTrainSessionError("");
         return;
@@ -1024,15 +1213,63 @@ export default function ActivityDetailPage() {
       }
 
       try {
-        const snap = await getDoc(
-          doc(db, "users", uid, "trainSessions", String(targetTrainSessionId))
-        );
+        let snap = null;
+
+        if (targetTrainSessionId) {
+          snap = await getDoc(
+            doc(db, "users", uid, "trainSessions", String(targetTrainSessionId))
+          );
+        }
+
+        if ((!snap || !snap.exists()) && linkedActivityReferences.length) {
+          const sessionKey = String(activity?.linkedSessionKey || activity?.storedData?.linkedSessionKey || "").trim();
+          if (sessionKey) {
+            const logSnap = await getDoc(doc(db, "users", uid, "sessionLogs", sessionKey));
+            const logData = logSnap.exists() ? logSnap.data() || {} : null;
+            const lastTrainSessionId = String(logData?.lastTrainSessionId || "").trim();
+            if (lastTrainSessionId) {
+              snap = await getDoc(doc(db, "users", uid, "trainSessions", lastTrainSessionId));
+            }
+          }
+        }
+
+        if ((!snap || !snap.exists()) && linkedActivityReferences.length) {
+          for (const refValue of linkedActivityReferences) {
+            const sessionsSnap = await getDocs(
+              query(
+                collection(db, "users", uid, "trainSessions"),
+                where("linkedActivity.reference", "==", refValue),
+                limit(1)
+              )
+            );
+            snap = sessionsSnap.docs[0] || null;
+            if (snap?.exists()) break;
+          }
+        }
+
+        if ((!snap || !snap.exists()) && linkedActivityReferences.length) {
+          for (const refValue of linkedActivityReferences) {
+            const logsSnap = await getDocs(
+              query(
+                collection(db, "users", uid, "sessionLogs"),
+                where("linkedActivity.reference", "==", refValue),
+                limit(1)
+              )
+            );
+            const logData = logsSnap.docs[0]?.data() || null;
+            const lastTrainSessionId = String(logData?.lastTrainSessionId || "").trim();
+            if (lastTrainSessionId) {
+              snap = await getDoc(doc(db, "users", uid, "trainSessions", lastTrainSessionId));
+              if (snap.exists()) break;
+            }
+          }
+        }
 
         if (cancelled) return;
 
-        if (!snap.exists()) {
+        if (!snap || !snap.exists()) {
           setTargetTrainSession(null);
-          setTargetTrainSessionError("Training session not found.");
+          setTargetTrainSessionError("");
           return;
         }
 
@@ -1052,7 +1289,56 @@ export default function ActivityDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [targetTrainSessionId]);
+  }, [activity?.linkedSessionKey, activity?.storedData?.linkedSessionKey, linkedActivityReferences, targetTrainSessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTargetPlannedSession = async () => {
+      setTargetPlannedSession(null);
+      const uid = auth.currentUser?.uid;
+      const planId = String(targetTrainSession?.planId || "").trim();
+      if (!uid || !planId) return;
+
+      const weekIndex = Number(targetTrainSession?.weekIndex);
+      const dayIndex = Number(targetTrainSession?.dayIndex);
+      const sessionIndex = Number(targetTrainSession?.sessionIndex);
+      if (
+        !Number.isFinite(weekIndex) ||
+        !Number.isFinite(dayIndex) ||
+        !Number.isFinite(sessionIndex)
+      ) {
+        return;
+      }
+
+      try {
+        const planSnap = await getDoc(doc(db, "users", uid, "plans", planId));
+        if (cancelled || !planSnap.exists()) return;
+        const planData = planSnap.data() || {};
+        const weeks = Array.isArray(planData?.weeks)
+          ? planData.weeks
+          : Array.isArray(planData?.plan?.weeks)
+          ? planData.plan.weeks
+          : [];
+        const session =
+          weeks?.[weekIndex]?.days?.[dayIndex]?.sessions?.[sessionIndex] || null;
+        setTargetPlannedSession(session || null);
+      } catch (e) {
+        console.log("Target planned session load error", e?.message || e);
+      }
+    };
+
+    loadTargetPlannedSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    targetTrainSession?.dayIndex,
+    targetTrainSession?.planId,
+    targetTrainSession?.sessionIndex,
+    targetTrainSession?.weekIndex,
+  ]);
 
   const formatDistance = (m) =>
     m ? (m / 1000).toFixed(2) + " km" : "-";
@@ -1109,9 +1395,12 @@ export default function ActivityDetailPage() {
   const elapsedTime = activity?.elapsed_time ?? null;
   const type = activity?.type ?? "";
   const activityMode = normaliseActivityMode(type, distance);
-  const isStrengthActivity = activityMode === "strength";
   const activityTypeLabel = formatActivityTypeLabel(type, distance);
   const name = activity?.name || activityTypeLabel || "Workout";
+  const nameLooksStrength = /\b(strength|weight|weights|gym|lower|lowers|upper|legs|push|pull)\b/i.test(
+    String(name || type || "")
+  );
+  const isStrengthActivity = activityMode === "strength" || nameLooksStrength;
   const paceSecPerKm =
     distance && movingTime ? movingTime / (distance / 1000) : null;
   const analysisAthleteProfile = useMemo(() => {
@@ -1442,17 +1731,20 @@ export default function ActivityDetailPage() {
     return filterPaceChartPoints(splitPoints);
   }, [streams.distance, streams.velocity, splitRows]);
 
-  const hrLinePoints = useMemo(() => {
-    const distanceArr = streams.distance || [];
+  const hrChartData = useMemo(() => {
     const hrArr = streams.heartrate || [];
-    const len = Math.min(distanceArr.length, hrArr.length);
 
-    if (len > 1) {
-      const rawPoints = Array.from({ length: len }, (_, i) => ({
-        x: Number(distanceArr[i] || 0) / 1000,
-        y: Number(hrArr[i] || 0),
-      }));
-      return smoothChartPoints(filterHeartRateChartPoints(rawPoints));
+    if (hrArr.length > 1) {
+      const axisData = buildStreamChartAxisPoints({
+        distanceValues: streams.distance || [],
+        timeValues: streams.time || [],
+        valueValues: hrArr,
+        fallbackDurationSec: movingTime || elapsedTime,
+      });
+      return {
+        points: smoothChartPoints(filterHeartRateChartPoints(axisData.points)),
+        unit: axisData.unit,
+      };
     }
 
     let totalKm = 0;
@@ -1464,8 +1756,13 @@ export default function ActivityDetailPage() {
           y: row.hr,
         };
       });
-    return filterHeartRateChartPoints(splitPoints);
-  }, [streams.distance, streams.heartrate, splitRows]);
+    return {
+      points: filterHeartRateChartPoints(splitPoints),
+      unit: "km",
+    };
+  }, [elapsedTime, movingTime, streams.distance, streams.heartrate, streams.time, splitRows]);
+  const hrLinePoints = hrChartData.points;
+  const hrChartUnit = hrChartData.unit;
 
   const elevationLinePoints = useMemo(() => {
     const distanceArr = streams.distance || [];
@@ -2376,7 +2673,7 @@ export default function ActivityDetailPage() {
           },
         ];
 
-    return orderedStats.filter((item) => item.value).slice(0, 6);
+    return orderedStats.filter((item) => hasStatDisplayValue(item.value)).slice(0, 6);
   }, [
     activity?.kilojoules,
     activity?.suffer_score,
@@ -2466,37 +2763,86 @@ export default function ActivityDetailPage() {
 
   const sessionBenefit = useMemo(() => {
     if (!activity) return "";
+    const titleText = String(name || activityTypeLabel || "").toLowerCase();
+    const durationText = movingTime
+      ? (() => {
+          const totalSeconds = Math.max(0, Math.round(Number(movingTime)));
+          const h = Math.floor(totalSeconds / 3600);
+          const m = Math.floor((totalSeconds % 3600) / 60);
+          return h > 0 ? `${h}h ${m}m` : `${m}m`;
+        })()
+      : "";
+    const hasHr = avgHrValue != null;
+    const controlledHr = hasHr && Number(avgHrValue) < 145;
+    const steadyHr = hasHr && Number(avgHrValue) >= 145 && Number(avgHrValue) < 160;
+    const hardHr = hasHr && Number(avgHrValue) >= 160;
+    const dominantHrZone = hrZones.length
+      ? [...hrZones].sort((a, b) => b.percentage - a.percentage)[0]
+      : null;
+
     if (isStrengthActivity) {
-      if (avgHrValue != null && avgHrValue >= 120) {
-        return "This session builds muscular endurance while adding a useful cardiovascular load.";
+      const strengthFocus = titleText.includes("lower") || titleText.includes("leg")
+        ? "lower-body strength"
+        : titleText.includes("upper") || titleText.includes("push") || titleText.includes("pull")
+        ? "upper-body strength"
+        : "strength";
+      const durationPrefix = durationText ? `This ${durationText} ${strengthFocus} session` : `This ${strengthFocus} session`;
+
+      if (hasHr && Number(avgHrValue) >= 120) {
+        return `Strength endurance benefit: ${durationPrefix} builds muscular endurance and adds a useful aerobic load without needing to be a maximal effort.`;
       }
       if (movingTime && movingTime >= 45 * 60) {
-        return "This session builds strength capacity and supports better fatigue resistance.";
+        return `Strength capacity benefit: ${durationPrefix} builds strength capacity and supports better fatigue resistance for future training.`;
       }
-      return "This session supports strength maintenance and helps keep your training routine consistent.";
+      return `Strength maintenance benefit: ${durationPrefix} supports strength maintenance, movement quality, and weekly training consistency.`;
     }
 
     const distanceKm = Number(distance || 0) > 0 ? Number(distance) / 1000 : 0;
     const pace = Number(paceSecPerKm || 0);
-    const avgHr = Number(avgHrValue || 0);
+    const roundedDistance =
+      distanceKm > 0 ? (distanceKm >= 10 ? distanceKm.toFixed(1) : distanceKm.toFixed(2)) : "";
+    const sessionPrefix = roundedDistance
+      ? `This ${roundedDistance} km ${activityTypeLabel.toLowerCase()}`
+      : durationText
+      ? `This ${durationText} ${activityTypeLabel.toLowerCase()}`
+      : "This session";
 
+    if (dominantHrZone?.label === "Z5" || (hardHr && distanceKm > 0)) {
+      return `Anaerobic capacity benefit: ${sessionPrefix} targets high-intensity tolerance and improves your ability to handle harder surges.`;
+    }
+    if (dominantHrZone?.label === "Z4") {
+      return `Threshold benefit: ${sessionPrefix} develops your ability to sustain hard controlled work without tipping too far into fatigue.`;
+    }
     if (distanceKm >= 12) {
-      return "This session builds endurance and improves your ability to hold form late in longer efforts.";
+      return `Aerobic endurance benefit: ${sessionPrefix} builds endurance and improves your ability to hold form late in longer efforts.`;
     }
-    if (avgHr >= 155 || (pace > 0 && distanceKm >= 3 && distanceKm < 8)) {
-      return "This session develops aerobic power and improves your ability to sustain faster running.";
+    if (hardHr || (pace > 0 && distanceKm >= 3 && distanceKm < 8 && !controlledHr)) {
+      return `Aerobic power benefit: ${sessionPrefix} develops aerobic power and improves your ability to sustain faster running.`;
     }
-    if (distanceKm > 0 && avgHr > 0 && avgHr < 145) {
-      return "This session builds aerobic fitness with controlled effort and supports recovery between harder days.";
+    if (distanceKm > 0 && controlledHr) {
+      return `Easy aerobic benefit: ${sessionPrefix} builds aerobic fitness with controlled effort and supports recovery between harder days.`;
+    }
+    if (distanceKm > 0 && steadyHr) {
+      return `Steady aerobic benefit: ${sessionPrefix} gives steady aerobic work, adding useful fitness without turning the day into an all-out effort.`;
     }
     if (distanceKm > 0) {
-      return "This session adds useful aerobic volume and helps build consistency.";
+      return `Aerobic volume benefit: ${sessionPrefix} adds useful aerobic volume and helps build consistency.`;
     }
     if (movingTime) {
-      return "This session adds training load and helps maintain momentum.";
+      return `General conditioning benefit: ${sessionPrefix} adds training load and helps maintain momentum.`;
     }
     return "";
-  }, [activity, avgHrValue, distance, isStrengthActivity, movingTime, paceSecPerKm]);
+  }, [
+    activity,
+    activityTypeLabel,
+    avgHrValue,
+    distance,
+    hrZones,
+    isStrengthActivity,
+    movingTime,
+    name,
+    paceSecPerKm,
+  ]);
 
   const targetTrainSessionTitle = useMemo(() => {
     const title = String(
@@ -2542,8 +2888,217 @@ export default function ActivityDetailPage() {
 
   const isLinkedToTargetSession = useMemo(() => {
     const ref = String(targetTrainSession?.linkedActivity?.reference || "").trim();
-    return !!ref && ref === String(activity?.id || "");
-  }, [activity?.id, targetTrainSession?.linkedActivity?.reference]);
+    return !!ref && linkedActivityReferences.includes(ref);
+  }, [linkedActivityReferences, targetTrainSession?.linkedActivity?.reference]);
+
+  const performedSessionSummary = useMemo(() => {
+    if (!activity) return null;
+
+    const plannedSession =
+      targetPlannedSession ||
+      targetTrainSession ||
+      linkedPlanSession?.session ||
+      targetPlanSessionOption?.session ||
+      null;
+    const title = String(
+      targetTrainSession?.title ||
+        linkedPlanSession?.session?.title ||
+        linkedPlanSession?.session?.name ||
+        targetPlanSessionOption?.session?.title ||
+        targetPlanSessionOption?.session?.name ||
+        name ||
+        activityTypeLabel ||
+        "Session"
+    ).trim();
+
+    if (isStrengthActivity) {
+      const loggedEntries = firstArray(
+        targetTrainSession?.strengthLog?.entries,
+        activity?.storedData?.strengthLog?.entries,
+        activity?.storedData?.exercises,
+        activity?.storedData?.exerciseSets,
+        activity?.storedData?.rawGarminActivity?.exercises,
+        activity?.storedData?.rawGarminActivity?.strengthExercises,
+        activity?.storedData?.rawGarminActivity?.activityDetail?.exercises
+      );
+      const plannedEntries = [
+        ...strengthBlocksToEntries(targetPlannedSession?.blocks),
+        ...strengthBlocksToEntries(targetTrainSession?.blocks),
+        ...strengthBlocksToEntries(plannedSession?.blocks),
+      ];
+      const loggedByKey = new Map();
+      loggedEntries.forEach((entry) => {
+        const key = normaliseExerciseKey(entry?.exerciseKey || entry?.title || entry?.name || entry?.exerciseName || entry?.id);
+        if (key) loggedByKey.set(key, entry);
+      });
+      const plannedByKey = new Map();
+      plannedEntries.forEach((entry) => {
+        const key = normaliseExerciseKey(entry?.exerciseKey || entry?.title || entry?.name || entry?.exerciseName || entry?.id);
+        if (key && !plannedByKey.has(key)) plannedByKey.set(key, entry);
+      });
+      const mergedEntries = [];
+      loggedEntries.forEach((entry) => {
+        const key = normaliseExerciseKey(entry?.exerciseKey || entry?.title || entry?.name || entry?.exerciseName || entry?.id);
+        const planned = key ? plannedByKey.get(key) : null;
+        mergedEntries.push({
+          ...(planned || {}),
+          ...entry,
+          prescribed: {
+            ...((planned || {})?.prescribed || {}),
+            ...(entry?.prescribed || {}),
+          },
+          performed: {
+            ...(entry?.performed || {}),
+          },
+        });
+      });
+      plannedEntries.forEach((entry) => {
+        const key = normaliseExerciseKey(entry?.exerciseKey || entry?.title || entry?.name || entry?.exerciseName || entry?.id);
+        if (!key || !loggedByKey.has(key)) mergedEntries.push(entry);
+      });
+      const entries = mergedEntries;
+      const sections = [];
+      const byTitle = new Map();
+      let hasLoggedWeights = false;
+
+      entries.forEach((entry, entryIdx) => {
+        const blockTitle = String(entry?.blockTitle || entry?.group || "Main block").trim() || "Main block";
+        const key = blockTitle.toLowerCase();
+        let section = byTitle.get(key);
+        if (!section) {
+          section = { title: blockTitle, items: [] };
+          byTitle.set(key, section);
+          sections.push(section);
+        }
+
+        const performed = entry?.performed || entry || {};
+        const prescribed = entry?.prescribed || entry || {};
+        const rawSetLogs = firstArray(
+          performed?.setLogs,
+          performed?.sets,
+          performed?.setsLog,
+          entry?.setLogs,
+          entry?.setsLog,
+          entry?.sets,
+          entry?.loggedSets,
+          entry?.completedSets
+        );
+        const setLogs = rawSetLogs
+          .map((setRow, setIdx) => ({
+            set: setRow?.set || setIdx + 1,
+            loadKg: firstNumber(
+              setRow?.loadKg,
+              setRow?.weightKg,
+              setRow?.weight,
+              setRow?.weight_kg,
+              setRow?.load
+            ),
+            reps: firstNumber(setRow?.reps, setRow?.repCount, setRow?.repetitions),
+            completed: !!setRow?.completed || !!setRow?.done,
+          }))
+          .filter((setRow) => setRow.loadKg != null || setRow.reps != null || setRow.completed);
+
+        const prescribedBits = [
+          prescribed?.sets && prescribed?.reps
+            ? `${prescribed.sets} x ${prescribed.reps}`
+            : prescribed?.sets
+            ? `${prescribed.sets} sets`
+            : prescribed?.reps
+            ? `${prescribed.reps} reps`
+            : null,
+          formatWeightKg(prescribed?.loadKg),
+          formatRestLabel(prescribed?.restSec),
+          formatRpeLabel(prescribed?.rpe, "Target RPE"),
+        ].filter(Boolean);
+
+        const entryHasLoggedWeights =
+          setLogs.some((setRow) => setRow.loadKg != null || setRow.reps != null) ||
+          firstNumber(performed?.loadKg, performed?.weightKg, performed?.weight, performed?.reps, performed?.repCount) != null;
+        if (entryHasLoggedWeights) hasLoggedWeights = true;
+
+        section.items.push({
+          id: entry?.id || `strength-entry-${entryIdx}`,
+          title: String(entry?.title || entry?.name || entry?.exerciseName || `Exercise ${entryIdx + 1}`).trim(),
+          prescribed: prescribedBits.join(" · "),
+          setLogs,
+          hasLoggedWeights: entryHasLoggedWeights,
+          performedBits: [
+            performed?.completedSets ? `${performed.completedSets} completed sets` : null,
+            performed?.sets ? `${performed.sets} tracked sets` : null,
+            formatCount(firstNumber(performed?.reps, performed?.repCount), " reps"),
+            formatWeightKg(firstNumber(performed?.loadKg, performed?.weightKg, performed?.weight)),
+            formatRpeLabel(performed?.actualRpe, "Actual RPE"),
+          ].filter(Boolean),
+        });
+      });
+
+      return {
+        mode: "strength",
+        title,
+        fillSessionKey: String(targetTrainSession?.sessionKey || targetPlanSessionKey || activity?.linkedSessionKey || activity?.storedData?.linkedSessionKey || "").trim(),
+        hasLoggedWeights,
+        subtitle: targetTrainSession?.strengthLog?.entries?.length
+          ? "Logged exercises, sets, reps, and weights from the linked training session."
+          : targetPlannedSession?.blocks?.length
+          ? "Planned exercises from the training plan. Logged weights appear here when they were recorded in the session."
+          : "Exercise detail appears when Garmin or your in-app workout log records sets, reps, and load.",
+        sections,
+      };
+    }
+
+    const stepSource = firstArray(
+      plannedSession?.segments,
+      plannedSession?.steps,
+      plannedSession?.workout?.steps
+    );
+    const stepLines = flattenRunSteps(stepSource).slice(0, 8);
+    const distanceLabel = Number(distance) > 0 ? `${(Number(distance) / 1000).toFixed(2)} km` : null;
+    const durationLabel =
+      Number(movingTime) > 0
+        ? (() => {
+            const totalSeconds = Math.max(0, Math.round(Number(movingTime)));
+            const h = Math.floor(totalSeconds / 3600);
+            const m = Math.floor((totalSeconds % 3600) / 60);
+            const s = totalSeconds % 60;
+            return h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`;
+          })()
+        : null;
+    const paceLabel =
+      paceSecPerKm && Number.isFinite(Number(paceSecPerKm))
+        ? `${Math.floor(Number(paceSecPerKm) / 60)}:${Math.round(Number(paceSecPerKm) % 60)
+            .toString()
+            .padStart(2, "0")}/km`
+        : null;
+    const actualLine = [
+      distanceLabel,
+      durationLabel,
+      paceLabel,
+      avgHrValue != null ? `${Math.round(avgHrValue)} bpm avg HR` : null,
+    ].filter(Boolean).join(" · ");
+
+    return {
+      mode: "run",
+      title,
+      subtitle: targetTrainSession || linkedPlanSession
+        ? "Planned structure with the recorded activity result."
+        : "Recorded run details from the activity.",
+      lines: [actualLine, ...stepLines].filter(Boolean),
+    };
+  }, [
+    activity,
+    activityTypeLabel,
+    avgHrValue,
+    distance,
+    isStrengthActivity,
+    linkedPlanSession,
+    movingTime,
+    name,
+    paceSecPerKm,
+    targetPlanSessionOption,
+    targetPlanSessionKey,
+    targetPlannedSession,
+    targetTrainSession,
+  ]);
 
   const isStoredActivity = Boolean(activity?.source);
   const canEditStoredActivity = Boolean(isStoredActivity && activity?.sourceDocId && activity?.source);
@@ -3104,24 +3659,35 @@ export default function ActivityDetailPage() {
   return (
     <SafeAreaView style={s.safe}>
       <View style={s.header}>
-        <TouchableOpacity
-          onPress={handleBackPress}
-          style={s.backBtn}
-          activeOpacity={0.8}
-        >
-          <Feather name="chevron-left" size={20} color={colors.text} />
-        </TouchableOpacity>
+        <View style={s.headerSide}>
+          <TouchableOpacity
+            onPress={handleBackPress}
+            style={s.backBtn}
+            activeOpacity={0.8}
+          >
+            <Feather name="chevron-left" size={20} color={colors.text} />
+          </TouchableOpacity>
+        </View>
         <Text style={s.headerTitle} numberOfLines={1}>
           Activity
         </Text>
-        <TouchableOpacity
-          onPress={openEditActivity}
-          style={[s.backBtn, !canEditStoredActivity && s.headerBtnDisabled]}
-          activeOpacity={0.8}
-          disabled={!canEditStoredActivity}
-        >
-          <Feather name="edit-3" size={17} color={colors.text} />
-        </TouchableOpacity>
+        <View style={[s.headerSide, s.headerActions]}>
+          <TouchableOpacity
+            onPress={() => setInfoOpen(true)}
+            style={s.backBtn}
+            activeOpacity={0.8}
+          >
+            <Feather name="info" size={17} color={colors.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={openEditActivity}
+            style={[s.backBtn, !canEditStoredActivity && s.headerBtnDisabled]}
+            activeOpacity={0.8}
+            disabled={!canEditStoredActivity}
+          >
+            <Feather name="edit-3" size={17} color={colors.text} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {loading ? (
@@ -3218,6 +3784,104 @@ export default function ActivityDetailPage() {
             </View>
           ) : null}
 
+          {performedSessionSummary ? (
+            <View style={s.performedCard}>
+              <View style={s.performedHeader}>
+                <View style={s.performedIcon}>
+                  <Feather
+                    name={performedSessionSummary.mode === "strength" ? "list" : "route"}
+                    size={15}
+                    color={accentText}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.performedEyebrow}>Completed session</Text>
+                  <Text style={s.performedTitle}>{performedSessionSummary.title}</Text>
+                  <Text style={s.performedSubtitle}>{performedSessionSummary.subtitle}</Text>
+                </View>
+              </View>
+
+              {performedSessionSummary.mode === "strength" ? (
+                <>
+                {performedSessionSummary.sections.length ? (
+                  <View style={s.performedStack}>
+                    {performedSessionSummary.sections.map((section, sectionIdx) => (
+                      <View key={`${section.title}-${sectionIdx}`} style={s.performedSection}>
+                        <Text style={s.performedSectionTitle}>{section.title}</Text>
+                        {section.items.map((entry, entryIdx) => (
+                          <View key={`${entry.id}-${entryIdx}`} style={s.performedExercise}>
+                            <Text style={s.performedExerciseTitle}>{entry.title}</Text>
+                            {entry.prescribed ? (
+                              <Text style={s.performedExerciseMeta}>{entry.prescribed}</Text>
+                            ) : null}
+                            {entry.performedBits.length ? (
+                              <Text style={s.performedExerciseMeta}>{entry.performedBits.join(" · ")}</Text>
+                            ) : null}
+                            {entry.setLogs.length ? (
+                              <View style={s.performedSetStack}>
+                                {entry.setLogs.slice(0, 6).map((setRow, setIdx) => {
+                                  const setParts = [
+                                    formatWeightKg(setRow.loadKg),
+                                    formatCount(setRow.reps, " reps"),
+                                  ].filter(Boolean);
+                                  return (
+                                    <View key={`${entry.id}-set-${setIdx}`} style={s.performedSetRow}>
+                                      <Text style={s.performedSetIndex}>Set {setRow.set || setIdx + 1}</Text>
+                                      <Text style={s.performedSetValue}>
+                                        {setParts.join(" · ") || (setRow.completed ? "Completed" : "Logged")}
+                                      </Text>
+                                    </View>
+                                  );
+                                })}
+                                {entry.setLogs.length > 6 ? (
+                                  <Text style={s.performedExerciseMeta}>
+                                    +{entry.setLogs.length - 6} more sets
+                                  </Text>
+                                ) : null}
+                              </View>
+                            ) : null}
+                          </View>
+                        ))}
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={s.performedEmptyText}>
+                    No exercise-level sets, reps, or weights have been filled out yet.
+                  </Text>
+                )}
+                {!performedSessionSummary.hasLoggedWeights && performedSessionSummary.fillSessionKey ? (
+                  <TouchableOpacity
+                    style={s.performedActionButton}
+                    activeOpacity={0.88}
+                    onPress={() => {
+                      router.push(
+                        `/train/session/${encodeURIComponent(performedSessionSummary.fillSessionKey)}/log-strength`
+                      );
+                    }}
+                  >
+                    <Feather name="edit-3" size={15} color={accentText} />
+                    <Text style={s.performedActionText}>Fill weights</Text>
+                  </TouchableOpacity>
+                ) : null}
+                </>
+              ) : performedSessionSummary.lines.length ? (
+                <View style={s.performedStack}>
+                  {performedSessionSummary.lines.map((line, idx) => (
+                    <View key={`run-session-line-${idx}`} style={s.performedRunLine}>
+                      <Text style={s.performedRunIndex}>{idx === 0 ? "Result" : `Step ${idx}`}</Text>
+                      <Text style={s.performedRunText}>{line}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={s.performedEmptyText}>
+                  No structured run steps were recorded for this activity.
+                </Text>
+              )}
+            </View>
+          ) : null}
+
           {/* Key stats */}
           <View style={s.statsGrid}>
             {topStats.map((stat) => (
@@ -3267,7 +3931,7 @@ export default function ActivityDetailPage() {
             </View>
           ) : null}
 
-          {targetTrainSessionId ? (
+          {targetTrainSessionId && !targetTrainSession && targetTrainSessionError ? (
             <View style={s.linkPlanCard}>
               <View style={s.linkPlanHeader}>
                 <Text style={s.linkPlanEyebrow}>Training Session</Text>
@@ -3323,7 +3987,7 @@ export default function ActivityDetailPage() {
             </View>
           ) : null}
 
-          {targetPlanSessionKey ? (
+          {targetPlanSessionKey && !targetTrainSession && !isLinkedToTargetPlanSession ? (
             <View style={s.linkPlanCard}>
               <View style={s.linkPlanHeader}>
                 <Text style={s.linkPlanEyebrow}>Planned Session</Text>
@@ -3544,12 +4208,13 @@ export default function ActivityDetailPage() {
                 <View style={s.analyticsItem}>
                   <Text style={s.sectionTitle}>Heart Rate</Text>
                   {hrLinePoints.length > 1 ? (
-                    <LineProfileChart
-                      data={hrLinePoints}
-                      colors={colors}
-                      isDark={isDark}
-                      accent={isDark ? "#EF4444" : "#DC2626"}
-                    />
+                      <LineProfileChart
+                        data={hrLinePoints}
+                        colors={colors}
+                        isDark={isDark}
+                        accent={isDark ? "#EF4444" : "#DC2626"}
+                        xUnit={hrChartUnit}
+                      />
                   ) : (
                     <Text style={s.centerText}>No heart-rate stream available for this activity.</Text>
                   )}
@@ -3774,12 +4439,13 @@ export default function ActivityDetailPage() {
                 <View style={s.analyticsItem}>
                   <Text style={s.sectionTitle}>Heart Rate</Text>
                   {hrLinePoints.length > 1 ? (
-                    <LineProfileChart
-                      data={hrLinePoints}
-                      colors={colors}
-                      isDark={isDark}
-                      accent={isDark ? "#EF4444" : "#DC2626"}
-                    />
+                      <LineProfileChart
+                        data={hrLinePoints}
+                        colors={colors}
+                        isDark={isDark}
+                        accent={isDark ? "#EF4444" : "#DC2626"}
+                        xUnit={hrChartUnit}
+                      />
                   ) : null}
                   <View style={s.metricInlineRow}>
                     <MetricInline
@@ -4316,10 +4982,81 @@ export default function ActivityDetailPage() {
             ) : null}
           </View>
         </ScrollView>
-      )}
+	      )}
 
-      <Modal
-        visible={editOpen}
+	      <Modal
+	        visible={infoOpen}
+	        transparent
+	        animationType="fade"
+	        onRequestClose={() => setInfoOpen(false)}
+	      >
+	        <View style={s.modalBackdrop}>
+	          <View style={s.infoSheet}>
+	            <View style={s.planPickerHeader}>
+	              <View style={{ flex: 1 }}>
+	                <Text style={s.planPickerTitle}>Activity info</Text>
+	                <Text style={s.planPickerSubtitle}>
+	                  {name}{activityTypeLabel ? ` · ${activityTypeLabel}` : ""}
+	                </Text>
+	              </View>
+	              <TouchableOpacity
+	                onPress={() => setInfoOpen(false)}
+	                activeOpacity={0.85}
+	                style={s.planPickerClose}
+	              >
+	                <Feather name="x" size={18} color={colors.text} />
+	              </TouchableOpacity>
+	            </View>
+
+	            <ScrollView
+	              style={{ marginTop: 12 }}
+	              showsVerticalScrollIndicator={false}
+	              contentContainerStyle={{ gap: 10, paddingBottom: 4 }}
+	            >
+	              <View style={s.infoPanel}>
+	                <View style={s.infoPanelIcon}>
+	                  <Feather name="zap" size={15} color={accentText} />
+	                </View>
+	                <View style={{ flex: 1 }}>
+	                  <Text style={s.infoPanelLabel}>Session benefit</Text>
+	                  <Text style={s.infoPanelText}>
+	                    {sessionBenefit || "This activity adds useful training context for your coach."}
+	                  </Text>
+	                </View>
+	              </View>
+
+	              <View style={s.infoMetricGrid}>
+	                <DetailStat label="Source" value={deviceLabel || activity?.source || "Activity"} colors={colors} isDark={isDark} />
+	                <DetailStat label="Type" value={activityTypeLabel || "Workout"} colors={colors} isDark={isDark} />
+	                <DetailStat label="Duration" value={formatDuration(movingTime)} colors={colors} isDark={isDark} />
+	                <DetailStat label="Avg HR" value={avgHrValue != null ? `${Math.round(avgHrValue)} bpm` : "-"} colors={colors} isDark={isDark} />
+	              </View>
+
+	              {quickInsight ? (
+	                <View style={s.infoPanelMuted}>
+	                  <Text style={s.infoPanelLabel}>Quick read</Text>
+	                  <Text style={s.infoPanelText}>{quickInsight}</Text>
+	                </View>
+	              ) : null}
+
+	              {targetTrainSession || linkedPlanSession ? (
+	                <View style={s.infoPanelMuted}>
+	                  <Text style={s.infoPanelLabel}>Linked training</Text>
+	                  <Text style={s.infoPanelText}>
+	                    {targetTrainSession?.title ||
+	                      linkedPlanSession?.title ||
+	                      linkedPlanSession?.session?.title ||
+	                      "Linked planned session"}
+	                  </Text>
+	                </View>
+	              ) : null}
+	            </ScrollView>
+	          </View>
+	        </View>
+	      </Modal>
+
+	      <Modal
+	        visible={editOpen}
         animationType="slide"
         presentationStyle="fullScreen"
         onRequestClose={() => {
@@ -4640,7 +5377,7 @@ export default function ActivityDetailPage() {
 
 /* ---- local components ---- */
 
-function LineProfileChart({ data, colors, isDark, accent }) {
+function LineProfileChart({ data, colors, isDark, accent, xUnit = "km" }) {
   const width = 340;
   const height = 140;
   const padLeft = 10;
@@ -4658,8 +5395,9 @@ function LineProfileChart({ data, colors, isDark, accent }) {
 
   if (safe.length < 2) return null;
 
-  const minX = Math.min(...safe.map((p) => Number(p.x)));
+  const rawMinX = Math.min(...safe.map((p) => Number(p.x)));
   const maxXRaw = Math.max(...safe.map((p) => Number(p.x)));
+  const minX = rawMinX < 0 ? rawMinX : 0;
   const maxX = maxXRaw > minX ? maxXRaw : minX + 1;
 
   const rawMinY = Math.min(...safe.map((p) => Number(p.y)));
@@ -4708,8 +5446,16 @@ function LineProfileChart({ data, colors, isDark, accent }) {
         </Svg>
       </View>
       <View style={{ marginTop: 4, flexDirection: "row", justifyContent: "space-between" }}>
-        <Text style={{ fontSize: 10, color: colors.subtext }}>0 km</Text>
-        <Text style={{ fontSize: 10, color: colors.subtext }}>{`${Math.max(0, Math.round(maxX))} km`}</Text>
+        <Text style={{ fontSize: 10, color: colors.subtext }}>
+          {xUnit === "km" ? "0 km" : xUnit === "min" ? "0 min" : "0"}
+        </Text>
+        <Text style={{ fontSize: 10, color: colors.subtext }}>
+          {xUnit === "km"
+            ? `${Math.max(0, Math.round(maxX))} km`
+            : xUnit === "min"
+            ? `${Math.max(0, Math.round(maxX))} min`
+            : `${Math.max(0, Math.round(maxX))}`}
+        </Text>
       </View>
     </View>
   );
@@ -5240,6 +5986,15 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: borderSoft,
     },
+    headerSide: {
+      width: 76,
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    headerActions: {
+      justifyContent: "flex-end",
+      gap: 8,
+    },
     headerBtnDisabled: {
       opacity: 0.35,
     },
@@ -5338,6 +6093,143 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       lineHeight: 19,
       fontWeight: "800",
       color: colors.text,
+    },
+    performedCard: {
+      borderRadius: 18,
+      padding: 14,
+      backgroundColor: cardBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    performedHeader: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 10,
+    },
+    performedIcon: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: accentFill,
+    },
+    performedEyebrow: {
+      fontSize: 10,
+      fontWeight: "900",
+      color: colors.subtext,
+      textTransform: "uppercase",
+      letterSpacing: 0.7,
+    },
+    performedTitle: {
+      marginTop: 3,
+      fontSize: 15,
+      lineHeight: 19,
+      fontWeight: "900",
+      color: colors.text,
+    },
+    performedSubtitle: {
+      marginTop: 3,
+      fontSize: 12,
+      lineHeight: 17,
+      fontWeight: "700",
+      color: colors.subtext,
+    },
+    performedStack: {
+      marginTop: 12,
+      gap: 10,
+    },
+    performedSection: {
+      gap: 8,
+    },
+    performedSectionTitle: {
+      fontSize: 11,
+      fontWeight: "900",
+      color: colors.subtext,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+    },
+    performedExercise: {
+      paddingTop: 9,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: borderSoft,
+    },
+    performedExerciseTitle: {
+      fontSize: 13,
+      fontWeight: "900",
+      color: colors.text,
+    },
+    performedExerciseMeta: {
+      marginTop: 3,
+      fontSize: 11,
+      lineHeight: 16,
+      fontWeight: "700",
+      color: colors.subtext,
+    },
+    performedSetStack: {
+      marginTop: 8,
+      gap: 5,
+    },
+    performedSetRow: {
+      minHeight: 30,
+      borderRadius: 10,
+      paddingHorizontal: 10,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      backgroundColor: isDark ? "rgba(255,255,255,0.05)" : colors.sapSilverLight || colors.card,
+    },
+    performedSetIndex: {
+      fontSize: 11,
+      fontWeight: "800",
+      color: colors.subtext,
+    },
+    performedSetValue: {
+      fontSize: 12,
+      fontWeight: "900",
+      color: colors.text,
+    },
+    performedRunLine: {
+      paddingTop: 9,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: borderSoft,
+    },
+    performedRunIndex: {
+      fontSize: 10,
+      fontWeight: "900",
+      color: colors.subtext,
+      textTransform: "uppercase",
+      letterSpacing: 0.4,
+    },
+    performedRunText: {
+      marginTop: 3,
+      fontSize: 13,
+      lineHeight: 18,
+      fontWeight: "800",
+      color: colors.text,
+    },
+    performedEmptyText: {
+      marginTop: 12,
+      fontSize: 12,
+      lineHeight: 18,
+      fontWeight: "700",
+      color: colors.subtext,
+    },
+    performedActionButton: {
+      marginTop: 12,
+      minHeight: 44,
+      borderRadius: 14,
+      paddingHorizontal: 14,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      backgroundColor: accentFill,
+    },
+    performedActionText: {
+      fontSize: 14,
+      fontWeight: "900",
+      color: accentText,
     },
     activityTitle: {
       fontSize: 18,
@@ -5630,6 +6522,59 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       backgroundColor: cardBg,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: borderSoft,
+    },
+    infoSheet: {
+      maxHeight: "70%",
+      borderRadius: 22,
+      padding: 16,
+      backgroundColor: cardBg,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    infoPanel: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 10,
+      padding: 13,
+      borderRadius: 16,
+      backgroundColor: isDark ? "rgba(230,255,59,0.10)" : "rgba(184,215,0,0.14)",
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: isDark ? "rgba(230,255,59,0.24)" : "rgba(132,153,0,0.24)",
+    },
+    infoPanelMuted: {
+      padding: 13,
+      borderRadius: 16,
+      backgroundColor: isDark ? "rgba(255,255,255,0.05)" : colors.sapSilverLight || colors.card,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: borderSoft,
+    },
+    infoPanelIcon: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: accentFill,
+    },
+    infoPanelLabel: {
+      fontSize: 10,
+      fontWeight: "900",
+      color: colors.subtext,
+      textTransform: "uppercase",
+      letterSpacing: 0.7,
+    },
+    infoPanelText: {
+      marginTop: 5,
+      fontSize: 13,
+      lineHeight: 19,
+      fontWeight: "800",
+      color: colors.text,
+    },
+    infoMetricGrid: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+      justifyContent: "space-between",
     },
     editSheet: {
       maxHeight: "86%",

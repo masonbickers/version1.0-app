@@ -794,10 +794,11 @@ export default function CreateRunPlan() {
 
   const weeklyDistanceInput = String(currentWeeklyDistance || "").trim();
   const weeklyDistanceValue = Number(weeklyDistanceInput);
+  const allowsZeroWeeklyDistance = goalType === "start" || goalType === "return" || goalType === "general";
   const hasValidWeeklyDistance =
     weeklyDistanceInput.length > 0 &&
     Number.isFinite(weeklyDistanceValue) &&
-    weeklyDistanceValue >= 0;
+    (weeklyDistanceValue > 0 || (allowsZeroWeeklyDistance && weeklyDistanceValue >= 0));
 
   const birthAgeYears = useMemo(() => ageFromDate(birthDate), [birthDate]);
 
@@ -1163,8 +1164,18 @@ export default function CreateRunPlan() {
       thresholdPaceSecPerKm || goalTimePaces?.thresholdPaceSecPerKm || null;
 
     const planQuality = difficultyApi === "easy" ? "standard" : "high";
-    const weeklyKmNum = hasValidWeeklyDistance ? Math.round(weeklyDistanceValue * 10) / 10 : 0;
-    const longestRunEstimatedKm = Math.max(5, Math.round(weeklyKmNum * 0.35));
+    const weeklyBaselineKm =
+      goalType === "return" ? 4 : goalType === "start" ? 6 : goalType === "general" ? 8 : 0;
+    const weeklyKmRaw = hasValidWeeklyDistance ? weeklyDistanceValue : 0;
+    const weeklyKmNum = Math.round(Math.max(weeklyKmRaw, weeklyBaselineKm) * 10) / 10;
+    const longestRunFloorKm =
+      goalType === "return" ? 1.5 : goalType === "start" ? 2 : goalType === "general" ? 2.5 : 3;
+    const longestRunEstimatedKm = Math.round(
+      Math.min(
+        Math.max(longestRunFloorKm, weeklyKmNum * 0.35),
+        Math.max(longestRunFloorKm, weeklyKmNum * 0.5)
+      ) * 10
+    ) / 10;
 
     const athleteProfile = {
       goal: {
@@ -1190,6 +1201,7 @@ export default function CreateRunPlan() {
         weeklyKm: weeklyKmNum,
         longestRunKm: longestRunEstimatedKm,
         experience: experienceLevel,
+        age: birthAgeYears,
         recentTimes: {
           fiveK: fiveKTimeSec ? String(fiveKTime.trim()) : "",
           tenK: tenKTimeSec ? String(tenKTime.trim()) : "",

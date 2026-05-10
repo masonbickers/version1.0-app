@@ -43,11 +43,18 @@ import { useLiveActivity } from "../../../providers/LiveActivityProvider";
 import { useTheme } from "../../../providers/ThemeProvider";
 import { dedupeActivities } from "../../../src/lib/activities/activityDedupe";
 import {
+  buildLinkedActivityPayload,
+  matchImportedActivityToPlannedSession as matchImportedActivityToPlannedSessionStrict,
+} from "../../../src/train/utils/activitySessionMatch";
+import {
   ACTIVE_LIVE_ACTIVITY_STATUSES,
   isLiveActivityStale,
   normaliseLiveActivityStatus,
 } from "../../../src/train/utils/liveActivityHelpers";
-import { linkExternalActivityToPlannedSession } from "../../../src/train/utils/sessionRecordHelpers";
+import {
+  linkExternalActivityToPlannedSession,
+  reconcileMissedPlanSessions,
+} from "../../../src/train/utils/sessionRecordHelpers";
 
 /* ──────────────────────────────────────────────────────────────
    Helpers + constants
@@ -72,6 +79,33 @@ const TRAIN_INDEX_SCREEN_CACHE = {
   scrollOffsetY: 0,
   weekStripWidth: 0,
 };
+
+function storedActivitySourceFromProvider(provider, fallbackSource = "") {
+  const explicit = String(fallbackSource || "").trim();
+  if (explicit) return explicit;
+
+  const raw = String(provider || "").trim().toLowerCase();
+  if (raw.includes("strava")) return "stravaActivities";
+  if (raw.includes("garmin")) return "garmin_activities";
+  return "";
+}
+
+function resolveLinkedActivityTarget(linkedActivity) {
+  const id = String(
+    linkedActivity?.reference ||
+      linkedActivity?.id ||
+      linkedActivity?.activityId ||
+      linkedActivity?.sourceDocId ||
+      ""
+  ).trim();
+  const source = storedActivitySourceFromProvider(
+    linkedActivity?.provider,
+    linkedActivity?.source || linkedActivity?.collection
+  );
+
+  if (!id || !source) return null;
+  return { id, source };
+}
 
 const SAMPLE_WORKOUTS = [
   {
@@ -1291,88 +1325,8 @@ function normaliseExternalActivity(docSnap, source) {
   };
 }
 
-function plannedSessionTargetDistanceKm(session = {}) {
-  const value =
-    session?.workout?.totalDistanceKm ??
-    session?.targetDistanceKm ??
-    session?.plannedDistanceKm ??
-    session?.distanceKm ??
-    session?.totalDistanceKm ??
-    (Number(session?.workout?.totalDistanceMeters) > 0
-      ? Number(session.workout.totalDistanceMeters) / 1000
-      : null);
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-}
-
-function plannedSessionTargetDurationMin(session = {}) {
-  const value =
-    session?.workout?.totalDurationSec != null
-      ? Number(session.workout.totalDurationSec) / 60
-      : session?.targetDurationMin ?? session?.durationMin ?? session?.totalDurationMin;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
-}
-
-function activitySportKind(activity = {}) {
-  const text = `${activity?.type || ""} ${activity?.title || ""}`.toLowerCase();
-  if (/\b(run|running|trail|treadmill|walk|walking)\b/.test(text)) return "run";
-  if (/\b(strength|weight|weights|gym|cardio|fitness|training)\b/.test(text)) return "strength";
-  if (Number(activity?.distanceMeters || 0) > 1000) return "run";
-  return "other";
-}
-
 function matchImportedActivityToSession(activity, plannedSession) {
-  if (!activity || !plannedSession?.key || !plannedSession?.sess) return null;
-  if (activity?.linkedSessionKey || activity?.linkedTrainSessionId) return null;
-  if (String(activity?.linkStatus || "").toLowerCase() === "ignored") return null;
-  if (plannedSession?.status === "completed" || plannedSession?.status === "skipped") return null;
-  if (plannedSession?.isoDate && activity?.isoDate && plannedSession.isoDate !== activity.isoDate) {
-    return null;
-  }
-
-  const plannedSport = sessionSportKind(plannedSession.sess);
-  const activitySport = activitySportKind(activity);
-  let score = 0;
-
-  if (plannedSport === activitySport) score += 38;
-  else if (plannedSport === "run" && activitySport === "other" && Number(activity?.distanceMeters || 0) > 0) {
-    score += 18;
-  } else if (plannedSport === "strength" && activitySport === "other" && !activity?.distanceMeters) {
-    score += 14;
-  } else {
-    return null;
-  }
-
-  const plannedDistanceKm = plannedSessionTargetDistanceKm(plannedSession.sess);
-  const actualDistanceKm = Number(activity?.distanceMeters || 0) / 1000;
-  if (plannedDistanceKm && actualDistanceKm > 0) {
-    const diffRatio = Math.abs(actualDistanceKm - plannedDistanceKm) / Math.max(plannedDistanceKm, 0.1);
-    if (diffRatio <= 0.08) score += 32;
-    else if (diffRatio <= 0.18) score += 24;
-    else if (diffRatio <= 0.35) score += 10;
-    else score -= 18;
-  }
-
-  const plannedDurationMin = plannedSessionTargetDurationMin(plannedSession.sess);
-  const actualDurationMin = Number(activity?.durationSeconds || 0) / 60;
-  if (plannedDurationMin && actualDurationMin > 0) {
-    const diffRatio = Math.abs(actualDurationMin - plannedDurationMin) / Math.max(plannedDurationMin, 1);
-    if (diffRatio <= 0.12) score += 24;
-    else if (diffRatio <= 0.25) score += 16;
-    else if (diffRatio <= 0.45) score += 6;
-    else score -= 10;
-  }
-
-  if (activity?.provider === "Garmin" || activity?.provider === "Strava") score += 8;
-
-  if (score < 44) return null;
-  return {
-    score,
-    activity,
-    sessionCard: plannedSession,
-    provider: activity.provider || "Imported",
-  };
+  return matchImportedActivityToPlannedSessionStrict(activity, plannedSession);
 }
 
 function formatPaceShort(secPerKm) {
@@ -1559,6 +1513,112 @@ function summariseCardStatuses(cards) {
   };
 }
 
+function focusedDayDisplayLabel(day) {
+  if (!day) return "selected day";
+  if (day.isToday) return "today";
+  const fullWeekday = day.date
+    ? new Date(day.date).toLocaleDateString("en-GB", { weekday: "long" })
+    : "";
+  return fullWeekday || day.dateLabel || day.dayLabel || "selected day";
+}
+
+function dayStatusFromModel({
+  plannedSessions = [],
+  completedSessions = [],
+  skippedSessions = [],
+  suggestedMatches = [],
+  unresolvedActivities = [],
+} = {}) {
+  if (suggestedMatches.length || unresolvedActivities.length) return "needs_review";
+  if (!plannedSessions.length) return "rest";
+  if (completedSessions.length === plannedSessions.length) return "completed";
+  if (completedSessions.length > 0) return "partial";
+  if (skippedSessions.length > 0) return "skipped";
+  return "planned";
+}
+
+function weekStripStatusForDay(day, activities = []) {
+  const cards = Array.isArray(day?.cards) ? day.cards : [];
+  const plannedSessions = cards.filter((card) => card?.key && !card?.isExtraCompletedSession);
+  const completedSessions = plannedSessions.filter((card) => card?.status === "completed");
+  const skippedSessions = plannedSessions.filter((card) => card?.status === "skipped");
+  const unlinkedActivities = (Array.isArray(activities) ? activities : []).filter(
+    (activity) => !activity?.linkedSessionKey && !activity?.linkedTrainSessionId
+  );
+  const suggestedMatches = [];
+  plannedSessions.forEach((card) => {
+    unlinkedActivities.forEach((activity) => {
+      const match = matchImportedActivityToSession(activity, {
+        ...card,
+        isoDate: day?.isoDate,
+      });
+      if (match) suggestedMatches.push(match);
+    });
+  });
+
+  return dayStatusFromModel({
+    plannedSessions,
+    completedSessions,
+    skippedSessions,
+    suggestedMatches,
+    unresolvedActivities: suggestedMatches.length ? [] : unlinkedActivities,
+  });
+}
+
+function dayStatusStyles(status, theme, { isSelected = false, isToday = false, hasSessions = false } = {}) {
+  if (isSelected) {
+    return {
+      backgroundColor: theme.primaryBg,
+      borderColor: theme.primaryBg,
+      textColor: theme.primaryText,
+      dotColor: theme.primaryText,
+    };
+  }
+
+  if (status === "needs_review") {
+    return {
+      backgroundColor: withHexAlpha(theme.primaryBg, theme.isDark ? "24" : "30"),
+      borderColor: theme.primaryBg,
+      textColor: theme.text,
+      dotColor: theme.primaryBg,
+    };
+  }
+
+  if (status === "completed") {
+    return {
+      backgroundColor: withHexAlpha(theme.primaryBg, theme.isDark ? "1A" : "26"),
+      borderColor: theme.primaryBg,
+      textColor: theme.text,
+      dotColor: theme.primaryBg,
+    };
+  }
+
+  if (status === "partial") {
+    return {
+      backgroundColor: theme.card2,
+      borderColor: theme.primaryBg,
+      textColor: theme.text,
+      dotColor: theme.primaryBg,
+    };
+  }
+
+  if (status === "skipped") {
+    return {
+      backgroundColor: "rgba(248,113,113,0.14)",
+      borderColor: "rgba(248,113,113,0.48)",
+      textColor: theme.text,
+      dotColor: "#F87171",
+    };
+  }
+
+  return {
+    backgroundColor: hasSessions ? theme.card2 : "transparent",
+    borderColor: hasSessions || isToday ? theme.border : "transparent",
+    textColor: hasSessions ? theme.text : theme.subtext,
+    dotColor: isToday ? theme.primaryBg : theme.text,
+  };
+}
+
 function DayPill({ theme, item, onPress }) {
   const active = item.isToday;
   const sessionCount = Array.isArray(item.cards) ? item.cards.length : 0;
@@ -1709,7 +1769,7 @@ export default function TrainIndex() {
       : {}
   );
   const [completedTrainSessions, setCompletedTrainSessions] = useState([]);
-  const [completedExternalActivities, setCompletedExternalActivities] = useState([]);
+  const [externalActivities, setExternalActivities] = useState([]);
   const [ignoredSuggestedMatchKeys, setIgnoredSuggestedMatchKeys] = useState({});
   const [linkingSuggestedMatch, setLinkingSuggestedMatch] = useState(false);
   const [sessionLogsReady, setSessionLogsReady] = useState(() =>
@@ -1833,21 +1893,48 @@ export default function TrainIndex() {
   );
 
   const openExternalActivityFromTrain = useCallback(
-    (activity) => {
-      if (!activity?.id || !activity?.source) return;
+    (activity, options = {}) => {
+      const id = String(activity?.id || activity?.reference || "").trim();
+      const source = storedActivitySourceFromProvider(activity?.provider, activity?.source);
+      if (!id || !source) return false;
+      const linkedTrainSessionId = String(
+        options?.linkedTrainSessionId ||
+          activity?.linkedTrainSessionId ||
+          activity?.trainSessionId ||
+          ""
+      ).trim();
       router.push({
         pathname: "/me/activity/[id]",
         params: {
-          id: String(activity.id),
-          source: String(activity.source),
+          id,
+          source,
           from: "train",
+          ...(linkedTrainSessionId ? { linkTrainSessionId: linkedTrainSessionId } : {}),
           returnWeekIndex: String(currentWeekIndex),
           returnDayIndex: String(selectedDayIndex),
           returnToken: String(Date.now()),
         },
       });
+      return true;
     },
     [currentWeekIndex, router, selectedDayIndex]
+  );
+
+  const openLinkedActivityFromTrain = useCallback(
+    (linkedActivity, options = {}) => {
+      const target = resolveLinkedActivityTarget(linkedActivity);
+      if (!target) return false;
+      return openExternalActivityFromTrain(target, options);
+    },
+    [openExternalActivityFromTrain]
+  );
+
+  const openCompletedSessionFromTrain = useCallback(
+    (sessionId, linkedActivity = null) => {
+      if (openLinkedActivityFromTrain(linkedActivity, { linkedTrainSessionId: sessionId })) return;
+      openHistorySessionFromTrain(sessionId);
+    },
+    [openHistorySessionFromTrain, openLinkedActivityFromTrain]
   );
 
   const hasPlan = !!(plan || companionPlan);
@@ -2205,7 +2292,7 @@ export default function TrainIndex() {
   useEffect(() => {
     const uid = currentUid;
     if (!uid) {
-      setCompletedExternalActivities([]);
+      setExternalActivities([]);
       return;
     }
 
@@ -2227,7 +2314,7 @@ export default function TrainIndex() {
 
     const sync = () => {
       if (closed) return;
-      setCompletedExternalActivities(
+      setExternalActivities(
         dedupeActivities(Object.values(partial).flat())
           .filter((activity) => activity?.id && activity?.isoDate)
           .sort((a, b) => Number(b.startMs || 0) - Number(a.startMs || 0))
@@ -2266,6 +2353,20 @@ export default function TrainIndex() {
       });
     };
   }, [currentUid]);
+
+  const externalActivitiesByIso = useMemo(() => {
+    const byIso = {};
+    (Array.isArray(externalActivities) ? externalActivities : []).forEach((activity) => {
+      const isoDate = String(activity?.isoDate || "");
+      if (!isoDate) return;
+      if (!byIso[isoDate]) byIso[isoDate] = [];
+      byIso[isoDate].push(activity);
+    });
+    Object.values(byIso).forEach((items) => {
+      items.sort((a, b) => Number(b.startMs || 0) - Number(a.startMs || 0));
+    });
+    return byIso;
+  }, [externalActivities]);
 
   const visibleWeeksCount = useMemo(() => {
     if (!hasPlan) return 0;
@@ -2632,6 +2733,10 @@ export default function TrainIndex() {
 
       const allCards = [...cards, ...extraCards];
       const sessionSummary = summariseCardStatuses(allCards);
+      const dayStatus = weekStripStatusForDay(
+        { isoDate, cards: allCards },
+        externalActivitiesByIso[isoDate] || []
+      );
 
       const dateLabel = fmtDayDate(date);
       const short = new Date(date).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
@@ -2646,9 +2751,10 @@ export default function TrainIndex() {
         isToday,
         cards: allCards,
         sessionSummary,
+        dayStatus,
       };
     });
-  }, [extraCompletedSessionsByIso, plan?.id, planWeekZeroStart, sessionLogMap, todayIso]);
+  }, [externalActivitiesByIso, extraCompletedSessionsByIso, plan?.id, planWeekZeroStart, sessionLogMap, todayIso]);
 
   const weekGrid = useMemo(
     () => buildWeekGrid(week, currentWeekIndex),
@@ -2656,6 +2762,7 @@ export default function TrainIndex() {
   );
 
   const activeWeekAutoSyncRef = useRef("");
+  const missedSessionReconcileRef = useRef("");
   useEffect(() => {
     if (!hasPlan || loading) return;
     if (!visibleWeeksCount) return;
@@ -2699,6 +2806,54 @@ export default function TrainIndex() {
     visibleWeeksCount,
   ]);
 
+  useEffect(() => {
+    if (!hasPlan || loading || !sessionLogsReady || sessionLogsReadyKey !== activePlanKey) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid || !activePlanKey) return;
+
+    const todayKey = toISODate(calendarNow);
+    const reconcileKey = `${uid}:${activePlanKey}:${todayKey}`;
+    if (missedSessionReconcileRef.current === reconcileKey) return;
+    missedSessionReconcileRef.current = reconcileKey;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await reconcileMissedPlanSessions({
+          uid,
+          plans: [plan, companionPlan].filter(Boolean),
+          sessionLogMap,
+          today: calendarNow,
+        });
+
+        if (!cancelled && result?.changed) {
+          if (result?.sessionLogMap) setSessionLogMap(result.sessionLogMap);
+          if (result?.planWriteCount > 0) {
+            await loadLatestPlan();
+          }
+        }
+      } catch (e) {
+        missedSessionReconcileRef.current = "";
+        console.log("[train] missed session reconciliation skipped:", e?.message || e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activePlanKey,
+    calendarNow,
+    companionPlan,
+    hasPlan,
+    loadLatestPlan,
+    loading,
+    plan,
+    sessionLogMap,
+    sessionLogsReady,
+    sessionLogsReadyKey,
+  ]);
+
   const weekCarouselPanels = useMemo(() => {
     const prevWeekIndex = clampWeekIndex(currentWeekIndex - 1);
     const nextWeekIndex = clampWeekIndex(currentWeekIndex + 1);
@@ -2719,22 +2874,20 @@ export default function TrainIndex() {
     () => weekGrid?.[selectedDayIndex] || today || weekGrid?.[0] || null,
     [weekGrid, selectedDayIndex, today]
   );
-  const focusedDayActivities = useMemo(() => {
+  const externalActivitiesForFocusedDay = useMemo(() => {
     const isoDate = String(focusedDay?.isoDate || "");
     if (!isoDate) return [];
-    return completedExternalActivities
-      .filter((activity) => activity.isoDate === isoDate)
+    return (externalActivitiesByIso[isoDate] || [])
       .sort((a, b) => Number(b.startMs || 0) - Number(a.startMs || 0));
-  }, [completedExternalActivities, focusedDay?.isoDate]);
+  }, [externalActivitiesByIso, focusedDay?.isoDate]);
   const focusedDayCards = useMemo(
     () => (Array.isArray(focusedDay?.cards) ? focusedDay.cards : []),
     [focusedDay]
   );
-  const suggestedActivityMatch = useMemo(() => {
-    if (!focusedDay?.isoDate || !focusedDayActivities.length || !focusedDayCards.length) {
-      return null;
+  const suggestedActivityMatches = useMemo(() => {
+    if (!focusedDay?.isoDate || !externalActivitiesForFocusedDay.length || !focusedDayCards.length) {
+      return [];
     }
-
     const plannedCards = focusedDayCards
       .filter((card) => card?.key && !card?.isExtraCompletedSession)
       .map((card) => ({
@@ -2742,19 +2895,57 @@ export default function TrainIndex() {
         isoDate: focusedDay.isoDate,
       }));
 
-    let best = null;
-    for (const activity of focusedDayActivities) {
+    const matches = [];
+    for (const activity of externalActivitiesForFocusedDay) {
       for (const card of plannedCards) {
         const match = matchImportedActivityToSession(activity, card);
         if (!match) continue;
         const ignoreKey = `${activity.source}:${activity.id}:${card.key}`;
         if (ignoredSuggestedMatchKeys[ignoreKey]) continue;
-        if (!best || match.score > best.score) best = { ...match, ignoreKey };
+        matches.push({ ...match, ignoreKey });
       }
     }
 
-    return best;
-  }, [focusedDay?.isoDate, focusedDayActivities, focusedDayCards, ignoredSuggestedMatchKeys]);
+    return matches.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  }, [focusedDay?.isoDate, externalActivitiesForFocusedDay, focusedDayCards, ignoredSuggestedMatchKeys]);
+  const suggestedActivityMatch = suggestedActivityMatches[0] || null;
+  const focusedDayModel = useMemo(() => {
+    const plannedSessions = focusedDayCards.filter(
+      (card) => card?.key && !card?.isExtraCompletedSession
+    );
+    const completedSessions = plannedSessions.filter((card) => card?.status === "completed");
+    const skippedSessions = plannedSessions.filter((card) => card?.status === "skipped");
+    const unplannedSessions = focusedDayCards.filter((card) => card?.isExtraCompletedSession);
+    const matchedActivityIds = new Set(
+      suggestedActivityMatches.map((match) => `${match.activity?.source}:${match.activity?.id}`)
+    );
+    const unresolvedActivities = externalActivitiesForFocusedDay.filter((activity) => {
+      if (activity?.linkedSessionKey || activity?.linkedTrainSessionId) return false;
+      if (matchedActivityIds.has(`${activity.source}:${activity.id}`)) return false;
+      return true;
+    });
+    const dayStatus = dayStatusFromModel({
+      plannedSessions,
+      completedSessions,
+      skippedSessions,
+      suggestedMatches: suggestedActivityMatches,
+      unresolvedActivities,
+    });
+
+    return {
+      date: focusedDay?.date || null,
+      label: focusedDayDisplayLabel(focusedDay),
+      isToday: !!focusedDay?.isToday,
+      plannedSessions,
+      completedSessions,
+      skippedSessions,
+      unplannedSessions,
+      detectedActivities: externalActivitiesForFocusedDay,
+      suggestedMatches: suggestedActivityMatches,
+      unresolvedActivities,
+      dayStatus,
+    };
+  }, [externalActivitiesForFocusedDay, focusedDay, focusedDayCards, suggestedActivityMatches]);
   const focusedDayPriority = useMemo(() => pickPriorityCard(focusedDayCards), [focusedDayCards]);
   const todayFirst = focusedDayPriority.card;
   const todayFirstIndex = focusedDayPriority.index;
@@ -2769,10 +2960,13 @@ export default function TrainIndex() {
   const todayHero = useMemo(() => {
     if (!focusedDay) return null;
 
-    const session = todayFirst?.sess || null;
-    const title = todayFirst?.title || "Rest / optional movement";
-    const subtitle = todayFirst?.meta || (todayFirst ? "" : "No structured session planned");
-    const status = String(todayFirst?.status || "").toLowerCase();
+    const heroCard = suggestedActivityMatch?.sessionCard || todayFirst;
+    const session = heroCard?.sess || null;
+    const title = heroCard?.title || "Rest / optional movement";
+    const subtitle = heroCard?.meta || (heroCard ? "" : "No structured session planned");
+    const rawStatus = String(heroCard?.status || "").toLowerCase();
+    const hasSuggestedCompletion = !!suggestedActivityMatch?.sessionCard?.key;
+    const status = hasSuggestedCompletion ? "needs_review" : rawStatus;
 
     const type = session ? sessionTypeLabel(session) : "Rest";
     const notes = normaliseStr(session?.notes || session?.workout?.notes || "");
@@ -2787,11 +2981,16 @@ export default function TrainIndex() {
       dayLabel: focusedDay.dayLabel,
       isoDate: focusedDay.isoDate,
       dayIdx: focusedDay.dayIdx,
-      hasPlan: !!todayFirst?.key,
-      key: todayFirst?.key || null,
+      label: focusedDayModel.label,
+      isFocusedToday: focusedDayModel.isToday,
+      hasPlan: !!heroCard?.key,
+      key: heroCard?.key || null,
       status,
-      savedTrainSessionId: todayFirst?.savedTrainSessionId || null,
-      linkedProvider: normaliseStr(todayFirst?.linkedActivity?.provider || ""),
+      suggestedActivityProvider: hasSuggestedCompletion
+        ? suggestedActivityMatch?.provider || suggestedActivityMatch?.activity?.provider || "Imported"
+        : "",
+      savedTrainSessionId: heroCard?.savedTrainSessionId || null,
+      linkedProvider: normaliseStr(heroCard?.linkedActivity?.provider || ""),
       isRestDay: !session,
       title,
       subtitle,
@@ -2801,13 +3000,15 @@ export default function TrainIndex() {
         ? "REST"
         : status === "completed"
         ? "COMPLETED"
+        : status === "needs_review"
+        ? "NEEDS REVIEW"
         : status === "skipped"
         ? "SKIPPED"
         : focusedDay.isToday
         ? "TODAY"
         : "PLANNED",
     };
-  }, [focusedDay, todayFirst]);
+  }, [focusedDay, focusedDayModel.isToday, focusedDayModel.label, suggestedActivityMatch, todayFirst]);
 
   const weekTotals = useMemo(() => {
     let sessions = 0;
@@ -2899,22 +3100,22 @@ export default function TrainIndex() {
   ]);
 
   const focusedDayCompletionInsight = useMemo(() => {
-    if (!focusedDayActivities.length) return null;
-    const benefits = focusedDayActivities.map(activityBenefit);
+    if (!focusedDayModel.detectedActivities.length) return null;
+    const benefits = focusedDayModel.detectedActivities.map(activityBenefit);
     const priority = ["Race", "VO2 Max", "Threshold", "Endurance", "Strength", "Base", "Recovery"];
     const primary =
       [...benefits].sort((a, b) => priority.indexOf(a.label) - priority.indexOf(b.label))[0] ||
       benefits[0];
-    const totalKm = focusedDayActivities.reduce(
+    const totalKm = focusedDayModel.detectedActivities.reduce(
       (sum, activity) => sum + Number(activity.distanceMeters || 0) / 1000,
       0
     );
-    const totalMin = focusedDayActivities.reduce(
+    const totalMin = focusedDayModel.detectedActivities.reduce(
       (sum, activity) => sum + Number(activity.durationSeconds || 0) / 60,
       0
     );
     const summaryBits = [
-      `${focusedDayActivities.length} completed`,
+      `${focusedDayModel.detectedActivities.length} detected`,
       totalKm > 0 ? `${totalKm.toFixed(1)} km` : null,
       totalMin > 0 ? `${Math.round(totalMin)} min` : null,
     ].filter(Boolean);
@@ -2922,9 +3123,9 @@ export default function TrainIndex() {
     return {
       benefit: primary,
       summary: summaryBits.join(" · "),
-      suggestion: dayActivitySuggestion(focusedDayActivities, nextSession),
+      suggestion: dayActivitySuggestion(focusedDayModel.detectedActivities, nextSession),
     };
-  }, [focusedDayActivities, nextSession]);
+  }, [focusedDayModel.detectedActivities, nextSession]);
 
   const planProgress = useMemo(() => {
     if (!visibleWeeksCount) return 0;
@@ -2950,22 +3151,34 @@ export default function TrainIndex() {
     companionPlan?.primaryActivity,
   ]);
 
+  const missedPlanPolicy = useMemo(() => {
+    const policies = [plan, companionPlan]
+      .map((item) => item?.adaptation?.missedSessionPolicy)
+      .filter(Boolean);
+    return policies.find((policy) => policy?.goalStatus === "revise_goal") ||
+      policies.find((policy) => policy?.goalStatus === "at_risk") ||
+      null;
+  }, [companionPlan, plan]);
+
   const dynamicSubtitle = useMemo(() => {
+    const dayLabel = focusedDayModel.label || todayHero?.dayLabel || "Selected day";
     if (isResolvingActivePlan) return "Loading your training";
     if (showEmptyPlanState) return "No active plan yet";
     if (todayHero?.status === "completed") {
-      return `${todayHero.dayLabel || "Selected day"} is complete · ${weekTotals.resolved}/${weekTotals.sessions} sessions marked this week`;
+      return `${dayLabel} is complete · ${weekTotals.resolved}/${weekTotals.sessions} sessions marked this week`;
+    }
+    if (todayHero?.status === "needs_review") {
+      return `${dayLabel} needs review · ${weekTotals.resolved}/${weekTotals.sessions} sessions marked this week`;
     }
     if (todayHero?.status === "skipped") {
-      return `${todayHero.dayLabel || "Selected day"} was skipped · ${weekTotals.resolved}/${weekTotals.sessions} sessions marked this week`;
+      return `${dayLabel} was skipped · ${weekTotals.resolved}/${weekTotals.sessions} sessions marked this week`;
     }
     if (!todayFirst && nextSession) {
-      return `${todayHero?.dayLabel || "Selected day"} is light. Next up: ${nextSession.dayLabel} · ${nextSession.title}`;
+      return `${dayLabel} is light. Next up: ${nextSession.dayLabel} · ${nextSession.title}`;
     }
-    return `${todayFirst ? `${todayHero?.dayLabel || "Day"} is set` : `No session on ${todayHero?.dayLabel || "selected day"}`} · ${weekTotals.sessions} sessions this week`;
+    return `${todayFirst ? `${dayLabel} is set` : `No session on ${dayLabel}`} · ${weekTotals.sessions} sessions this week`;
   }, [
-    hasPlan,
-    loading,
+    focusedDayModel.label,
     nextSession,
     isResolvingActivePlan,
     showEmptyPlanState,
@@ -2995,10 +3208,15 @@ export default function TrainIndex() {
   }, [calendarNow, currentWeekIndex, visibleWeeksCount, focusedDay?.dateLabel, showResolvedPlanState]);
 
   const todayHeroSupport = useMemo(() => {
+    const dayLabel = focusedDayModel.label || todayHero?.dayLabel || "selected day";
     if (todayHero?.status === "completed") {
       const provider = todayHero?.linkedProvider ? ` via ${todayHero.linkedProvider}` : "";
       const nextLine = nextSession ? ` Next planned: ${nextSession.dayLabel} · ${nextSession.title}.` : "";
       return `This planned session has been completed${provider} and saved to history.${nextLine}`;
+    }
+    if (todayHero?.status === "needs_review") {
+      const provider = todayHero?.suggestedActivityProvider || "activity";
+      return `${provider} activity found for ${dayLabel}. Confirm it if it matches this planned session.`;
     }
     if (todayHero?.status === "skipped") {
       const nextLine = nextSession ? ` Next planned: ${nextSession.dayLabel} · ${nextSession.title}.` : "";
@@ -3006,21 +3224,22 @@ export default function TrainIndex() {
     }
     if (!todayHero?.session) {
       if (nextSession) {
-        return `${todayHero?.dayLabel || "Selected day"} is recovery-focused. Next planned: ${nextSession.dayLabel} · ${nextSession.title}.`;
+        return `${dayLabel} is recovery-focused. Next planned: ${nextSession.dayLabel} · ${nextSession.title}.`;
       }
-      return `No structured session on ${todayHero?.dayLabel || "this day"}. Use quick log if you train.`;
+      return `No session planned for ${dayLabel}. Use quick log if you train.`;
     }
     return (
       todayHero?.subtitle ||
       todayHero?.focus ||
       "Hit the main objective for this session and keep execution controlled."
     );
-  }, [todayHero, nextSession]);
+  }, [focusedDayModel.label, todayHero, nextSession]);
 
   const extraDaySessions = useMemo(() => {
     if (!focusedDayCards.length || focusedDayCards.length < 2) return [];
+    if (todayHero?.key) return focusedDayCards.filter((card) => card?.key !== todayHero.key);
     return focusedDayCards.filter((_, idx) => idx !== todayFirstIndex);
-  }, [focusedDayCards, todayFirstIndex]);
+  }, [focusedDayCards, todayFirstIndex, todayHero?.key]);
 
   const topFadeStart = useMemo(() => {
     const alpha = theme.isDark ? "33" : "55";
@@ -3130,9 +3349,28 @@ export default function TrainIndex() {
       };
     }
 
+    if (missedPlanPolicy?.goalStatus === "revise_goal") {
+      return {
+        title: "Goal needs revisiting",
+        body:
+          missedPlanPolicy.recommendation ||
+          "Repeated missed sessions mean the current target is no longer on track. Rebuild consistency before pushing the goal.",
+      };
+    }
+
+    if (missedPlanPolicy?.goalStatus === "at_risk") {
+      return {
+        title: "Goal at risk",
+        body:
+          missedPlanPolicy.recommendation ||
+          "Recent missed sessions put this block behind target. Upcoming work has been adjusted to protect consistency.",
+      };
+    }
+
+    const dayLabel = focusedDayModel.label || todayHero?.dayLabel || "this day";
     if (!todayFirst && nextSession) {
       return {
-        title: `Light ${String(todayHero?.dayLabel || "day").toLowerCase()}`,
+        title: `Light ${String(dayLabel).toLowerCase()}`,
         body: `Your next planned session is ${nextSession.dayLabel} · ${nextSession.title}.`,
       };
     }
@@ -3146,15 +3384,17 @@ export default function TrainIndex() {
 
     return {
       title: "Keep momentum",
-      body: `${weekTotals.sessions} sessions planned this week. Nail ${String(todayHero?.dayLabel || "this day").toLowerCase()}, then build from there.`,
+      body: `${weekTotals.sessions} sessions planned this week. Nail ${String(dayLabel).toLowerCase()}, then build from there.`,
     };
-  }, [hasPlan, todayFirst, nextSession, weekTotals.sessions, todayHero?.dayLabel]);
+  }, [focusedDayModel.label, hasPlan, missedPlanPolicy, todayFirst, nextSession, weekTotals.sessions, todayHero?.dayLabel]);
   const insightBasisLabel = useMemo(() => {
     if (!hasPlan) return "Based on your current setup";
+    if (missedPlanPolicy?.goalStatus === "revise_goal") return "Based on missed sessions";
+    if (missedPlanPolicy?.goalStatus === "at_risk") return "Based on recent consistency";
     if (!todayFirst && nextSession) return `Next planned: ${nextSession.dayLabel}`;
-    if (todayHero?.title) return "Based on today's session";
+    if (todayHero?.title) return `Based on ${focusedDayModel.label}`;
     return "Based on this week's plan";
-  }, [hasPlan, nextSession, todayHero?.title]);
+  }, [focusedDayModel.label, hasPlan, missedPlanPolicy?.goalStatus, nextSession, todayHero?.title]);
 
   const openDaySheet = useCallback((idx) => {
     setDaySheetIndex(idx);
@@ -3424,29 +3664,7 @@ export default function TrainIndex() {
       }
 
       const { activity, sessionCard } = suggestedActivityMatch;
-      const linkedActivity = {
-        provider: activity.provider || "Imported",
-        reference: String(activity.id),
-        type: String(activity.type || ""),
-        title: String(activity.title || "Workout"),
-        startDate: activity.startMs ? new Date(activity.startMs).toISOString() : null,
-        startDateLocal: activity.startMs ? new Date(activity.startMs).toISOString() : null,
-        deviceName: activity.device || null,
-        distanceKm:
-          Number(activity.distanceMeters) > 0
-            ? Number((Number(activity.distanceMeters) / 1000).toFixed(3))
-            : null,
-        movingTimeMin:
-          Number(activity.durationSeconds) > 0
-            ? Number((Number(activity.durationSeconds) / 60).toFixed(1))
-            : null,
-        elapsedTimeMin:
-          Number(activity.durationSeconds) > 0
-            ? Number((Number(activity.durationSeconds) / 60).toFixed(1))
-            : null,
-        averageHeartrate:
-          Number(activity.averageHeartRate) > 0 ? Math.round(Number(activity.averageHeartRate)) : null,
-      };
+      const linkedActivity = buildLinkedActivityPayload(activity);
 
       const { trainSessionId } = await linkExternalActivityToPlannedSession({
         uid,
@@ -3499,6 +3717,7 @@ export default function TrainIndex() {
 
   const todayHeroPrimaryLabel = useMemo(() => {
     if (todayHero?.status === "completed" && todayHero?.savedTrainSessionId) return "View session";
+    if (todayHero?.status === "needs_review") return "Confirm match";
     if (todayHero?.status === "skipped") return "Open session";
     if (todayHero?.key) return "Start session";
     return "Log session";
@@ -3641,8 +3860,12 @@ export default function TrainIndex() {
                       const isToday = !!item.isToday;
                       const isSelected = item.dayIdx === selectedDayIndex;
                       const visibleDots = hasSessions ? Math.min(sessionCount, 3) : 0;
-                      const sessionSummary = item.sessionSummary || summariseCardStatuses(item.cards);
-                      const allResolved = hasSessions && sessionSummary.pending === 0;
+                      const stripStatus = item.dayStatus || "rest";
+                      const stripStyle = dayStatusStyles(stripStatus, theme, {
+                        isSelected,
+                        isToday,
+                        hasSessions,
+                      });
                       return (
                         <TouchableOpacity
                           key={`${panel.id}-${item.isoDate}`}
@@ -3664,34 +3887,17 @@ export default function TrainIndex() {
                           <View
                             style={[
                               s.noPlanWeekDateWrap,
-                              isSelected
-                                ? {
-                                    backgroundColor: theme.primaryBg,
-                                    borderColor: theme.primaryBg,
-                                  }
-                                : {
-                                    backgroundColor: allResolved
-                                      ? withHexAlpha(theme.primaryBg, theme.isDark ? "1A" : "26")
-                                      : hasSessions
-                                      ? theme.card2
-                                      : "transparent",
-                                    borderColor: allResolved
-                                      ? theme.primaryBg
-                                      : hasSessions || isToday
-                                      ? theme.border
-                                      : "transparent",
-                                  },
+                              {
+                                backgroundColor: stripStyle.backgroundColor,
+                                borderColor: stripStyle.borderColor,
+                              },
                             ]}
                           >
                             <Text
                               style={[
                                 s.noPlanWeekDate,
                                 {
-                                  color: isSelected
-                                    ? theme.primaryText
-                                    : !hasSessions
-                                    ? theme.subtext
-                                    : theme.text,
+                                  color: stripStyle.textColor,
                                 },
                               ]}
                             >
@@ -3703,7 +3909,9 @@ export default function TrainIndex() {
                               ? item.cards.slice(0, visibleDots).map((card, dotIdx) => {
                                   const status = String(card?.status || "").toLowerCase();
                                   const dotColor =
-                                    status === "completed"
+                                    stripStatus === "needs_review"
+                                      ? theme.primaryBg
+                                      : status === "completed"
                                       ? theme.primaryBg
                                       : status === "skipped"
                                       ? "#F87171"
@@ -3815,11 +4023,14 @@ export default function TrainIndex() {
                 <Feather name="link" size={16} color={theme.primaryText} />
               </View>
               <View style={{ flex: 1 }}>
+                <Text style={[s.completedInsightEyebrow, { color: theme.subtext }]}>
+                  Needs review
+                </Text>
                 <Text style={[s.flowStateTitle, { color: theme.text }]}>
-                  Looks like this {suggestedActivityMatch.provider} activity matches today’s planned session
+                  This {suggestedActivityMatch.provider} activity looks like your planned {suggestedActivityMatch.sessionCard.title} for {focusedDayModel.label}.
                 </Text>
                 <Text style={[s.flowStateBody, { color: theme.subtext }]}>
-                  {suggestedActivityMatch.activity.title} → {suggestedActivityMatch.sessionCard.title}
+                  {suggestedActivityMatch.activity.title}
                 </Text>
               </View>
             </View>
@@ -3834,7 +4045,7 @@ export default function TrainIndex() {
                 activeOpacity={0.9}
               >
                 <Text style={[s.flowStatePrimaryText, { color: theme.primaryText }]}>
-                  {linkingSuggestedMatch ? "Linking…" : "Link activity"}
+                  {linkingSuggestedMatch ? "Confirming…" : "Confirm match"}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -3843,7 +4054,7 @@ export default function TrainIndex() {
                 style={[s.flowStateSecondaryBtn, { borderColor: theme.border }]}
                 activeOpacity={0.85}
               >
-                <Text style={[s.flowStateSecondaryText, { color: theme.text }]}>Ignore</Text>
+                <Text style={[s.flowStateSecondaryText, { color: theme.text }]}>Not this session</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -3875,6 +4086,8 @@ export default function TrainIndex() {
                           backgroundColor:
                             todayHero.badge === "COMPLETED"
                               ? withHexAlpha(theme.primaryBg, theme.isDark ? "20" : "2B")
+                              : todayHero.badge === "NEEDS REVIEW"
+                              ? withHexAlpha(theme.primaryBg, theme.isDark ? "1F" : "2B")
                               : todayHero.badge === "SKIPPED"
                               ? "rgba(248,113,113,0.16)"
                               : theme.card2,
@@ -3882,6 +4095,8 @@ export default function TrainIndex() {
                           borderColor:
                             todayHero.badge === "COMPLETED"
                               ? withHexAlpha(theme.primaryBg, theme.isDark ? "7A" : "A3")
+                              : todayHero.badge === "NEEDS REVIEW"
+                              ? withHexAlpha(theme.primaryBg, theme.isDark ? "70" : "95")
                               : todayHero.badge === "SKIPPED"
                               ? "rgba(248,113,113,0.45)"
                               : theme.border,
@@ -3894,6 +4109,8 @@ export default function TrainIndex() {
                           {
                             color:
                               todayHero.badge === "COMPLETED"
+                                ? theme.primaryBg
+                                : todayHero.badge === "NEEDS REVIEW"
                                 ? theme.primaryBg
                                 : todayHero.badge === "SKIPPED"
                                 ? "#F87171"
@@ -3920,6 +4137,10 @@ export default function TrainIndex() {
                         openHistorySessionFromTrain(todayHero.savedTrainSessionId);
                         return;
                       }
+                      if (todayHero?.status === "needs_review") {
+                        linkSuggestedActivityMatch();
+                        return;
+                      }
                       if (todayHero?.key) return goToSession(todayHero.key);
                       openQuickRecord(focusedDay ? focusedDay.dayIdx : 0);
                     }}
@@ -3930,6 +4151,8 @@ export default function TrainIndex() {
                       name={
                         todayHero?.status === "completed" && todayHero?.savedTrainSessionId
                           ? "arrow-up-right"
+                          : todayHero?.status === "needs_review"
+                          ? "link"
                           : todayHero?.key
                           ? "play"
                           : "plus-circle"
@@ -4094,56 +4317,109 @@ export default function TrainIndex() {
 
         {showResolvedPlanState ? (
           <>
-            {focusedDayActivities.length ? (
-              <View style={s.section}>
-                <View style={s.sectionHead}>
-                  <Text style={[s.sectionTitle, { color: theme.text }]}>
-                    Completed on this day
-                  </Text>
-                  <Text style={[s.sectionSubtleInline, { color: theme.subtext }]}>
-                    {focusedDayActivities.length}
+            <View style={s.section}>
+              <View style={s.sectionHead}>
+                <Text style={[s.sectionTitle, { color: theme.text }]}>Completed training</Text>
+                <Text style={[s.sectionSubtleInline, { color: theme.subtext }]}>
+                  {focusedDayModel.completedSessions.length + focusedDayModel.unplannedSessions.length}
+                </Text>
+              </View>
+              {focusedDayModel.completedSessions.length || focusedDayModel.unplannedSessions.length ? (
+                <View style={s.completedActivityList}>
+                  {[...focusedDayModel.completedSessions, ...focusedDayModel.unplannedSessions].map((card, idx) => (
+                    <TouchableOpacity
+                      key={`completed-training-${card.key || card.savedTrainSessionId || idx}`}
+                      activeOpacity={0.86}
+                      onPress={() => openPlannedCard(card, focusedDay ? focusedDay.dayIdx : 0)}
+                      style={[
+                        s.completedActivityRow,
+                        { backgroundColor: quietInsetSurface, borderColor: quietBorder },
+                      ]}
+                    >
+                      <View style={s.completedActivityMainRow}>
+                        <View style={[s.completedActivityIcon, { borderColor: theme.border }]}>
+                          <Feather name={typeIconName(card.sess)} size={15} color={theme.text} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text
+                            style={[s.completedActivityTitle, { color: theme.text }]}
+                            numberOfLines={1}
+                          >
+                            {card.title}
+                          </Text>
+                          <Text
+                            style={[s.completedActivityMeta, { color: theme.subtext }]}
+                            numberOfLines={1}
+                          >
+                            {card.isExtraCompletedSession ? "Manual / unplanned" : "Planned session"}
+                            {card.meta ? ` · ${card.meta}` : ""}
+                          </Text>
+                        </View>
+                        <Feather name="chevron-right" size={17} color={theme.subtext} />
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ) : (
+                <View style={[s.restCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
+                  <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>
+                    Nothing completed for {focusedDayModel.label} yet.
                   </Text>
                 </View>
-                {focusedDayCompletionInsight ? (
-                  <View
-                    style={[
-                      s.completedInsightCard,
-                      { backgroundColor: quietInsetSurface, borderColor: quietBorder },
-                    ]}
-                  >
-                    <View style={s.completedInsightTop}>
-                      <View style={[s.completedBenefitIcon, { backgroundColor: theme.primaryBg }]}>
-                        <Feather
-                          name={focusedDayCompletionInsight.benefit.icon}
-                          size={15}
-                          color={theme.primaryText}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[s.completedInsightEyebrow, { color: theme.subtext }]}>
-                          {focusedDayCompletionInsight.summary}
-                        </Text>
-                        <Text style={[s.completedInsightTitle, { color: theme.text }]}>
-                          {focusedDayCompletionInsight.benefit.label} · {focusedDayCompletionInsight.benefit.title}
-                        </Text>
-                      </View>
+              )}
+            </View>
+
+            <View style={s.section}>
+              <View style={s.sectionHead}>
+                <Text style={[s.sectionTitle, { color: theme.text }]}>Detected activities</Text>
+                <Text style={[s.sectionSubtleInline, { color: theme.subtext }]}>
+                  {focusedDayModel.detectedActivities.length}
+                </Text>
+              </View>
+              {focusedDayCompletionInsight ? (
+                <View
+                  style={[
+                    s.completedInsightCard,
+                    { backgroundColor: quietInsetSurface, borderColor: quietBorder },
+                  ]}
+                >
+                  <View style={s.completedInsightTop}>
+                    <View style={[s.completedBenefitIcon, { backgroundColor: theme.primaryBg }]}>
+                      <Feather
+                        name={focusedDayCompletionInsight.benefit.icon}
+                        size={15}
+                        color={theme.primaryText}
+                      />
                     </View>
-                    <Text style={[s.completedInsightBody, { color: theme.subtext }]}>
-                      {focusedDayCompletionInsight.benefit.body}
-                    </Text>
-                    <View style={[s.completedNextBox, { borderColor: quietBorder }]}>
-                      <Text style={[s.completedNextLabel, { color: theme.text }]}>Next best move</Text>
-                      <Text style={[s.completedNextText, { color: theme.subtext }]}>
-                        {focusedDayCompletionInsight.suggestion}
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.completedInsightEyebrow, { color: theme.subtext }]}>
+                        {focusedDayCompletionInsight.summary}
+                      </Text>
+                      <Text style={[s.completedInsightTitle, { color: theme.text }]}>
+                        {focusedDayCompletionInsight.benefit.label} · {focusedDayCompletionInsight.benefit.title}
                       </Text>
                     </View>
                   </View>
-                ) : null}
+                  <Text style={[s.completedInsightBody, { color: theme.subtext }]}>
+                    {focusedDayCompletionInsight.benefit.body}
+                  </Text>
+                  <View style={[s.completedNextBox, { borderColor: quietBorder }]}>
+                    <Text style={[s.completedNextLabel, { color: theme.text }]}>Next best move</Text>
+                    <Text style={[s.completedNextText, { color: theme.subtext }]}>
+                      {focusedDayCompletionInsight.suggestion}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+              {focusedDayModel.detectedActivities.length ? (
                 <View style={s.completedActivityList}>
-                  {focusedDayActivities.map((activity) => {
+                  {focusedDayModel.detectedActivities.map((activity) => {
                     const benefit = activityBenefit(activity);
                     const stats = externalActivityStats(activity);
                     const meta = externalActivityMeta(activity);
+                    const needsReview = focusedDayModel.suggestedMatches.some(
+                      (match) => match.activity?.source === activity.source && match.activity?.id === activity.id
+                    );
                     return (
                       <TouchableOpacity
                         key={`${activity.source}:${activity.id}`}
@@ -4156,11 +4432,7 @@ export default function TrainIndex() {
                       >
                         <View style={s.completedActivityMainRow}>
                           <View style={[s.completedActivityIcon, { borderColor: theme.border }]}>
-                            <Feather
-                              name={benefit.icon}
-                              size={15}
-                              color={theme.text}
-                            />
+                            <Feather name={benefit.icon} size={15} color={theme.text} />
                           </View>
                           <View style={{ flex: 1 }}>
                             <View style={s.completedActivityTitleRow}>
@@ -4172,7 +4444,7 @@ export default function TrainIndex() {
                               </Text>
                               <View style={[s.completedBenefitChip, { backgroundColor: theme.primaryBg }]}>
                                 <Text style={[s.completedBenefitChipText, { color: theme.primaryText }]}>
-                                  {benefit.label}
+                                  {needsReview ? "Needs review" : benefit.label}
                                 </Text>
                               </View>
                             </View>
@@ -4203,8 +4475,14 @@ export default function TrainIndex() {
                     );
                   })}
                 </View>
-              </View>
-            ) : null}
+              ) : (
+                <View style={[s.restCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
+                  <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>
+                    No Garmin or Strava activity detected for {focusedDayModel.label}.
+                  </Text>
+                </View>
+              )}
+            </View>
 
             {/* Up next */}
             <View style={s.section}>
@@ -4235,7 +4513,7 @@ export default function TrainIndex() {
                 <View style={[s.restCard, { marginTop: 8, borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
                   <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>No next session scheduled</Text>
                   <Text style={{ color: theme.subtext, marginTop: 4, fontSize: 12 }}>
-                    If you train today, use Quick log to keep your record complete.
+                    If you train on {focusedDayModel.label}, use Quick log to keep your record complete.
                   </Text>
                 </View>
               )}
@@ -4592,6 +4870,18 @@ export default function TrainIndex() {
                   <Text style={[s.sheetActionText, { color: theme.text }]}>Open full plan</Text>
                 </TouchableOpacity>
 
+                <TouchableOpacity
+                  onPress={() => {
+                    closeMore();
+                    router.push("/train/create-home");
+                  }}
+                  style={[s.sheetAction, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="plus-square" size={16} color={theme.text} />
+                  <Text style={[s.sheetActionText, { color: theme.text }]}>Create new plan</Text>
+                </TouchableOpacity>
+
                 {hasRunPlan && !hasStrengthPlan ? (
                   <TouchableOpacity
                     onPress={() => {
@@ -4630,6 +4920,18 @@ export default function TrainIndex() {
                 >
                   <Feather name="clock" size={16} color={theme.text} />
                   <Text style={[s.sheetActionText, { color: theme.text }]}>View history</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => {
+                    closeMore();
+                    router.push("/train/previous-plans");
+                  }}
+                  style={[s.sheetAction, { borderColor: theme.border, backgroundColor: theme.card2 }]}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="archive" size={16} color={theme.text} />
+                  <Text style={[s.sheetActionText, { color: theme.text }]}>View previous plans</Text>
                 </TouchableOpacity>
 
                 <Text style={[s.sheetGroupTitle, { color: theme.subtext, marginTop: 4 }]}>Coach + tools</Text>
@@ -4894,7 +5196,9 @@ export default function TrainIndex() {
                   ))
                 ) : (
                   <View style={[s.restCard, { borderColor: theme.border, backgroundColor: theme.card2 }]}>
-                    <Text style={{ color: theme.text, fontWeight: "900" }}>Rest / open day</Text>
+                    <Text style={{ color: theme.text, fontWeight: "900" }}>
+                      No session planned for {focusedDayDisplayLabel(activeDay)}.
+                    </Text>
                     <Text style={{ color: theme.subtext, marginTop: 4, fontSize: 12, fontWeight: "800" }}>
                       Tap Quick log to record anything you do.
                     </Text>

@@ -4,6 +4,8 @@ import spec5k from "./5k.js";
 import specHalf from "./half.js";
 import specMarathon from "./marathon.js";
 import specUltra from "./ultra.js";
+import specGeneral from "./general.js";
+import specReturn from "./return.js";
 import { normaliseGoalDistanceKey } from "../normalization.js";
 
 const MAP = {
@@ -12,6 +14,8 @@ const MAP = {
   HALF: specHalf,
   MARATHON: specMarathon,
   ULTRA: specUltra,
+  GENERAL: specGeneral,
+  RETURN: specReturn,
 };
 
 function withFallbackSpec(spec) {
@@ -34,7 +38,11 @@ function withFallbackSpec(spec) {
 }
 
 export function getPlanSpec(goalDistance) {
-  const key = normaliseGoalDistanceKey(goalDistance, { fallback: "10K" });
+  const key = normaliseGoalDistanceKey(goalDistance, {
+    fallback: "10K",
+    allowGeneral: true,
+    allowReturn: true,
+  });
   const picked = MAP[key] || spec10k;
   return withFallbackSpec(picked);
 }

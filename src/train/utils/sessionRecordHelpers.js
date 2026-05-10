@@ -70,8 +70,9 @@ export function getSessionFromPlan(data, weekIndex, dayIndex, sessionIndex) {
     day?.label ||
     day?.name ||
     (week?.weekNumber != null ? `Week ${week.weekNumber}` : "");
+  const dayDate = day?.date || day?.isoDate || null;
 
-  return { session, dayLabel };
+  return { session, dayLabel, dayDate };
 }
 
 export function isStrengthLikeSession(session) {
@@ -206,7 +207,7 @@ export async function loadPlannedSessionRecord(uid, encodedKey) {
   }
 
   const planDoc = await fetchTrainPlanById(uid, decoded.planId);
-  const { session, dayLabel } = getSessionFromPlan(
+  const { session, dayLabel, dayDate } = getSessionFromPlan(
     planDoc,
     decoded.weekIndex,
     decoded.dayIndex,
@@ -218,7 +219,28 @@ export async function loadPlannedSessionRecord(uid, encodedKey) {
     planDoc,
     session,
     dayLabel,
+    dayDate:
+      dayDate ||
+      derivePlannedSessionDate(planDoc, decoded.weekIndex, decoded.dayIndex),
   };
+}
+
+function derivePlannedSessionDate(planDoc, weekIndex, dayIndex) {
+  const weekIdx = Number.isFinite(Number(weekIndex)) ? Math.round(Number(weekIndex)) : 0;
+  const dayIdx = Number.isFinite(Number(dayIndex)) ? Math.round(Number(dayIndex)) : 0;
+  const weeks = extractWeeks(planDoc);
+  const week = weeks?.[weekIdx] || {};
+
+  const weekStart = parseDateLike(week?.weekStartDate || week?.startDate);
+  if (weekStart) return toISODate(addDays(weekStart, dayIdx));
+
+  const planStart =
+    parseDateLike(planDoc?.startDate) ||
+    parseDateLike(planDoc?.plan?.startDate) ||
+    parseDateLike(planDoc?.meta?.startDate);
+  if (planStart) return toISODate(addDays(planStart, weekIdx * 7 + dayIdx));
+
+  return null;
 }
 
 function toFiniteNumber(value) {
@@ -299,6 +321,433 @@ function resolveTargetDistanceKm(session) {
   }
 
   return null;
+}
+
+const DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MISSED_POLICY_VERSION = 1;
+
+function parseDateLike(raw) {
+  if (!raw) return null;
+  if (typeof raw?.toDate === "function") {
+    const out = raw.toDate();
+    out.setHours(0, 0, 0, 0);
+    return Number.isNaN(out.getTime()) ? null : out;
+  }
+  if (raw instanceof Date) {
+    const out = new Date(raw);
+    out.setHours(0, 0, 0, 0);
+    return Number.isNaN(out.getTime()) ? null : out;
+  }
+  const match = String(raw).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    const out = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    out.setHours(0, 0, 0, 0);
+    return Number.isNaN(out.getTime()) ? null : out;
+  }
+  const out = new Date(raw);
+  out.setHours(0, 0, 0, 0);
+  return Number.isNaN(out.getTime()) ? null : out;
+}
+
+function startOfISOWeek(input) {
+  const d = new Date(input);
+  const day = d.getDay();
+  d.setDate(d.getDate() + ((day === 0 ? -6 : 1) - day));
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function addDays(input, amount) {
+  const d = new Date(input);
+  d.setDate(d.getDate() + amount);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function toISODate(input) {
+  const d = new Date(input);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function resolvePlanStart(planDoc, sessionLogMap = {}) {
+  const planId = String(planDoc?.id || "").trim();
+  const anchors = new Map();
+
+  if (planId) {
+    Object.values(sessionLogMap || {}).forEach((log) => {
+      if (String(log?.planId || "").trim() !== planId) return;
+      const weekIndex = Number(log?.weekIndex);
+      const dayIndex = Number(log?.dayIndex);
+      if (!Number.isFinite(weekIndex) || !Number.isFinite(dayIndex)) return;
+      const date =
+        parseDateLike(log?.date) ||
+        parseDateLike(log?.statusAt) ||
+        parseDateLike(log?.completedAt) ||
+        parseDateLike(log?.createdAt);
+      if (!date) return;
+      const anchor = addDays(date, -(Math.round(weekIndex) * 7 + Math.round(dayIndex)));
+      const key = toISODate(startOfISOWeek(anchor));
+      anchors.set(key, (anchors.get(key) || 0) + 1);
+    });
+  }
+
+  if (anchors.size) {
+    const [key] = [...anchors.entries()].sort((a, b) => b[1] - a[1])[0] || [];
+    const parsed = parseDateLike(key);
+    if (parsed) return startOfISOWeek(parsed);
+  }
+
+  const weeks = Array.isArray(planDoc?.weeks) ? planDoc.weeks : [];
+  for (let weekIndex = 0; weekIndex < weeks.length; weekIndex += 1) {
+    const week = weeks[weekIndex] || {};
+    const explicitWeekStart = parseDateLike(week?.weekStartDate || week?.startDate);
+    if (explicitWeekStart) return startOfISOWeek(addDays(explicitWeekStart, -weekIndex * 7));
+
+    const days = Array.isArray(week?.days) ? week.days : [];
+    for (let dayIndex = 0; dayIndex < days.length; dayIndex += 1) {
+      const explicitDay = parseDateLike(days[dayIndex]?.date || days[dayIndex]?.isoDate);
+      if (explicitDay) return startOfISOWeek(addDays(explicitDay, -(weekIndex * 7 + dayIndex)));
+    }
+  }
+
+  const fallback =
+    parseDateLike(planDoc?.startDate) ||
+    parseDateLike(planDoc?.plan?.startDate) ||
+    parseDateLike(planDoc?.createdAt) ||
+    new Date();
+  return startOfISOWeek(fallback);
+}
+
+function demandForMissedPolicy(session = {}) {
+  const text = [
+    session?.title,
+    session?.name,
+    session?.type,
+    session?.sessionType,
+    session?.focus,
+    session?.emphasis,
+    session?.notes,
+    session?.workout?.sport,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/\b(long run|long)\b/.test(text)) return "long";
+  if (/\b(interval|tempo|threshold|track|hill|vo2|max|speed|fartlek|race pace|progression)\b/.test(text)) {
+    return "quality";
+  }
+  if (/\b(strength|gym|hypertrophy|upper|lower|squat|deadlift|bench|press|row|lift)\b/.test(text)) {
+    return "strength";
+  }
+  if (/\b(recovery|easy|shakeout|mobility|rest)\b/.test(text)) return "easy";
+  return "aerobic";
+}
+
+function shouldRescheduleMissedSession(session) {
+  return ["long", "quality", "strength"].includes(demandForMissedPolicy(session));
+}
+
+function cloneWeeks(weeks) {
+  return JSON.parse(JSON.stringify(Array.isArray(weeks) ? weeks : []));
+}
+
+function ensureDaySlots(week) {
+  const existing = new Map((Array.isArray(week?.days) ? week.days : []).map((day) => [day?.day, day]));
+  week.days = DAY_ORDER.map((label) => {
+    const found = existing.get(label) || {};
+    return {
+      ...found,
+      day: label,
+      sessions: Array.isArray(found?.sessions) ? found.sessions : [],
+    };
+  });
+  return week.days;
+}
+
+function prependMissedNote(session, text) {
+  const current = String(session?.notes || "").trim();
+  return current.toLowerCase().includes(text.toLowerCase())
+    ? current
+    : current
+    ? `${text}\n${current}`
+    : text;
+}
+
+function scaleSessionLoad(session, factor) {
+  const next = { ...session };
+  const scaleField = (field, digits = 1, min = null) => {
+    const value = Number(next[field]);
+    if (!Number.isFinite(value) || value <= 0) return;
+    const scaled = Number((value * factor).toFixed(digits));
+    next[field] = min == null ? scaled : Math.max(min, scaled);
+  };
+
+  scaleField("durationMin", 0, 15);
+  scaleField("targetDurationMin", 0, 15);
+  scaleField("distanceKm", 1, 1);
+  scaleField("targetDistanceKm", 1, 1);
+  scaleField("plannedDistanceKm", 1, 1);
+  scaleField("computedTotalKm", 1, 1);
+
+  if (next?.workout && typeof next.workout === "object") {
+    next.workout = { ...next.workout };
+    const workoutKm = Number(next.workout.totalDistanceKm);
+    if (Number.isFinite(workoutKm) && workoutKm > 0) {
+      next.workout.totalDistanceKm = Math.max(1, Number((workoutKm * factor).toFixed(1)));
+    }
+    const workoutSec = Number(next.workout.totalDurationSec);
+    if (Number.isFinite(workoutSec) && workoutSec > 0) {
+      next.workout.totalDurationSec = Math.max(15 * 60, Math.round(workoutSec * factor));
+    }
+  }
+
+  next.notes = prependMissedNote(
+    next,
+    "Consistency edit: reduced slightly because recent missed sessions put the plan behind target."
+  );
+  next.consistencyAdjustment = {
+    kind: "missed_session_load_reduction",
+    version: MISSED_POLICY_VERSION,
+    factor,
+    appliedAtMs: Date.now(),
+  };
+  return next;
+}
+
+function findRescheduleSlot(weeks, startAbsoluteDay, sourceKey, maxLookaheadDays = 7) {
+  const end = Math.min(startAbsoluteDay + maxLookaheadDays, weeks.length * 7 - 1);
+  let fallback = null;
+
+  for (let absoluteDay = startAbsoluteDay; absoluteDay <= end; absoluteDay += 1) {
+    const weekIndex = Math.floor(absoluteDay / 7);
+    const dayIndex = absoluteDay % 7;
+    const week = weeks[weekIndex];
+    if (!week) continue;
+    const days = ensureDaySlots(week);
+    const day = days[dayIndex];
+    const sessions = Array.isArray(day?.sessions) ? day.sessions : [];
+    if (sessions.some((session) => session?.missedReschedule?.sourceSessionKey === sourceKey)) {
+      return null;
+    }
+
+    if (sessions.length === 0) return { weekIndex, dayIndex };
+
+    const allEasy = sessions.every((session) => demandForMissedPolicy(session) === "easy");
+    if (allEasy && !fallback) fallback = { weekIndex, dayIndex };
+  }
+
+  return fallback;
+}
+
+function recentMissCount(logs, today, days) {
+  const cutoff = addDays(today, -days).getTime();
+  return Object.values(logs || {}).filter((log) => {
+    const status = String(log?.status || "").toLowerCase();
+    if (status !== "skipped") return false;
+    const date = parseDateLike(log?.date) || parseDateLike(log?.statusAt) || parseDateLike(log?.skippedAt);
+    return date && date.getTime() >= cutoff && date.getTime() < today.getTime();
+  }).length;
+}
+
+function applyRepeatedMissAdjustments(weeks, todayAbsoluteDay, totalMisses) {
+  if (totalMisses < 2) return { weeks, touched: 0, goalStatus: "on_track" };
+  const factor = totalMisses >= 4 ? 0.75 : 0.85;
+  const goalStatus = totalMisses >= 4 ? "revise_goal" : "at_risk";
+  let touched = 0;
+
+  for (let absoluteDay = todayAbsoluteDay; absoluteDay < weeks.length * 7 && touched < 6; absoluteDay += 1) {
+    const weekIndex = Math.floor(absoluteDay / 7);
+    const dayIndex = absoluteDay % 7;
+    const week = weeks[weekIndex];
+    if (!week) continue;
+    const day = ensureDaySlots(week)[dayIndex];
+    day.sessions = (Array.isArray(day?.sessions) ? day.sessions : []).map((session) => {
+      if (touched >= 6) return session;
+      if (session?.consistencyAdjustment?.version === MISSED_POLICY_VERSION) return session;
+      if (demandForMissedPolicy(session) === "easy") return session;
+      touched += 1;
+      return scaleSessionLoad(session, factor);
+    });
+  }
+
+  return { weeks, touched, goalStatus };
+}
+
+export async function reconcileMissedPlanSessions({
+  uid,
+  plans = [],
+  sessionLogMap = {},
+  today = new Date(),
+  source = "auto_missed_reconcile",
+} = {}) {
+  if (!uid) return { changed: false, sessionLogMap };
+  const activePlans = (Array.isArray(plans) ? plans : []).filter((plan) => plan?.id && Array.isArray(plan?.weeks));
+  if (!activePlans.length) return { changed: false, sessionLogMap };
+
+  const todayDate = parseDateLike(today) || new Date();
+  todayDate.setHours(0, 0, 0, 0);
+  const nextSessionLogMap = { ...(sessionLogMap || {}) };
+  const batch = writeBatch(db);
+  let writeCount = 0;
+  let planWriteCount = 0;
+
+  activePlans.forEach((planDoc) => {
+    const planId = String(planDoc.id);
+    const planStart = resolvePlanStart(planDoc, nextSessionLogMap);
+    const todayAbsoluteDay = Math.floor((todayDate.getTime() - planStart.getTime()) / DAY_MS);
+    if (todayAbsoluteDay <= 0) return;
+
+    const weeks = cloneWeeks(planDoc.weeks);
+    const missed = [];
+
+    for (let weekIndex = 0; weekIndex < weeks.length; weekIndex += 1) {
+      const week = weeks[weekIndex];
+      const days = ensureDaySlots(week);
+      for (let dayIndex = 0; dayIndex < days.length; dayIndex += 1) {
+        const absoluteDay = weekIndex * 7 + dayIndex;
+        if (absoluteDay >= todayAbsoluteDay) continue;
+        const iso = toISODate(addDays(planStart, absoluteDay));
+        const sessions = Array.isArray(days[dayIndex]?.sessions) ? days[dayIndex].sessions : [];
+        sessions.forEach((session, sessionIndex) => {
+          if (session?.missedReschedule?.sourceSessionKey) return;
+          const key = buildSessionKey(planId, weekIndex, dayIndex, sessionIndex);
+          if (resolveSessionStatusForReconcile(nextSessionLogMap[key])) return;
+          missed.push({ key, weekIndex, dayIndex, sessionIndex, absoluteDay, iso, session });
+        });
+      }
+    }
+
+    if (!missed.length) return;
+
+    missed.forEach((item) => {
+      const missedLog = stripNilValues({
+        sessionKey: item.key,
+        planId,
+        planName: resolvePlanName(planDoc),
+        primaryActivity: resolvePrimaryActivity(planDoc, item.session),
+        sessionType: item.session?.sessionType || item.session?.type || null,
+        weekIndex: item.weekIndex,
+        dayIndex: item.dayIndex,
+        sessionIndex: item.sessionIndex,
+        dayLabel: DAY_ORDER[item.dayIndex] || null,
+        title: resolveTitle(item.session),
+        date: item.iso,
+        status: "skipped",
+        source,
+        missed: true,
+        autoMissed: true,
+        autoMissedPolicyVersion: MISSED_POLICY_VERSION,
+        missedDemand: demandForMissedPolicy(item.session),
+        targetDurationMin: resolveTargetDurationMin(item.session),
+        targetDistanceKm: resolveTargetDistanceKm(item.session),
+        statusAt: serverTimestamp(),
+        skippedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      });
+
+      batch.set(doc(db, "users", uid, "sessionLogs", item.key), missedLog, { merge: true });
+      nextSessionLogMap[item.key] = {
+        ...missedLog,
+        statusAt: new Date().toISOString(),
+        skippedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      writeCount += 1;
+    });
+
+    missed
+      .filter((item) => shouldRescheduleMissedSession(item.session))
+      .slice(0, 2)
+      .forEach((item) => {
+        const slot = findRescheduleSlot(
+          weeks,
+          Math.max(todayAbsoluteDay, item.absoluteDay + 1),
+          item.key
+        );
+        if (!slot) return;
+
+        const targetDay = ensureDaySlots(weeks[slot.weekIndex])[slot.dayIndex];
+        targetDay.sessions.push({
+          ...item.session,
+          title: `${resolveTitle(item.session)} (rescheduled)`,
+          notes: prependMissedNote(
+            item.session,
+            `Rescheduled after missed ${DAY_ORDER[item.dayIndex] || "day"} session. Keep it controlled and do not chase extra volume.`
+          ),
+          missedReschedule: {
+            sourceSessionKey: item.key,
+            sourceDate: item.iso,
+            policyVersion: MISSED_POLICY_VERSION,
+            reason: "important_missed_session",
+            createdAtMs: Date.now(),
+          },
+        });
+      });
+
+    const totalMisses14d = recentMissCount(nextSessionLogMap, todayDate, 14);
+    const adjustment = applyRepeatedMissAdjustments(weeks, todayAbsoluteDay, totalMisses14d);
+    const goalStatus = adjustment.goalStatus;
+
+    if (
+      JSON.stringify(weeks) !== JSON.stringify(planDoc.weeks) ||
+      goalStatus !== "on_track"
+    ) {
+      const adaptation = {
+        ...(planDoc?.adaptation || {}),
+        missedSessionPolicy: {
+          version: MISSED_POLICY_VERSION,
+          lastEvaluatedAtMs: Date.now(),
+          last14dMissedSessions: totalMisses14d,
+          goalStatus,
+          recommendation:
+            goalStatus === "revise_goal"
+              ? "Goal should be revised because repeated missed sessions mean the current target is no longer on track."
+              : goalStatus === "at_risk"
+              ? "Goal is at risk. Upcoming sessions were reduced to rebuild consistency."
+              : "Plan is on track.",
+        },
+      };
+      batch.set(
+        doc(db, "users", uid, "plans", planId),
+        {
+          weeks,
+          plan: {
+            ...(planDoc?.plan && typeof planDoc.plan === "object" ? planDoc.plan : {}),
+            weeks,
+          },
+          adaptation,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      planWriteCount += 1;
+    }
+  });
+
+  if (writeCount || planWriteCount) {
+    await batch.commit();
+  }
+
+  return {
+    changed: writeCount > 0 || planWriteCount > 0,
+    missedCount: writeCount,
+    planWriteCount,
+    sessionLogMap: nextSessionLogMap,
+  };
+}
+
+function resolveSessionStatusForReconcile(log) {
+  const raw = String(log?.status || "").trim().toLowerCase();
+  if (raw === "completed" || raw === "skipped") return raw;
+  if (log?.skippedAt) return "skipped";
+  if (log?.completedAt || log?.lastTrainSessionId) return "completed";
+  return "";
 }
 
 export function stripNilValues(obj) {

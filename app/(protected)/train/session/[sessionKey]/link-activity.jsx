@@ -5,7 +5,11 @@ import {
   deleteField,
   doc,
   getDoc,
+  getDocs,
+  limit,
+  query,
   serverTimestamp,
+  where,
   writeBatch,
 } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
@@ -25,12 +29,137 @@ import { auth, db } from "../../../../../firebaseConfig";
 import { useTheme } from "../../../../../providers/ThemeProvider";
 import { decodeSessionKey } from "../../../../../src/train/utils/sessionHelpers";
 import {
+  buildLinkedActivityPayload,
+  validateExternalActivityPlannedSessionMatch,
+} from "../../../../../src/train/utils/activitySessionMatch";
+import {
   buildPlannedTrainSessionPayload,
   loadPlannedSessionRecord,
   stripNilValues,
 } from "../../../../../src/train/utils/sessionRecordHelpers";
 
-const PROVIDERS = ["Garmin", "Strava", "Apple Health", "Other"];
+const PROVIDERS = ["Garmin", "Strava"];
+
+function providerCollections(provider) {
+  const raw = String(provider || "").toLowerCase();
+  if (raw.includes("garmin")) return ["garmin_activities", "garminActivities"];
+  if (raw.includes("strava")) return ["stravaActivities"];
+  return [];
+}
+
+function extractActivityReferenceId(reference) {
+  const raw = String(reference || "").trim();
+  if (!raw) return "";
+  const activityPathMatch = raw.match(/activities\/([^/?#]+)/i);
+  if (activityPathMatch?.[1]) return decodeURIComponent(activityPathMatch[1]);
+  const trimmed = raw.replace(/[?#].*$/, "").replace(/\/+$/, "");
+  return trimmed.split("/").filter(Boolean).pop() || raw;
+}
+
+function toMillis(value) {
+  if (!value) return 0;
+  if (typeof value?.toDate === "function") return value.toDate().getTime();
+  const n = Number(value);
+  if (Number.isFinite(n) && n > 1000000000) return n;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function toISODateFromMs(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function normaliseImportedActivity(docSnap, source, provider) {
+  const data = docSnap?.data ? docSnap.data() || {} : docSnap || {};
+  const raw = data?.rawGarminActivity || data?.raw || {};
+  const startSeconds = Number(
+    data?.startTimeInSeconds ??
+      data?.activityStartTimeInSeconds ??
+      raw?.startTimeInSeconds ??
+      raw?.activityStartTimeInSeconds
+  );
+  const startMs =
+    (Number.isFinite(startSeconds) && startSeconds > 0 ? startSeconds * 1000 : 0) ||
+    toMillis(data?.startTimeMs) ||
+    toMillis(data?.startDateMs) ||
+    toMillis(data?.startTime) ||
+    toMillis(data?.startDate) ||
+    toMillis(data?.startedAt) ||
+    toMillis(raw?.startTime) ||
+    toMillis(raw?.startDate);
+  const distanceMeters = Number(
+    data?.distanceMeters ??
+      data?.distance ??
+      data?.distanceInMeters ??
+      raw?.distanceMeters ??
+      raw?.distanceInMeters ??
+      raw?.distance
+  );
+  const durationSeconds = Number(
+    data?.durationSeconds ??
+      data?.movingTime ??
+      data?.moving_time ??
+      data?.elapsedTime ??
+      raw?.durationInSeconds ??
+      raw?.movingDurationInSeconds ??
+      raw?.elapsedDurationInSeconds
+  );
+  const averageHeartRate = Number(
+    data?.averageHeartRate ??
+      data?.average_heartrate ??
+      data?.averageHeartRateInBeatsPerMinute ??
+      raw?.averageHeartRate ??
+      raw?.averageHeartRateInBeatsPerMinute
+  );
+
+  return {
+    id: String(docSnap?.id || data?.id || data?.activityId || raw?.activityId || ""),
+    source,
+    provider,
+    title:
+      data?.name ||
+      data?.title ||
+      data?.activityName ||
+      raw?.activityName ||
+      `${provider} activity`,
+    type: data?.type || data?.activityType || raw?.activityType || raw?.sport || "",
+    device: data?.deviceName || data?.device_name || raw?.deviceName || raw?.device_name || "",
+    startMs,
+    isoDate: toISODateFromMs(startMs),
+    distanceMeters: Number.isFinite(distanceMeters) && distanceMeters > 0 ? distanceMeters : null,
+    durationSeconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : null,
+    averageHeartRate: Number.isFinite(averageHeartRate) && averageHeartRate > 0 ? averageHeartRate : null,
+  };
+}
+
+async function findImportedActivity(uid, provider, reference) {
+  const sources = providerCollections(provider);
+  const refId = extractActivityReferenceId(reference);
+  if (!uid || !sources.length || !refId) return null;
+
+  for (const source of sources) {
+    const directSnap = await getDoc(doc(db, "users", uid, source, refId));
+    if (directSnap.exists()) {
+      return normaliseImportedActivity(directSnap, source, provider);
+    }
+
+    const col = collection(db, "users", uid, source);
+    for (const field of ["activityId", "id", "upstreamId"]) {
+      try {
+        const snap = await getDocs(query(col, where(field, "==", refId), limit(1)));
+        if (!snap.empty) return normaliseImportedActivity(snap.docs[0], source, provider);
+      } catch {}
+    }
+  }
+
+  return null;
+}
 
 export default function LinkActivityScreen() {
   const router = useRouter();
@@ -109,11 +238,6 @@ export default function LinkActivityScreen() {
       const { planId, weekIndex, dayIndex, sessionIndex } = decodeSessionKey(encodedKey);
       const trimmedNotes = notes.trim();
       const trimmedReference = reference.trim();
-      const linkedActivity = {
-        provider,
-        reference: trimmedReference,
-      };
-
       const sessionLogRef = doc(db, "users", uid, "sessionLogs", encodedKey);
       const existingLogSnap = await getDoc(sessionLogRef);
       const existingLog = existingLogSnap.exists() ? existingLogSnap.data() || {} : null;
@@ -139,6 +263,32 @@ export default function LinkActivityScreen() {
         return;
       }
 
+      const importedActivity = await findImportedActivity(uid, provider, trimmedReference);
+      if (!importedActivity) {
+        Alert.alert(
+          "Activity not found",
+          "This activity has to exist in your imported Garmin or Strava activities before it can be linked to a planned session."
+        );
+        return;
+      }
+
+      const match = validateExternalActivityPlannedSessionMatch({
+        activity: importedActivity,
+        session: plannedRecord.session,
+        plannedIsoDate: plannedRecord.dayDate || "",
+      });
+      if (!match.matches) {
+        Alert.alert("Does not match planned session", match.reason || "Choose the activity that matches this planned session.");
+        return;
+      }
+
+      const linkedActivity = buildLinkedActivityPayload(importedActivity);
+      const activityOverrides = {
+        date: plannedRecord.dayDate || importedActivity.isoDate || null,
+        actualDurationMin: linkedActivity.movingTimeMin,
+        actualDistanceKm: linkedActivity.distanceKm,
+      };
+
       const plannedPayload = buildPlannedTrainSessionPayload({
         encodedKey,
         planDoc: plannedRecord.planDoc,
@@ -148,6 +298,7 @@ export default function LinkActivityScreen() {
         notes: trimmedNotes,
         source: "linked_activity",
         linkedActivity,
+        overrides: activityOverrides,
       });
 
       const trainSessionPayload = {
@@ -199,7 +350,21 @@ export default function LinkActivityScreen() {
           statusAt: serverTimestamp(),
           completedAt: serverTimestamp(),
           skippedAt: deleteField(),
+          matchStatus: "linked",
+          matchConfidence: Math.round(Number(match.score || 0)),
           ...(existingLogSnap.exists() ? {} : { createdAt: serverTimestamp() }),
+        },
+        { merge: true }
+      );
+
+      batch.set(
+        doc(db, "users", uid, importedActivity.source, String(importedActivity.id)),
+        {
+          linkedSessionKey: encodedKey,
+          linkedTrainSessionId: trainSessionRef.id,
+          linkStatus: "linked",
+          linkedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         },
         { merge: true }
       );
@@ -266,7 +431,7 @@ export default function LinkActivityScreen() {
           <TextInput
             value={reference}
             onChangeText={setReference}
-            placeholder="e.g. https://strava.com/activities/... or 123456"
+            placeholder="Garmin or Strava activity link or ID"
             placeholderTextColor={colors.subtext}
             autoCapitalize="none"
             style={[

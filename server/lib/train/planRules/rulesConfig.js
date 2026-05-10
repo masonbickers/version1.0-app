@@ -75,7 +75,7 @@ export const RULES = {
   // Canonical product-level planner dimensions.
   // Keep this aligned with planSpecs/* and normalization/derive inputs.
   productSpec: {
-    goalDistances: ["5K", "10K", "HALF", "MARATHON", "ULTRA"],
+    goalDistances: ["5K", "10K", "HALF", "MARATHON", "ULTRA", "GENERAL", "RETURN"],
     experienceLevels: [
       "New to running",
       "Some experience",
@@ -127,6 +127,8 @@ export const RULES = {
     "10k": { taperLastNWeeks: 1, longRunMaxKm: 18 },
     "half": { taperLastNWeeks: 2, longRunMaxKm: 24 },
     "mara": { taperLastNWeeks: 2, longRunMaxKm: 32 },
+    "general": { taperLastNWeeks: 0, longRunMaxKm: 12 },
+    "return": { taperLastNWeeks: 0, longRunMaxKm: 8 },
   },
 
   longRun: {

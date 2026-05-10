@@ -317,7 +317,7 @@ function buildRecoveryWeekPhaseOverrides(profile = {}) {
 
   const goalKey = normaliseGoalDistanceKey(
     profile?.goal?.distance ?? profile?.goalDistance ?? "10K",
-    { fallback: "10K" }
+    { fallback: "10K", allowGeneral: true, allowReturn: true }
   );
   const byDistanceKey = goalKeyToByDistanceKey(goalKey, "10k");
   const taperWeeks = clampInt(

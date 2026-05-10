@@ -7,6 +7,7 @@ import {
   ensureRunDaysCount as ensureRunDaysCountShared,
   normaliseDayAbbrev as normaliseDayAbbrevShared,
   normaliseDifficultyKey,
+  normaliseExperienceKey,
   normaliseExperienceLabel,
   normaliseGoalDistanceKey,
   normalisePlanLengthWeeks,
@@ -116,6 +117,22 @@ function computeHardDaysTarget({ experience, difficulty, sessionsPerWeek }) {
   // Safety: never exceed (spw - 1)
   target = Math.min(target, Math.max(1, spw - 1));
   return clampInt(target, 1, 3);
+}
+
+function computeHardDaysTargetForGoal({ goalDistance, experience, difficulty, sessionsPerWeek }) {
+  const goal = normaliseGoalDistanceKey(goalDistance, {
+    fallback: "10K",
+    allowGeneral: true,
+    allowReturn: true,
+  });
+  const spw = normaliseSessionsPerWeek(sessionsPerWeek);
+  const exp = normaliseExperienceKey(experience);
+  const diff = normaliseDifficulty(difficulty);
+
+  if (goal === "RETURN") return 0;
+  if (goal === "GENERAL" && (exp === "new" || spw <= 3 || diff === "conservative")) return 0;
+
+  return computeHardDaysTarget({ experience, difficulty, sessionsPerWeek });
 }
 
 // -----------------------------
@@ -308,7 +325,7 @@ export function buildSkeleton(inputs = {}) {
 
   const goalDistance = normaliseGoalDistanceKey(
     inputs?.goalDistance ?? "10K",
-    { fallback: "10K" }
+    { fallback: "10K", allowGeneral: true, allowReturn: true }
   );
   const spec = getPlanSpec(goalDistance);
 
@@ -319,7 +336,8 @@ export function buildSkeleton(inputs = {}) {
     longRunDay,
   });
 
-  const hardDaysTarget = computeHardDaysTarget({
+  const hardDaysTarget = computeHardDaysTargetForGoal({
+    goalDistance,
     experience,
     difficulty,
     sessionsPerWeek,
@@ -360,7 +378,7 @@ export function buildSkeleton(inputs = {}) {
 
     const weekHints = {
       difficulty: normaliseDifficulty(difficulty),
-      qualityHint: hardDaysTarget >= 2 ? "two_quality_days" : "one_quality_day",
+      qualityHint: hardDaysTarget >= 2 ? "two_quality_days" : hardDaysTarget === 1 ? "one_quality_day" : "easy_only",
       specId: spec?.id || null,
       goalDistance: String(goalDistance || ""),
     };

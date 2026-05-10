@@ -1,6 +1,5 @@
 // app/(protected)/train/history/index.jsx
 import { Feather } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import {
   collection,
@@ -29,8 +28,8 @@ function useScreenTheme() {
   return {
     bg: colors?.bg ?? (isDark ? "#050506" : "#F8FAFC"),
     card: colors?.card ?? (isDark ? "#111217" : "#FFFFFF"),
-    cardAlt: isDark ? "#171A21" : "#F8FAFC",
-    cardMuted: isDark ? "#1D212A" : "#EEF2F7",
+    cardAlt: isDark ? "#101114" : "#F8FAFC",
+    cardMuted: isDark ? "#15161A" : "#EEF2F7",
     text: colors?.text ?? (isDark ? "#E5E7EB" : "#0F172A"),
     subtext: colors?.subtext ?? (isDark ? "#A1A1AA" : "#64748B"),
     border: colors?.border ?? (isDark ? "rgba(255,255,255,0.10)" : "#E2E8F0"),
@@ -225,36 +224,19 @@ function FilterPill({ label, active, onPress, theme }) {
       style={[
         st.filterPill,
         active
-          ? st.filterPillActive
+          ? { backgroundColor: theme.primaryBg, borderColor: theme.primaryBg }
           : { backgroundColor: theme.cardAlt, borderColor: theme.border },
       ]}
     >
-      {active ? (
-        <LinearGradient
-          colors={
-            theme.isDark
-              ? [theme.primaryBg, "#C7E100"]
-              : [theme.primaryBg, "#D5F244"]
-          }
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={st.filterPillFill}
-        >
-          <Text style={[st.filterPillText, { color: theme.primaryText }]}>{label}</Text>
-        </LinearGradient>
-      ) : (
-        <Text style={[st.filterPillText, { color: theme.text }]}>{label}</Text>
-      )}
+      <Text style={[st.filterPillText, { color: active ? theme.primaryText : theme.text }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
 function SummaryStat({ label, value, icon, theme }) {
   return (
-    <View style={[st.statCard, { backgroundColor: theme.cardMuted, borderColor: theme.border }]}>
-      <View style={[st.statIconWrap, { backgroundColor: theme.accentSoft }]}>
-        <Feather name={icon} size={14} color={theme.accentInk} />
-      </View>
+    <View style={[st.statCard, { backgroundColor: theme.cardAlt, borderColor: theme.border }]}>
+      <Feather name={icon} size={15} color={theme.primaryBg} />
       <Text style={[st.statValue, { color: theme.text }]} numberOfLines={1}>
         {value}
       </Text>
@@ -340,12 +322,10 @@ function RunSessionCard({
       onPress={onPress}
       style={[
         st.cardRow,
-        { backgroundColor: theme.cardAlt, borderColor: theme.border },
+        { backgroundColor: theme.card, borderColor: theme.border },
       ]}
       activeOpacity={0.85}
     >
-      <View style={[st.cardAccent, { backgroundColor: tone.accent }]} />
-
       <View style={st.cardBody}>
         <View style={st.topRow}>
           <View style={[st.typeIconWrap, { backgroundColor: tone.accentSoft }]}>
@@ -458,12 +438,10 @@ function StrengthSessionCard({
       style={[
         st.cardRow,
         st.strengthCardRow,
-        { backgroundColor: theme.cardAlt, borderColor: theme.border },
+        { backgroundColor: theme.card, borderColor: theme.border },
       ]}
       activeOpacity={0.85}
     >
-      <View style={[st.cardAccent, { backgroundColor: tone.accent }]} />
-
       <View style={st.cardBody}>
         <View style={st.topRow}>
           <View style={[st.typeIconWrap, { backgroundColor: tone.accentSoft }]}>
@@ -728,60 +706,39 @@ export default function TrainHistory() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
       <ScrollView
-        contentContainerStyle={{ padding: 16, paddingBottom: 124, gap: 16 }}
+        contentContainerStyle={{ paddingHorizontal: 22, paddingTop: 18, paddingBottom: 124, gap: 18 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         showsVerticalScrollIndicator={false}
       >
-        <View style={st.rowBetween}>
+        <View style={st.header}>
           <TouchableOpacity
             onPress={() => router.back()}
-            style={[st.pillBtn, { borderColor: theme.border, backgroundColor: theme.card }]}
+            style={[st.pillBtn, { borderColor: theme.border, backgroundColor: theme.cardAlt }]}
             activeOpacity={0.85}
           >
             <Feather name="chevron-left" size={18} color={theme.text} />
             <Text style={{ color: theme.text, fontWeight: "800" }}>Back</Text>
           </TouchableOpacity>
 
-          <Text style={[st.h4, { color: theme.text }]}>History</Text>
-          <View style={{ width: 68 }} />
-        </View>
-
-        <LinearGradient
-          colors={
-            theme.isDark
-              ? ["rgba(28,31,38,0.98)", "rgba(15,17,22,0.98)"]
-              : ["#FFFFFF", "#F8FAFC"]
-          }
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={[st.heroCard, { borderColor: theme.border }]}
-        >
-          <View style={st.heroTopRow}>
-            <View style={[st.eyebrowPill, { backgroundColor: theme.accentSoft }]}>
-              <View style={[st.eyebrowDot, { backgroundColor: theme.primaryBg }]} />
-              <Text style={[st.eyebrowText, { color: theme.accentInk }]}>Archive</Text>
+          <View style={st.titleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[st.kicker, { color: theme.subtext }]}>History</Text>
+              <Text style={[st.pageTitle, { color: theme.text }]}>Training archive</Text>
+              <Text style={[st.pageSub, { color: theme.subtext }]}>
+                Completed sessions and consistency.
+              </Text>
             </View>
-            <View style={[st.countPill, { backgroundColor: theme.cardMuted, borderColor: theme.border }]}>
+            <View style={[st.countPill, { backgroundColor: theme.cardAlt, borderColor: theme.border }]}>
               <Text style={[st.countPillText, { color: theme.text }]}>{resultsLabel}</Text>
             </View>
           </View>
+        </View>
 
-          <Text style={[st.heroTitle, { color: theme.text }]}>Training archive</Text>
-          <Text style={[st.heroSub, { color: theme.subtext }]}>
-            Review completed sessions and track your consistency.
-          </Text>
-
-          <View style={st.summaryRow}>
-            <SummaryStat label="Sessions" value={summary.sessions} icon="layers" theme={theme} />
-            <SummaryStat label="Minutes" value={summary.minutes} icon="clock" theme={theme} />
-            <SummaryStat
-              label="Distance"
-              value={`${summary.km} km`}
-              icon="map-pin"
-              theme={theme}
-            />
-          </View>
-        </LinearGradient>
+        <View style={st.summaryRow}>
+          <SummaryStat label="Sessions" value={summary.sessions} icon="layers" theme={theme} />
+          <SummaryStat label="Minutes" value={summary.minutes} icon="clock" theme={theme} />
+          <SummaryStat label="Distance" value={`${summary.km} km`} icon="map-pin" theme={theme} />
+        </View>
 
         <View style={st.section}>
           <View style={st.sectionHead}>
@@ -902,17 +859,35 @@ export default function TrainHistory() {
 }
 
 const st = StyleSheet.create({
-  h4: {
-    fontSize: 19,
-    fontWeight: "800",
-    letterSpacing: 0.2,
+  header: {
+    gap: 20,
   },
-  rowBetween: {
+  titleRow: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 14,
+  },
+  kicker: {
+    fontSize: 13,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0,
+    marginBottom: 6,
+  },
+  pageTitle: {
+    fontSize: 40,
+    lineHeight: 44,
+    fontWeight: "900",
+    letterSpacing: 0,
+  },
+  pageSub: {
+    marginTop: 8,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: "700",
   },
   pillBtn: {
+    alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
@@ -922,86 +897,33 @@ const st = StyleSheet.create({
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
   },
-
-  heroCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 24,
-    padding: 16,
-    overflow: "hidden",
-  },
-  heroTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 14,
-  },
-  eyebrowPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  eyebrowDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-  },
-  eyebrowText: {
-    fontSize: 11,
-    fontWeight: "900",
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-  },
   countPill: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
   countPillText: {
-    fontSize: 11,
-    fontWeight: "800",
-  },
-  heroTitle: {
-    fontSize: 24,
-    fontWeight: "800",
-    letterSpacing: 0.1,
-  },
-  heroSub: {
-    marginTop: 6,
-    fontSize: 13,
-    lineHeight: 19,
-    fontWeight: "600",
-    maxWidth: "92%",
+    fontSize: 12,
+    fontWeight: "900",
   },
 
   summaryRow: {
     flexDirection: "row",
-    gap: 10,
-    marginTop: 16,
+    gap: 12,
   },
   statCard: {
     flex: 1,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 18,
-    minHeight: 92,
-    paddingVertical: 12,
+    borderRadius: 16,
+    minHeight: 80,
+    paddingVertical: 13,
     paddingHorizontal: 12,
-    alignItems: "center",
-  },
-  statIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 999,
-    alignItems: "center",
     justifyContent: "center",
-    marginBottom: 8,
   },
   statValue: {
-    fontSize: 18,
+    marginTop: 8,
+    fontSize: 20,
     fontWeight: "900",
   },
   statLabel: {
@@ -1009,7 +931,7 @@ const st = StyleSheet.create({
     fontWeight: "800",
     marginTop: 4,
     letterSpacing: 0.2,
-    textAlign: "center",
+    textTransform: "uppercase",
   },
 
   section: {
@@ -1023,15 +945,15 @@ const st = StyleSheet.create({
     marginBottom: 10,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    letterSpacing: 0.1,
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: 0,
   },
   sectionSubtle: {
-    fontSize: 12,
-    fontWeight: "500",
-    marginTop: 3,
-    lineHeight: 17,
+    fontSize: 14,
+    fontWeight: "700",
+    marginTop: 5,
+    lineHeight: 19,
   },
 
   filterRow: {
@@ -1040,31 +962,18 @@ const st = StyleSheet.create({
   },
 
   filterPill: {
-    minHeight: 42,
+    minHeight: 48,
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
     overflow: "hidden",
-  },
-  filterPillActive: {
-    borderColor: "rgba(0,0,0,0)",
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 14,
-    elevation: 3,
-  },
-  filterPillFill: {
-    minHeight: 42,
-    paddingHorizontal: 16,
+    paddingHorizontal: 22,
     alignItems: "center",
     justifyContent: "center",
   },
   filterPillText: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: "900",
-    letterSpacing: 0.2,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    letterSpacing: 0,
   },
 
   card: {
@@ -1105,22 +1014,13 @@ const st = StyleSheet.create({
   cardRow: {
     position: "relative",
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 22,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    paddingLeft: 18,
+    borderRadius: 18,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
     overflow: "hidden",
   },
   strengthCardRow: {
     paddingBottom: 16,
-  },
-  cardAccent: {
-    position: "absolute",
-    left: 0,
-    top: 14,
-    bottom: 14,
-    width: 4,
-    borderRadius: 999,
   },
   cardBody: {
     flex: 1,
@@ -1142,9 +1042,9 @@ const st = StyleSheet.create({
     minWidth: 0,
   },
   sessionTitle: {
-    fontSize: 16,
-    lineHeight: 20,
-    fontWeight: "800",
+    fontSize: 18,
+    lineHeight: 22,
+    fontWeight: "900",
   },
   sessionDate: {
     fontSize: 12.5,

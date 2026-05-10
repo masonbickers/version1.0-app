@@ -138,6 +138,8 @@ export function goalKeyToByDistanceKey(goalKey, fallback = "10k") {
   if (g === "HALF") return "half";
   if (g === "MARATHON") return "mara";
   if (g === "ULTRA") return "ultra";
+  if (g === "GENERAL") return "general";
+  if (g === "RETURN") return "return";
   return fallback;
 }
 
