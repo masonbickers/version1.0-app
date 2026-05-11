@@ -88,6 +88,55 @@ function activityDateMatches(activity, plannedIsoDate) {
   return !planned || !actual || planned === actual;
 }
 
+export function activityMatchIdentity(activity = {}) {
+  return {
+    activityId: String(
+      activity?.activityId ||
+        activity?.id ||
+        activity?.sourceDocId ||
+        activity?.reference ||
+        activity?.upstreamId ||
+        ""
+    ).trim(),
+    activitySource: String(activity?.activitySource || activity?.source || activity?.collection || "").trim(),
+  };
+}
+
+export function ignoredActivityMatchKey(activity = {}, sessionKey = "") {
+  const { activityId, activitySource } = activityMatchIdentity(activity);
+  const key = String(sessionKey || "").trim();
+  if (!activityId || !activitySource || !key) return "";
+  return `${activitySource}:${activityId}:${key}`;
+}
+
+function normaliseIgnoredActivityMatches(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return Object.values(value);
+  return [];
+}
+
+export function isActivitySessionMatchIgnored({ activity, sessionKey, sessionLog } = {}) {
+  const expectedSessionKey = String(sessionKey || "").trim();
+  const { activityId, activitySource } = activityMatchIdentity(activity);
+  if (!expectedSessionKey || !activityId || !activitySource) return false;
+
+  const ignoredSessionKeys = Array.isArray(activity?.ignoredSessionKeys) ? activity.ignoredSessionKeys : [];
+  if (ignoredSessionKeys.map((key) => String(key || "").trim()).includes(expectedSessionKey)) {
+    return true;
+  }
+
+  return normaliseIgnoredActivityMatches(sessionLog?.ignoredActivityMatches).some((item) => {
+    const itemSessionKey = String(item?.sessionKey || expectedSessionKey).trim();
+    const itemActivityId = String(item?.activityId || item?.id || item?.reference || "").trim();
+    const itemActivitySource = String(item?.activitySource || item?.source || item?.collection || "").trim();
+    return (
+      itemSessionKey === expectedSessionKey &&
+      itemActivityId === activityId &&
+      itemActivitySource === activitySource
+    );
+  });
+}
+
 export function validateExternalActivityPlannedSessionMatch({
   activity,
   session,
@@ -224,6 +273,15 @@ export function matchImportedActivityToPlannedSession(activity, plannedSession) 
   if (!activity || !plannedSession?.key || !plannedSession?.sess) return null;
   if (activity?.linkedSessionKey || activity?.linkedTrainSessionId) return null;
   if (String(activity?.linkStatus || "").toLowerCase() === "ignored") return null;
+  if (
+    isActivitySessionMatchIgnored({
+      activity,
+      sessionKey: plannedSession.key,
+      sessionLog: plannedSession.log,
+    })
+  ) {
+    return null;
+  }
   if (plannedSession?.status === "completed") return null;
 
   const result = validateExternalActivityPlannedSessionMatch({

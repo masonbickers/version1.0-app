@@ -1,13 +1,16 @@
 import {
+  arrayUnion,
   collection,
   deleteField,
   doc,
   getDoc,
   serverTimestamp,
+  setDoc,
   writeBatch,
 } from "firebase/firestore";
 
 import { db } from "../../../firebaseConfig";
+import { activityMatchIdentity } from "./activitySessionMatch";
 import { decodeSessionKey } from "./sessionHelpers";
 
 function normaliseList(value) {
@@ -41,6 +44,39 @@ function extractWeeks(data) {
 
 export function buildSessionKey(planId, weekIndex, dayIndex, sessionIndex) {
   return `${planId}_${weekIndex}_${dayIndex}_${sessionIndex}`;
+}
+
+export async function ignoreExternalActivityForPlannedSession({
+  uid,
+  encodedKey,
+  activity,
+  reason = "not_this_session",
+}) {
+  if (!uid) throw new Error("Please sign in again.");
+  if (!encodedKey) throw new Error("This session ignore is missing its key.");
+
+  const { activityId, activitySource } = activityMatchIdentity(activity);
+  if (!activityId || !activitySource) throw new Error("This activity is missing its source reference.");
+
+  const { planId, weekIndex, dayIndex, sessionIndex } = decodeSessionKey(encodedKey);
+  await setDoc(
+    doc(db, "users", uid, "sessionLogs", encodedKey),
+    {
+      planId: planId || null,
+      weekIndex,
+      dayIndex,
+      sessionIndex,
+      ignoredActivityMatches: arrayUnion({
+        sessionKey: encodedKey,
+        activityId,
+        activitySource,
+        ignoredAt: new Date().toISOString(),
+        reason,
+      }),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
 }
 
 export function getSessionFromPlan(data, weekIndex, dayIndex, sessionIndex) {

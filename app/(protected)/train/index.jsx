@@ -43,7 +43,10 @@ import { useLiveActivity } from "../../../providers/LiveActivityProvider";
 import { useTheme } from "../../../providers/ThemeProvider";
 import { dedupeActivities } from "../../../src/lib/activities/activityDedupe";
 import {
+  activityMatchIdentity,
   buildLinkedActivityPayload,
+  ignoredActivityMatchKey,
+  isActivitySessionMatchIgnored,
   matchImportedActivityToPlannedSession as matchImportedActivityToPlannedSessionStrict,
 } from "../../../src/train/utils/activitySessionMatch";
 import {
@@ -52,6 +55,7 @@ import {
   normaliseLiveActivityStatus,
 } from "../../../src/train/utils/liveActivityHelpers";
 import {
+  ignoreExternalActivityForPlannedSession,
   linkExternalActivityToPlannedSession,
   reconcileMissedPlanSessions,
 } from "../../../src/train/utils/sessionRecordHelpers";
@@ -749,11 +753,6 @@ function typeIconName(sess) {
   if (t.includes("yoga")) return "heart";
   if (t.includes("hyrox")) return "target";
   return "layers";
-}
-
-function typePipColor(theme, sess) {
-  if (sessionSportKind(sess) === "run") return theme.primaryBg;
-  return theme.isDark ? "rgba(148,163,184,0.45)" : "rgba(15,23,42,0.15)";
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -1522,6 +1521,105 @@ function focusedDayDisplayLabel(day) {
   return fullWeekday || day.dateLabel || day.dayLabel || "selected day";
 }
 
+function focusedDaySummaryLabel(day) {
+  if (!day) return "Selected day";
+  if (day.isToday) return "Today";
+  const fullWeekday = day.date
+    ? new Date(day.date).toLocaleDateString("en-GB", { weekday: "long" })
+    : "";
+  return fullWeekday || day.dateLabel || day.dayLabel || "Selected day";
+}
+
+function activityDetectedLabel(count) {
+  return `${count} ${count === 1 ? "activity" : "activities"} detected`;
+}
+
+function externalActivityMatches(activity, candidate) {
+  if (!activity || !candidate) return false;
+  const target = resolveLinkedActivityTarget(candidate) || {
+    id: String(candidate?.id || candidate?.activityId || candidate?.sourceDocId || candidate?.reference || ""),
+    source: String(candidate?.source || candidate?.collection || ""),
+  };
+  const activityIds = [
+    activity?.id,
+    activity?.upstreamId,
+    activity?.activityId,
+    activity?.sourceDocId,
+    activity?.reference,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const targetId = String(target?.id || "").trim();
+  if (!targetId || !activityIds.includes(targetId)) return false;
+
+  const targetSource = String(target?.source || "").trim();
+  return !targetSource || !activity?.source || targetSource === activity.source;
+}
+
+function activityIsInList(activity, list = []) {
+  return (Array.isArray(list) ? list : []).some((item) => externalActivityMatches(activity, item));
+}
+
+function deriveDetectedActivityStatus({
+  activity,
+  focusedDayModel,
+  focusedDayCards,
+  focusedDay,
+  ignoredSuggestedMatchKeys,
+}) {
+  const linkStatus = String(activity?.linkStatus || "").trim().toLowerCase();
+  const linkedCards = [
+    ...(focusedDayModel?.completedSessions || []),
+    ...(focusedDayModel?.unplannedSessions || []),
+  ];
+  const hasLinkedCard = linkedCards.some((card) => externalActivityMatches(activity, card?.linkedActivity));
+
+  if (activity?.linkedSessionKey || activity?.linkedTrainSessionId || linkStatus === "linked" || hasLinkedCard) {
+    return "Linked";
+  }
+  if (linkStatus === "ignored" || linkStatus === "rejected" || linkStatus === "dismissed") {
+    return "Ignored";
+  }
+  const plannedCards = (Array.isArray(focusedDayCards) ? focusedDayCards : []).filter(
+    (card) => card?.key && !card?.isExtraCompletedSession
+  );
+  const hasPersistedIgnoredMatch = plannedCards.some((card) =>
+    isActivitySessionMatchIgnored({
+      activity,
+      sessionKey: card.key,
+      sessionLog: card.log,
+    })
+  );
+  if (hasPersistedIgnoredMatch) return "Ignored";
+
+  const hasSuggestedMatch = (focusedDayModel?.suggestedMatches || []).some((match) =>
+    externalActivityMatches(activity, match?.activity)
+  );
+  if (hasSuggestedMatch) return "Needs review";
+
+  const hasIgnoredSuggestedMatch = plannedCards.some((card) => {
+    const ignoreKey = ignoredActivityMatchKey(activity, card.key);
+    if (!ignoredSuggestedMatchKeys?.[ignoreKey]) return false;
+    return matchImportedActivityToSession(activity, {
+      ...card,
+      isoDate: focusedDay?.isoDate,
+    });
+  });
+  if (hasIgnoredSuggestedMatch) return "Ignored";
+
+  const isReviewStatus =
+    linkStatus === "needs_review" ||
+    linkStatus === "needs-review" ||
+    linkStatus === "review" ||
+    linkStatus === "pending_review" ||
+    linkStatus === "pending-review";
+  if (isReviewStatus && activityIsInList(activity, focusedDayModel?.unresolvedActivities)) {
+    return "Needs review";
+  }
+
+  return "Unlinked";
+}
+
 function dayStatusFromModel({
   plannedSessions = [],
   completedSessions = [],
@@ -1617,52 +1715,6 @@ function dayStatusStyles(status, theme, { isSelected = false, isToday = false, h
     textColor: hasSessions ? theme.text : theme.subtext,
     dotColor: isToday ? theme.primaryBg : theme.text,
   };
-}
-
-function DayPill({ theme, item, onPress }) {
-  const active = item.isToday;
-  const sessionCount = Array.isArray(item.cards) ? item.cards.length : 0;
-  const has = sessionCount > 0;
-  const statusLabel = active ? "Today" : has ? "Planned" : "Rest";
-  const detailLabel = has ? `${sessionCount} session${sessionCount > 1 ? "s" : ""}` : "Recovery / open";
-  const statusBg = active ? theme.primaryBg : has ? theme.card2 : "transparent";
-  const statusText = active ? theme.primaryText : has ? theme.text : theme.subtext;
-
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.85}
-      style={[
-        s.dayPill,
-        {
-          backgroundColor: active ? theme.card2 : theme.card,
-          borderColor: active ? theme.primaryBg : theme.border,
-        },
-      ]}
-    >
-      <View style={s.dayPillTop}>
-        <Text style={[s.dayPillDow, { color: active ? theme.text : theme.text }]}>{item.dayLabel}</Text>
-        <Text style={[s.dayPillDate, { color: theme.subtext }]} numberOfLines={1}>
-          {item.dateShort}
-        </Text>
-      </View>
-
-      <View
-        style={[
-          s.dayPillStatus,
-          {
-            backgroundColor: statusBg,
-            borderColor: has || active ? "rgba(0,0,0,0)" : theme.border,
-          },
-        ]}
-      >
-        <Text style={[s.dayPillStatusText, { color: statusText }]}>{statusLabel}</Text>
-      </View>
-      <Text style={[s.dayPillMeta, { color: theme.subtext }]} numberOfLines={1}>
-        {detailLabel}
-      </Text>
-    </TouchableOpacity>
-  );
 }
 
 function ActionRowButton({ icon, label, theme, onPress, primary = false }) {
@@ -1918,23 +1970,6 @@ export default function TrainIndex() {
       return true;
     },
     [currentWeekIndex, router, selectedDayIndex]
-  );
-
-  const openLinkedActivityFromTrain = useCallback(
-    (linkedActivity, options = {}) => {
-      const target = resolveLinkedActivityTarget(linkedActivity);
-      if (!target) return false;
-      return openExternalActivityFromTrain(target, options);
-    },
-    [openExternalActivityFromTrain]
-  );
-
-  const openCompletedSessionFromTrain = useCallback(
-    (sessionId, linkedActivity = null) => {
-      if (openLinkedActivityFromTrain(linkedActivity, { linkedTrainSessionId: sessionId })) return;
-      openHistorySessionFromTrain(sessionId);
-    },
-    [openHistorySessionFromTrain, openLinkedActivityFromTrain]
   );
 
   const hasPlan = !!(plan || companionPlan);
@@ -2898,10 +2933,10 @@ export default function TrainIndex() {
     const matches = [];
     for (const activity of externalActivitiesForFocusedDay) {
       for (const card of plannedCards) {
+        const ignoreKey = ignoredActivityMatchKey(activity, card.key);
+        if (ignoredSuggestedMatchKeys[ignoreKey]) continue;
         const match = matchImportedActivityToSession(activity, card);
         if (!match) continue;
-        const ignoreKey = `${activity.source}:${activity.id}:${card.key}`;
-        if (ignoredSuggestedMatchKeys[ignoreKey]) continue;
         matches.push({ ...match, ignoreKey });
       }
     }
@@ -2946,6 +2981,36 @@ export default function TrainIndex() {
       dayStatus,
     };
   }, [externalActivitiesForFocusedDay, focusedDay, focusedDayCards, suggestedActivityMatches]);
+  const focusedDaySummary = useMemo(() => {
+    const plannedCount = focusedDayModel.plannedSessions.length;
+    const completedCount =
+      focusedDayModel.completedSessions.length + focusedDayModel.unplannedSessions.length;
+    const skippedCount = focusedDayModel.skippedSessions.length;
+    const needsReviewCount =
+      focusedDayModel.suggestedMatches.length + focusedDayModel.unresolvedActivities.length;
+    const detectedCount = focusedDayModel.detectedActivities.length;
+
+    const parts = [focusedDaySummaryLabel(focusedDay)];
+    if (plannedCount > 0) {
+      parts.push(`${plannedCount} planned`);
+    } else {
+      parts.push("Rest day");
+    }
+    if (completedCount > 0) parts.push(`${completedCount} completed`);
+    if (skippedCount > 0) parts.push(`${skippedCount} skipped`);
+    if (needsReviewCount > 0) parts.push(`${needsReviewCount} needs review`);
+    if (detectedCount > 0) parts.push(activityDetectedLabel(detectedCount));
+
+    return {
+      parts,
+      plannedCount,
+      completedCount,
+      skippedCount,
+      needsReviewCount,
+      detectedCount,
+      isRestDay: plannedCount === 0,
+    };
+  }, [focusedDay, focusedDayModel]);
   const focusedDayPriority = useMemo(() => pickPriorityCard(focusedDayCards), [focusedDayCards]);
   const todayFirst = focusedDayPriority.card;
   const todayFirstIndex = focusedDayPriority.index;
@@ -3131,12 +3196,6 @@ export default function TrainIndex() {
     if (!visibleWeeksCount) return 0;
     return Math.min(100, Math.round(((currentWeekIndex + 1) / visibleWeeksCount) * 100));
   }, [currentWeekIndex, visibleWeeksCount]);
-
-  const heroPlanTitle = useMemo(() => {
-    if (!hasPlan) return "Training Plan";
-    if (hasRunPlan && hasStrengthPlan) return "Run + Strength";
-    return plan?.name || companionPlan?.name || "Training Plan";
-  }, [hasPlan, hasRunPlan, hasStrengthPlan, plan?.name, companionPlan?.name]);
 
   const heroActivityLabel = useMemo(() => {
     const parts = [];
@@ -3394,7 +3453,7 @@ export default function TrainIndex() {
     if (!todayFirst && nextSession) return `Next planned: ${nextSession.dayLabel}`;
     if (todayHero?.title) return `Based on ${focusedDayModel.label}`;
     return "Based on this week's plan";
-  }, [focusedDayModel.label, hasPlan, missedPlanPolicy?.goalStatus, nextSession, todayHero?.title]);
+  }, [focusedDayModel.label, hasPlan, missedPlanPolicy?.goalStatus, nextSession, todayFirst, todayHero?.title]);
 
   const openDaySheet = useCallback((idx) => {
     setDaySheetIndex(idx);
@@ -3644,13 +3703,47 @@ export default function TrainIndex() {
     [goToSession, openDaySheet, openHistorySessionFromTrain]
   );
 
-  const ignoreSuggestedActivityMatch = useCallback(() => {
+  const ignoreSuggestedActivityMatch = useCallback(async () => {
     if (!suggestedActivityMatch?.ignoreKey) return;
     setIgnoredSuggestedMatchKeys((prev) => ({
       ...prev,
       [suggestedActivityMatch.ignoreKey]: true,
     }));
-  }, [suggestedActivityMatch?.ignoreKey]);
+
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      Alert.alert("Not signed in", "Please sign in again.");
+      return;
+    }
+
+    try {
+      await ignoreExternalActivityForPlannedSession({
+        uid,
+        encodedKey: suggestedActivityMatch.sessionCard?.key,
+        activity: suggestedActivityMatch.activity,
+      });
+    } catch (e) {
+      console.log("[train] suggested activity ignore error:", e);
+      Alert.alert("Could not save preference", e?.message || "This suggestion was hidden for now only.");
+    }
+  }, [suggestedActivityMatch]);
+
+  const reviewSuggestedActivityManually = useCallback(() => {
+    const sessionKey = String(suggestedActivityMatch?.sessionCard?.key || "").trim();
+    if (!sessionKey) return;
+
+    const { activityId, activitySource } = activityMatchIdentity(suggestedActivityMatch?.activity || {});
+    router.push({
+      pathname: "/train/session/[sessionKey]/link-activity",
+      params: {
+        sessionKey,
+        ...(focusedDay?.isoDate ? { focusedDate: focusedDay.isoDate } : {}),
+        ...(activityId ? { activityId } : {}),
+        ...(activitySource ? { activitySource } : {}),
+        ...(suggestedActivityMatch?.provider ? { provider: suggestedActivityMatch.provider } : {}),
+      },
+    });
+  }, [focusedDay?.isoDate, router, suggestedActivityMatch]);
 
   const linkSuggestedActivityMatch = useCallback(async () => {
     if (!suggestedActivityMatch?.activity || !suggestedActivityMatch?.sessionCard?.key) return;
@@ -3962,6 +4055,26 @@ export default function TrainIndex() {
           ) : null}
         </View>
 
+        {showResolvedPlanState ? (
+          <View
+            style={[
+              s.focusedDaySummaryCard,
+              { backgroundColor: quietSectionSurface, borderColor: quietBorder },
+            ]}
+          >
+            <View style={[s.focusedDaySummaryIcon, { backgroundColor: quietInsetSurface }]}>
+              <Feather
+                name={focusedDaySummary.needsReviewCount > 0 ? "alert-circle" : "calendar"}
+                size={15}
+                color={focusedDaySummary.needsReviewCount > 0 ? theme.primaryBg : theme.text}
+              />
+            </View>
+            <Text style={[s.focusedDaySummaryText, { color: theme.text }]} numberOfLines={2}>
+              {focusedDaySummary.parts.join(" · ")}
+            </Text>
+          </View>
+        ) : null}
+
         {activeLiveSession ? (
           <View
             style={[
@@ -4034,12 +4147,13 @@ export default function TrainIndex() {
                 </Text>
               </View>
             </View>
-            <View style={s.flowStateActions}>
+            <View style={[s.flowStateActions, s.flowStateActionsWrap]}>
               <TouchableOpacity
                 onPress={linkSuggestedActivityMatch}
                 disabled={linkingSuggestedMatch}
                 style={[
                   s.flowStatePrimaryBtn,
+                  s.flowStateActionFlex,
                   { backgroundColor: theme.primaryBg, opacity: linkingSuggestedMatch ? 0.7 : 1 },
                 ]}
                 activeOpacity={0.9}
@@ -4049,9 +4163,25 @@ export default function TrainIndex() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
+                onPress={reviewSuggestedActivityManually}
+                disabled={linkingSuggestedMatch}
+                style={[
+                  s.flowStateSecondaryBtn,
+                  s.flowStateActionFlex,
+                  { borderColor: theme.border, opacity: linkingSuggestedMatch ? 0.7 : 1 },
+                ]}
+                activeOpacity={0.85}
+              >
+                <Text style={[s.flowStateSecondaryText, { color: theme.text }]}>Review manually</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
                 onPress={ignoreSuggestedActivityMatch}
                 disabled={linkingSuggestedMatch}
-                style={[s.flowStateSecondaryBtn, { borderColor: theme.border }]}
+                style={[
+                  s.flowStateSecondaryBtn,
+                  s.flowStateActionFlex,
+                  { borderColor: theme.border, opacity: linkingSuggestedMatch ? 0.7 : 1 },
+                ]}
                 activeOpacity={0.85}
               >
                 <Text style={[s.flowStateSecondaryText, { color: theme.text }]}>Not this session</Text>
@@ -4165,14 +4295,6 @@ export default function TrainIndex() {
                     </Text>
                   </TouchableOpacity>
 
-                  <TouchableOpacity
-                    onPress={openPrimaryPlan}
-                    style={[s.secondaryBtn, { borderColor: theme.border, backgroundColor: theme.card2 }]}
-                    activeOpacity={0.85}
-                  >
-                    <Feather name="calendar" size={14} color={theme.text} />
-                    <Text style={[s.secondaryBtnText, { color: theme.text }]}>Open plan</Text>
-                  </TouchableOpacity>
                 </View>
 
                 {extraDaySessions.length ? (
@@ -4255,14 +4377,6 @@ export default function TrainIndex() {
                               </Text>
                             </TouchableOpacity>
 
-                            <TouchableOpacity
-                              onPress={openPrimaryPlan}
-                              style={[s.secondaryBtn, { borderColor: theme.border, backgroundColor: theme.card2 }]}
-                              activeOpacity={0.85}
-                            >
-                              <Feather name="calendar" size={14} color={theme.text} />
-                              <Text style={[s.secondaryBtnText, { color: theme.text }]}>Open plan</Text>
-                            </TouchableOpacity>
                           </View>
                         </View>
                       );
@@ -4417,9 +4531,16 @@ export default function TrainIndex() {
                     const benefit = activityBenefit(activity);
                     const stats = externalActivityStats(activity);
                     const meta = externalActivityMeta(activity);
-                    const needsReview = focusedDayModel.suggestedMatches.some(
-                      (match) => match.activity?.source === activity.source && match.activity?.id === activity.id
-                    );
+                    const detectedStatus = deriveDetectedActivityStatus({
+                      activity,
+                      focusedDayModel,
+                      focusedDayCards,
+                      focusedDay,
+                      ignoredSuggestedMatchKeys,
+                    });
+                    const isLinked = detectedStatus === "Linked";
+                    const isNeedsReview = detectedStatus === "Needs review";
+                    const isIgnored = detectedStatus === "Ignored";
                     return (
                       <TouchableOpacity
                         key={`${activity.source}:${activity.id}`}
@@ -4442,9 +4563,43 @@ export default function TrainIndex() {
                               >
                                 {activity.title}
                               </Text>
-                              <View style={[s.completedBenefitChip, { backgroundColor: theme.primaryBg }]}>
-                                <Text style={[s.completedBenefitChipText, { color: theme.primaryText }]}>
-                                  {needsReview ? "Needs review" : benefit.label}
+                              <View
+                                style={[
+                                  s.completedBenefitChip,
+                                  s.detectedActivityStatusChip,
+                                  {
+                                    backgroundColor: isNeedsReview
+                                      ? theme.primaryBg
+                                      : isLinked
+                                      ? withHexAlpha(theme.primaryBg, theme.isDark ? "22" : "2F")
+                                      : isIgnored
+                                      ? "rgba(148,163,184,0.16)"
+                                      : quietSectionSurface,
+                                    borderColor: isNeedsReview
+                                      ? theme.primaryBg
+                                      : isLinked
+                                      ? withHexAlpha(theme.primaryBg, theme.isDark ? "78" : "9A")
+                                      : isIgnored
+                                      ? "rgba(148,163,184,0.36)"
+                                      : quietBorder,
+                                  },
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    s.completedBenefitChipText,
+                                    {
+                                      color: isNeedsReview
+                                        ? theme.primaryText
+                                        : isLinked
+                                        ? theme.primaryBg
+                                        : isIgnored
+                                        ? theme.subtext
+                                        : theme.text,
+                                    },
+                                  ]}
+                                >
+                                  {detectedStatus}
                                 </Text>
                               </View>
                             </View>
@@ -5501,6 +5656,28 @@ const s = StyleSheet.create({
     fontWeight: "600",
     lineHeight: 17,
   },
+  focusedDaySummaryCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+  },
+  focusedDaySummaryIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  focusedDaySummaryText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "800",
+  },
   noPlanWeekStrip: {
     marginTop: 12,
     marginBottom: 2,
@@ -5765,6 +5942,13 @@ const s = StyleSheet.create({
     gap: 8,
     alignItems: "center",
   },
+  flowStateActionsWrap: {
+    flexWrap: "wrap",
+  },
+  flowStateActionFlex: {
+    flexGrow: 1,
+    flexBasis: 108,
+  },
   flowStatePrimaryBtn: {
     flex: 1,
     minHeight: 38,
@@ -5903,6 +6087,9 @@ const s = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 4,
+  },
+  detectedActivityStatusChip: {
+    borderWidth: StyleSheet.hairlineWidth,
   },
   completedBenefitChipText: {
     fontSize: 9,
