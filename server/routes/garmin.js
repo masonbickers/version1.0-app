@@ -93,8 +93,17 @@ function hasAnyActivityCredentialEnv() {
   );
 }
 
+function hasAnyTrainingCredentialEnv() {
+  return !!(
+    process.env.GARMIN_TRAINING_CLIENT_ID ||
+    process.env.GARMIN_TRAINING_CLIENT_SECRET ||
+    process.env.GARMIN_TRAINING_REDIRECT_URI
+  );
+}
+
 function getGarminOAuthConfig(profile = "activity") {
   const useActivity = profile === "activity" && hasAnyActivityCredentialEnv();
+  const useTraining = profile === "training" && hasAnyTrainingCredentialEnv();
   const useHealth = profile === "health";
 
   const config = useActivity
@@ -111,6 +120,20 @@ function getGarminOAuthConfig(profile = "activity") {
         missingSecretMessage:
           "Missing GARMIN_ACTIVITY_CLIENT_ID, GARMIN_ACTIVITY_CLIENT_SECRET, or GARMIN_ACTIVITY_REDIRECT_URI",
       }
+    : useTraining
+      ? {
+          profile: "training",
+          integrationKey: "garminTraining",
+          clientId: process.env.GARMIN_TRAINING_CLIENT_ID,
+          clientSecret: process.env.GARMIN_TRAINING_CLIENT_SECRET,
+          redirectUri:
+            process.env.GARMIN_TRAINING_REDIRECT_URI ||
+            process.env.GARMIN_REDIRECT_URI,
+          missingClientMessage:
+            "Missing GARMIN_TRAINING_CLIENT_ID or GARMIN_TRAINING_REDIRECT_URI",
+          missingSecretMessage:
+            "Missing GARMIN_TRAINING_CLIENT_ID, GARMIN_TRAINING_CLIENT_SECRET, or GARMIN_TRAINING_REDIRECT_URI",
+        }
     : useHealth
     ? {
         profile: "health",
@@ -213,6 +236,8 @@ router.post("/start-url", requireUser, async (req, res) => {
     const safeProfile =
       requestedProfile === "activity"
         ? "activity"
+        : requestedProfile === "training"
+          ? "training"
         : requestedProfile === "health"
           ? "health"
           : "default";
@@ -447,7 +472,7 @@ router.get("/callback", async (req, res) => {
       expiresAtMs,
       refreshTokenExpiresIn: tokenJson.refresh_token_expires_in || null,
       credentialProfile: oauthConfig.profile,
-      apiProduct: oauthConfig.profile === "activity" ? "activity" : "default",
+      apiProduct: oauthConfig.profile,
       linkedAtMs: now,
       tokenEndpoint: TOKEN_ENDPOINT,
       userIdEndpointAttempted: USER_ID_ENDPOINT,

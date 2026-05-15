@@ -505,13 +505,14 @@ function buildTrainingApiWorkoutPayload(workout = {}, { title = "Workout", sessi
 async function loadGarminIntegration(uid) {
   const snap = await admin.firestore().collection("users").doc(String(uid)).get();
   if (!snap.exists) return null;
-  return snap.data()?.integrations?.garmin || null;
+  const integrations = snap.data()?.integrations || {};
+  return integrations.garminTraining || integrations.garmin || null;
 }
 
 async function saveGarminIntegration(uid, integration) {
   await admin.firestore().collection("users").doc(String(uid)).set(
     {
-      integrations: { garmin: integration },
+      integrations: { garminTraining: integration },
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     { merge: true }
@@ -541,10 +542,20 @@ async function refreshAccessTokenIfNeeded(uid, garmin) {
     return { ok: false, error: "Garmin access token expired and no refresh token is stored" };
   }
 
-  const clientId = String(process.env.GARMIN_CLIENT_ID || "").trim();
-  const clientSecret = String(process.env.GARMIN_CLIENT_SECRET || "").trim();
+  const clientId = String(
+    process.env.GARMIN_TRAINING_CLIENT_ID || process.env.GARMIN_CLIENT_ID || ""
+  ).trim();
+  const clientSecret = String(
+    process.env.GARMIN_TRAINING_CLIENT_SECRET ||
+      process.env.GARMIN_CLIENT_SECRET ||
+      ""
+  ).trim();
   if (!clientId || !clientSecret) {
-    return { ok: false, error: "Missing GARMIN_CLIENT_ID or GARMIN_CLIENT_SECRET" };
+    return {
+      ok: false,
+      error:
+        "Missing GARMIN_TRAINING_CLIENT_ID/GARMIN_CLIENT_ID or GARMIN_TRAINING_CLIENT_SECRET/GARMIN_CLIENT_SECRET",
+    };
   }
 
   const body = new URLSearchParams({

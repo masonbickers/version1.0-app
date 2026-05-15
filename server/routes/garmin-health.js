@@ -70,6 +70,63 @@ function uidFromRequest(req) {
   return String(req.user?.uid || "").trim();
 }
 
+function pickNumber(...values) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return null;
+}
+
+function compactHealthPayload(payload) {
+  const source = payload?.summary || payload?.dailySummary || payload?.wellnessSummary || payload || {};
+  return {
+    calendarDate: source.calendarDate || source.summaryDate || source.date || null,
+    steps: pickNumber(source.steps, source.totalSteps, source.stepCount),
+    activeKilocalories: pickNumber(source.activeKilocalories, source.activeCalories, source.calories),
+    bmrKilocalories: pickNumber(source.bmrKilocalories),
+    distanceInMeters: pickNumber(source.distanceInMeters, source.distanceMeters),
+    durationInSeconds: pickNumber(source.durationInSeconds),
+    restingHeartRateInBeatsPerMinute: pickNumber(
+      source.restingHeartRateInBeatsPerMinute,
+      source.restingHeartRate,
+      source.restingHr,
+      source.rhr
+    ),
+    averageHeartRateInBeatsPerMinute: pickNumber(
+      source.averageHeartRateInBeatsPerMinute,
+      source.averageHeartRate,
+      source.avgHr
+    ),
+    maxHeartRateInBeatsPerMinute: pickNumber(source.maxHeartRateInBeatsPerMinute, source.maxHeartRate),
+    averageStressLevel: pickNumber(source.averageStressLevel, source.avgStressLevel, source.stressLevel, source.stress),
+    bodyBatteryChargedValue: pickNumber(source.bodyBatteryChargedValue),
+    bodyBatteryDrainedValue: pickNumber(source.bodyBatteryDrainedValue),
+    bodyBatteryMostRecentValue: pickNumber(source.bodyBatteryMostRecentValue, source.bodyBattery),
+    sleepDurationMinutes: pickNumber(
+      source.sleepDurationMinutes,
+      source.totalSleepMinutes,
+      source.sleepingSeconds ? source.sleepingSeconds / 60 : null
+    ),
+    hrv: pickNumber(source.hrv, source.hrvMs, source.lastNightAvg),
+  };
+}
+
+function compactStoredHealthDoc(doc) {
+  const rawPayload = doc?.data || doc?.payload || null;
+  return {
+    uid: doc?.uid || null,
+    kind: doc?.kind || null,
+    date: doc?.date || null,
+    meta: doc?.meta || null,
+    fetchedAt: doc?.fetchedAt || null,
+    updatedAt: doc?.updatedAt || null,
+    data: compactHealthPayload(rawPayload),
+    payload: compactHealthPayload(rawPayload),
+    compact: true,
+  };
+}
+
 async function getUserGarminData(uid) {
   const snap = await admin.firestore().collection("users").doc(String(uid)).get();
   if (!snap.exists) return null;
@@ -104,11 +161,16 @@ async function refreshAccessTokenIfNeeded(uid, garmin) {
     return { ok: false, error: "Access token expired and no refreshToken present" };
   }
 
-  const clientId = process.env.GARMIN_CLIENT_ID;
-  const clientSecret = process.env.GARMIN_CLIENT_SECRET;
+  const clientId = process.env.GARMIN_HEALTH_CLIENT_ID || process.env.GARMIN_CLIENT_ID;
+  const clientSecret =
+    process.env.GARMIN_HEALTH_CLIENT_SECRET || process.env.GARMIN_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    return { ok: false, error: "Missing GARMIN_CLIENT_ID or GARMIN_CLIENT_SECRET" };
+    return {
+      ok: false,
+      error:
+        "Missing GARMIN_HEALTH_CLIENT_ID/GARMIN_CLIENT_ID or GARMIN_HEALTH_CLIENT_SECRET/GARMIN_CLIENT_SECRET",
+    };
   }
 
   const body = new URLSearchParams({
@@ -443,7 +505,8 @@ router.get("/dailies", async (req, res) => {
       status: result.status,
       date,
       errorMessage: !result.ok ? errMsg : null,
-      data: result.body,
+      data: req.query.raw === "1" ? result.body : compactHealthPayload(result.body),
+      compact: req.query.raw !== "1",
     });
   } catch (e) {
     console.error("[garmin-health] dailies error:", e?.message || e);
@@ -469,6 +532,7 @@ router.get("/read", async (req, res) => {
       .collection("garmin_health");
 
     const kindStr = String(kind);
+    const includeRaw = req.query.raw === "1";
     // Backward/side-by-side compatibility:
     // - health route saves docs as `${kind}_${date}`
     // - webhook route saves dailies as `garmin_dailies_${date}`
@@ -478,6 +542,7 @@ router.get("/read", async (req, res) => {
     for (const id of candidateIds) {
       const snap = await baseRef.doc(id).get();
       if (snap.exists) {
+        const storedDoc = snap.data();
         return res.json({
           ok: true,
           found: true,
@@ -485,7 +550,8 @@ router.get("/read", async (req, res) => {
           kind: kindStr,
           date: d,
           docId: id,
-          doc: snap.data(),
+          doc: includeRaw ? storedDoc : compactStoredHealthDoc(storedDoc),
+          compact: !includeRaw,
         });
       }
     }

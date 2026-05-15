@@ -401,7 +401,7 @@ export default function SettingsPage() {
       GARMIN
   ─────────────────────────────── */
 
-  const handleConnectGarmin = async () => {
+  const handleConnectGarmin = async (profile = "health") => {
     try {
       const user = auth.currentUser;
 
@@ -422,13 +422,17 @@ export default function SettingsPage() {
 
       const idToken = await user.getIdToken();
 
+      const requestedProfile = String(profile || "health").trim();
       const startResp = await fetch(`${API_BASE}/auth/garmin/start-url`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${idToken}`,
         },
-        body: JSON.stringify({ returnUrl: GARMIN_RETURN_URL }),
+        body: JSON.stringify({
+          returnUrl: GARMIN_RETURN_URL,
+          profile: requestedProfile,
+        }),
       });
 
       const startText = await startResp.text();
@@ -471,17 +475,26 @@ export default function SettingsPage() {
       if (success === "1" || success === 1) {
         await AsyncStorage.multiSet([["garmin_connected", "1"]]);
         setGarminConnected(true);
-        try {
-          await triggerGarminInitialSync();
+        if (requestedProfile === "activity") {
+          try {
+            await triggerGarminInitialSync();
+            Alert.alert(
+              "Garmin",
+              "Garmin activities connected. Recent activity import has started."
+            );
+          } catch (syncError) {
+            console.log("Garmin initial sync after connect failed", syncError);
+            Alert.alert(
+              "Garmin",
+              "Garmin activities connected. Recent activities will import through Garmin shortly."
+            );
+          }
+        } else {
           Alert.alert(
             "Garmin",
-            "Garmin account connected. Recent activity import has started."
-          );
-        } catch (syncError) {
-          console.log("Garmin initial sync after connect failed", syncError);
-          Alert.alert(
-            "Garmin",
-            "Garmin account connected. Recent activities will import through Garmin shortly."
+            requestedProfile === "training"
+              ? "Garmin training connected. You can now send workouts to Garmin."
+              : "Garmin health connected. Save the Daily Health Stats permission, then request backfill."
           );
         }
       } else {
@@ -860,10 +873,12 @@ export default function SettingsPage() {
               garminConnected
                 ? garminConnecting
                   ? "Garmin (Connecting…)"
-                  : "Garmin (Connected)"
-                : "Connect Garmin"
+                  : "Garmin Health (Connected)"
+                : "Connect Garmin Health"
             }
-            onPress={garminConnected ? undefined : handleConnectGarmin}
+            onPress={
+              garminConnected ? undefined : () => handleConnectGarmin("health")
+            }
             right={
               garminConnecting ? (
                 <ActivityIndicator size="small" />
@@ -884,6 +899,54 @@ export default function SettingsPage() {
 
           {garminConnected && (
             <>
+              <Divider colors={colors} />
+
+              <Row
+                icon="activity"
+                label="Connect Garmin Activities"
+                onPress={
+                  garminConnecting ? undefined : () => handleConnectGarmin("activity")
+                }
+                colors={colors}
+                isDark={isDark}
+                accentFill={accentFill}
+                right={
+                  garminConnecting ? (
+                    <ActivityIndicator size="small" />
+                  ) : (
+                    <Feather
+                      name="chevron-right"
+                      size={18}
+                      color={colors.subtext}
+                    />
+                  )
+                }
+              />
+
+              <Divider colors={colors} />
+
+              <Row
+                icon="send"
+                label="Connect Garmin Training"
+                onPress={
+                  garminConnecting ? undefined : () => handleConnectGarmin("training")
+                }
+                colors={colors}
+                isDark={isDark}
+                accentFill={accentFill}
+                right={
+                  garminConnecting ? (
+                    <ActivityIndicator size="small" />
+                  ) : (
+                    <Feather
+                      name="chevron-right"
+                      size={18}
+                      color={colors.subtext}
+                    />
+                  )
+                }
+              />
+
               <Divider colors={colors} />
 
               <Row
@@ -942,6 +1005,17 @@ export default function SettingsPage() {
                     />
                   )
                 }
+              />
+
+              <Divider colors={colors} />
+
+              <Row
+                icon="heart"
+                label="View Garmin Health Data"
+                onPress={() => router.push("/garmin/health")}
+                colors={colors}
+                isDark={isDark}
+                accentFill={accentFill}
               />
 
               <Divider colors={colors} />
