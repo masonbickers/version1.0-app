@@ -897,56 +897,56 @@ export default function SettingsPage() {
             accentFill={accentFill}
           />
 
+          <Divider colors={colors} />
+
+          <Row
+            icon="activity"
+            label="Connect Garmin Activities"
+            onPress={
+              garminConnecting ? undefined : () => handleConnectGarmin("activity")
+            }
+            colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
+            right={
+              garminConnecting ? (
+                <ActivityIndicator size="small" />
+              ) : (
+                <Feather
+                  name="chevron-right"
+                  size={18}
+                  color={colors.subtext}
+                />
+              )
+            }
+          />
+
+          <Divider colors={colors} />
+
+          <Row
+            icon="send"
+            label="Connect Garmin Training"
+            onPress={
+              garminConnecting ? undefined : () => handleConnectGarmin("training")
+            }
+            colors={colors}
+            isDark={isDark}
+            accentFill={accentFill}
+            right={
+              garminConnecting ? (
+                <ActivityIndicator size="small" />
+              ) : (
+                <Feather
+                  name="chevron-right"
+                  size={18}
+                  color={colors.subtext}
+                />
+              )
+            }
+          />
+
           {garminConnected && (
             <>
-              <Divider colors={colors} />
-
-              <Row
-                icon="activity"
-                label="Connect Garmin Activities"
-                onPress={
-                  garminConnecting ? undefined : () => handleConnectGarmin("activity")
-                }
-                colors={colors}
-                isDark={isDark}
-                accentFill={accentFill}
-                right={
-                  garminConnecting ? (
-                    <ActivityIndicator size="small" />
-                  ) : (
-                    <Feather
-                      name="chevron-right"
-                      size={18}
-                      color={colors.subtext}
-                    />
-                  )
-                }
-              />
-
-              <Divider colors={colors} />
-
-              <Row
-                icon="send"
-                label="Connect Garmin Training"
-                onPress={
-                  garminConnecting ? undefined : () => handleConnectGarmin("training")
-                }
-                colors={colors}
-                isDark={isDark}
-                accentFill={accentFill}
-                right={
-                  garminConnecting ? (
-                    <ActivityIndicator size="small" />
-                  ) : (
-                    <Feather
-                      name="chevron-right"
-                      size={18}
-                      color={colors.subtext}
-                    />
-                  )
-                }
-              />
-
               <Divider colors={colors} />
 
               <Row
