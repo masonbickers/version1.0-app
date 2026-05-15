@@ -95,6 +95,7 @@ function hasAnyActivityCredentialEnv() {
 
 function getGarminOAuthConfig(profile = "activity") {
   const useActivity = profile === "activity" && hasAnyActivityCredentialEnv();
+  const useHealth = profile === "health";
 
   const config = useActivity
     ? {
@@ -109,6 +110,20 @@ function getGarminOAuthConfig(profile = "activity") {
           "Missing GARMIN_ACTIVITY_CLIENT_ID or GARMIN_ACTIVITY_REDIRECT_URI",
         missingSecretMessage:
           "Missing GARMIN_ACTIVITY_CLIENT_ID, GARMIN_ACTIVITY_CLIENT_SECRET, or GARMIN_ACTIVITY_REDIRECT_URI",
+      }
+    : useHealth
+    ? {
+        profile: "health",
+        integrationKey: "garmin",
+        clientId: process.env.GARMIN_HEALTH_CLIENT_ID || process.env.GARMIN_CLIENT_ID,
+        clientSecret:
+          process.env.GARMIN_HEALTH_CLIENT_SECRET || process.env.GARMIN_CLIENT_SECRET,
+        redirectUri:
+          process.env.GARMIN_HEALTH_REDIRECT_URI || process.env.GARMIN_REDIRECT_URI,
+        missingClientMessage:
+          "Missing GARMIN_HEALTH_CLIENT_ID/GARMIN_CLIENT_ID or GARMIN_HEALTH_REDIRECT_URI/GARMIN_REDIRECT_URI",
+        missingSecretMessage:
+          "Missing GARMIN_HEALTH_CLIENT_ID/GARMIN_CLIENT_ID, GARMIN_HEALTH_CLIENT_SECRET/GARMIN_CLIENT_SECRET, or GARMIN_HEALTH_REDIRECT_URI/GARMIN_REDIRECT_URI",
       }
     : {
         profile: "default",
@@ -144,8 +159,8 @@ async function safeJson(resp) {
   }
 }
 
-async function buildGarminAuthUrl({ uid, requestedReturnUrl }) {
-  const oauthConfig = getGarminOAuthConfig("activity");
+async function buildGarminAuthUrl({ uid, requestedReturnUrl, profile = "health" }) {
+  const oauthConfig = getGarminOAuthConfig(profile);
   const { clientId, redirectUri } = oauthConfig;
 
   if (!clientId || !redirectUri) {
@@ -192,9 +207,21 @@ router.post("/start-url", requireUser, async (req, res) => {
   try {
     const uid = String(req.user?.uid || "").trim();
     const requestedReturnUrl = String(req.body?.returnUrl || "").trim();
+    const requestedProfile = String(req.body?.profile || "health").trim();
     if (!uid) return res.status(401).json({ error: "Unauthenticated user" });
 
-    const result = await buildGarminAuthUrl({ uid, requestedReturnUrl });
+    const safeProfile =
+      requestedProfile === "activity"
+        ? "activity"
+        : requestedProfile === "health"
+          ? "health"
+          : "default";
+
+    const result = await buildGarminAuthUrl({
+      uid,
+      requestedReturnUrl,
+      profile: safeProfile,
+    });
     return res.json({ ok: true, ...result });
   } catch (error) {
     console.error("Garmin start-url error:", error?.message || error);
