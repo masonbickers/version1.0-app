@@ -4,11 +4,15 @@ import fs from "fs";
 /**
  * Initializes the Firebase Admin SDK.
  * Supports both a file path and a direct JSON string for flexibility.
+ * In local/dev environments without credentials, it still initialises the
+ * default app with a project id so non-Firebase routes and health checks can
+ * start. Firebase operations will then fail at request time instead of server
+ * import time.
  */
 export function initAdmin() {
   // 1. Prevent double initialization
   if (admin.apps.length > 0) {
-    return admin.app();
+    return admin;
   }
 
   try {
@@ -20,7 +24,18 @@ export function initAdmin() {
       if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
         serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
       } else {
-        throw new Error("Missing FIREBASE_SERVICE_ACCOUNT_PATH or JSON string.");
+        const projectId =
+          process.env.FIREBASE_PROJECT_ID ||
+          process.env.GCLOUD_PROJECT ||
+          process.env.GOOGLE_CLOUD_PROJECT ||
+          "local-dev";
+
+        admin.initializeApp({ projectId });
+        admin.firestore().settings({ ignoreUndefinedProperties: true });
+        console.warn(
+          "[firebase-admin] Credentials not configured; started in local-safe mode."
+        );
+        return admin;
       }
     } else {
       // Load from File Path

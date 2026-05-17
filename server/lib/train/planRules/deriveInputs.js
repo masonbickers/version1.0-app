@@ -15,6 +15,7 @@ import {
   normalisePublicDifficulty,
   uniqOrderedDays,
 } from "./normalization.js";
+import { pacesForEngineFromPaceModel } from "./pacePhysiology.js";
 
 function clamp(n, min, max) {
   return Math.min(Math.max(n, min), max);
@@ -143,6 +144,33 @@ function parseEstimatedRaceFromGoalTargetTime(profile = {}, { sourceField = "goa
   });
 }
 
+function goalDistanceKeyToKm(goalDistanceKey) {
+  const key = String(goalDistanceKey || "").toUpperCase().trim();
+  if (key === "5K") return 5;
+  if (key === "10K") return 10;
+  if (key === "HALF") return 21.0975;
+  if (key === "MARATHON") return 42.195;
+  return null;
+}
+
+function pickGoalTargetRace(profile = {}, goalDistanceKey = null) {
+  const sec =
+    toNumberOrNull(profile?.pacing?.estimatedRaceTimeSec) ??
+    parseTimeToSeconds(profile?.goal?.targetTime) ??
+    parseTimeToSeconds(profile?.goal?.estimatedRaceTime) ??
+    parseTimeToSeconds(profile?.pacing?.estimatedRaceTime);
+  if (!Number.isFinite(sec) || sec <= 0) return null;
+
+  const distance = profile?.goal?.distance ?? profile?.goalDistance ?? goalDistanceKey;
+  return makeRaceCandidate({
+    source: "goal_target_time",
+    sourceField: profile?.pacing?.estimatedRaceTimeSec ? "pacing.estimatedRaceTimeSec" : "goal.targetTime",
+    distance,
+    distanceKm: goalDistanceKeyToKm(goalDistanceKey),
+    timeSec: sec,
+  });
+}
+
 function buildSimpleModeInputProfile(athleteProfile = {}) {
   const src = athleteProfile && typeof athleteProfile === "object" ? athleteProfile : {};
   const availability =
@@ -220,6 +248,8 @@ function buildSimpleModeInputProfile(athleteProfile = {}) {
           estimatedRaceTimeSec: compactRaceAnchor.timeSec,
         }
       : {},
+    paceModel: src?.paceModel || null,
+    paceTrace: src?.paceTrace || null,
   };
 }
 
@@ -336,7 +366,7 @@ function deriveTrainingPacesFromRace({ recentRace, difficulty }) {
     thresholdSecPerKm: clampPace(thr, MIN, MAX),
     easy: range(thr * 1.20, thr * 1.45),
     steady: range(thr * 1.08, thr * 1.16),
-    tempo: range(thr * 0.98, thr * 1.04),
+    tempo: range(thr * 0.98, thr * 1.01),
     interval: range(
       recentRace.distanceKm <= 10.01 ? racePace * 0.90 : racePace * 0.92,
       recentRace.distanceKm <= 10.01 ? racePace * 0.97 : racePace * 0.99
@@ -430,6 +460,7 @@ function derivePacesWithPrecedence(
   const precedence = [
     ...(allowThresholdPace ? ["threshold_pace"] : []),
     "recent_race_or_pb",
+    "goal_target_time",
     ...(allowRecentTimesFallback ? ["recent_times_fallback"] : []),
     "default_policy",
   ];
@@ -469,6 +500,26 @@ function derivePacesWithPrecedence(
           sourceField: explicitRace.sourceField,
           distanceKm: explicitRace.distanceKm,
           timeSec: explicitRace.timeSec,
+        },
+      };
+    }
+  }
+
+  const goalRace =
+    parseEstimatedRaceFromGoalTargetTime(profile) ||
+    pickGoalTargetRace(profile, goalDistanceKey);
+  if (goalRace) {
+    const paces = deriveTrainingPacesFromRace({ recentRace: goalRace, difficulty });
+    if (paces) {
+      return {
+        paces: { ...paces, source: "goal_target_time" },
+        recentRace: goalRace,
+        trace: {
+          precedence,
+          selectedPath: "goal_target_time",
+          sourceField: goalRace.sourceField,
+          distanceKm: goalRace.distanceKm,
+          timeSec: goalRace.timeSec,
         },
       };
     }
@@ -858,25 +909,68 @@ export function normaliseAthleteProfile(athleteProfile = {}) {
   const allowThresholdPace = strictSimpleMode ? false : true;
   const allowRecentTimesFallback = strictSimpleMode ? false : true;
 
-  const paceResult = derivePacesWithPrecedence(sourceProfile, {
-    difficulty,
-    experienceKey,
-    goalDistanceKey,
-    allowThresholdPace,
-    allowRecentTimesFallback,
-  });
-  const explicitPaceOverride = applyExplicitPaceOverrides(
-    paceResult?.paces || null,
-    sourceProfile
-  );
-  const paces = explicitPaceOverride?.paces || null;
-  const recentRace = paceResult?.recentRace || null;
+  const dynamicPaceModel = sourceProfile?.paceModel || athleteProfile?.paceModel || null;
+  const dynamicEnginePaces = pacesForEngineFromPaceModel(dynamicPaceModel);
+  let paceResult = null;
+  let explicitPaceOverride = { paces: null, appliedKeys: [] };
+  let paces = null;
+  let recentRace = null;
+  let paceAnchorTrace = null;
+
+  if (dynamicEnginePaces) {
+    paces = dynamicEnginePaces;
+    recentRace = dynamicPaceModel?.primaryAnchor?.distanceKm
+      ? {
+          source: dynamicPaceModel.primaryAnchor.source || "dynamic_pace_model",
+          sourceField: dynamicPaceModel.primaryAnchor.sourceField || null,
+          distanceKm: dynamicPaceModel.primaryAnchor.distanceKm,
+          timeSec: dynamicPaceModel.primaryAnchor.timeSec,
+        }
+      : null;
+    paceAnchorTrace = {
+      precedence: ["dynamic_pace_model", "threshold_pace", "recent_race_or_pb", "recent_times_fallback", "default_policy"],
+      selectedPath: "dynamic_pace_model",
+      sourceField: dynamicPaceModel?.primaryAnchor?.sourceField || null,
+      confidence: dynamicPaceModel?.confidence ?? null,
+      targetMode: dynamicPaceModel?.adjustments?.targetMode || null,
+      warnings: Array.isArray(dynamicPaceModel?.warnings) ? dynamicPaceModel.warnings : [],
+    };
+  } else {
+    paceResult = derivePacesWithPrecedence(sourceProfile, {
+      difficulty,
+      experienceKey,
+      goalDistanceKey,
+      allowThresholdPace,
+      allowRecentTimesFallback,
+    });
+    explicitPaceOverride = applyExplicitPaceOverrides(
+      paceResult?.paces || null,
+      sourceProfile
+    );
+    paces = explicitPaceOverride?.paces || null;
+    recentRace = paceResult?.recentRace || null;
+    paceAnchorTrace = paceResult?.trace
+      ? {
+          ...paceResult.trace,
+          explicitOverrides: explicitPaceOverride?.appliedKeys || [],
+        }
+      : null;
+  }
 
   // Step 4 contract:
   // In simple mode, auto HR derivation is optional and off by default.
   const allowAutoHrZones =
     !simpleModeEnabled || simpleCfg?.hrZones?.autoDeriveFromProfile === true;
-  const hrResult = allowAutoHrZones
+  const hrResult = dynamicPaceModel?.hrZones
+    ? {
+        hrZones: dynamicPaceModel.hrZones,
+        trace: {
+          precedence: ["dynamic_pace_model", "lthr_override", "resting_override_to_hrr", "max_only_default"],
+          selectedPath: dynamicPaceModel.hrZones.source || dynamicPaceModel.hrZones.method || "dynamic_pace_model",
+          source: "paceModel.hrZones",
+        },
+      }
+    : allowAutoHrZones
     ? deriveHrZonesFromProfile(sourceProfile)
     : {
         hrZones: null,
@@ -888,12 +982,7 @@ export function normaliseAthleteProfile(athleteProfile = {}) {
       };
   const hrZones = hrResult?.hrZones || null;
   const anchorTrace = {
-    pace: paceResult?.trace
-      ? {
-          ...paceResult.trace,
-          explicitOverrides: explicitPaceOverride?.appliedKeys || [],
-        }
-      : null,
+    pace: paceAnchorTrace,
     hr: hrResult?.trace || null,
   };
 
@@ -939,6 +1028,9 @@ export function normaliseAthleteProfile(athleteProfile = {}) {
     recentTrainingSummary: sourceProfile?.recentTrainingSummary || null,
     recentReadinessSummary: sourceProfile?.recentReadinessSummary || null,
     adaptationTrace: sourceProfile?.adaptationTrace || null,
+    goalRealism: sourceProfile?.goalRealism || null,
+    paceModel: dynamicPaceModel || null,
+    paceTrace: sourceProfile?.paceTrace || athleteProfile?.paceTrace || null,
 
     maxHardSessions: RULES.maxHardSessionsByExperience?.[experience] ?? 1,
     inputContract: {

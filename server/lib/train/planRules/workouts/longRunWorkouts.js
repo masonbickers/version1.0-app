@@ -84,16 +84,6 @@ function cooldownStep(min = 5) {
   return { stepType: "cooldown", durationType: "time", durationValue: Math.round(min * 60), targetType: "none" };
 }
 
-function easyTime(min) {
-  return { stepType: "recovery", durationType: "time", durationValue: Math.round(min * 60), targetType: "none" };
-}
-function steadyTime(min) {
-  return { stepType: "steady", durationType: "time", durationValue: Math.round(min * 60), targetType: "none" };
-}
-function tempoTime(min) {
-  return { stepType: "tempo", durationType: "time", durationValue: Math.round(min * 60), targetType: "none" };
-}
-
 function easyDistanceKm(km) {
   return {
     stepType: "recovery",
@@ -133,6 +123,16 @@ function ensureDistanceTotalKm(segmentsKm, totalKm) {
   return segs;
 }
 
+function tempoFinishDistanceKm({ km, minutes, goal }) {
+  const base =
+    goal === "ULTRA" ? 3.0 :
+    goal === "MARATHON" ? 2.5 :
+    goal === "HALF" ? 2.0 :
+    1.5;
+  const fromMinutes = Math.max(0.8, (Number(minutes || 0) / 10) * base);
+  return clamp(fromMinutes, 0.8, Math.max(0.8, Math.min(km * 0.35, km - 1)));
+}
+
 function finishMinutesFromLongKm(lk) {
   if (lk < 10) return 0;
   if (lk < 12) return 8;
@@ -155,10 +155,12 @@ function buildEasyLongSteps({ km }) {
 function buildFastFinishSteps({ km, finishMin }) {
   const warm = 10;
   const cd = 5;
+  const tempoKm = tempoFinishDistanceKm({ km, minutes: finishMin, goal: "10K" });
+  const [easyKmAdj, tempoKmAdj] = ensureDistanceTotalKm([Math.max(0, km - tempoKm), tempoKm], km);
   return [
     warmupStep(warm),
-    easyDistanceKm(km),
-    ...(finishMin > 0 ? [tempoTime(finishMin)] : []),
+    easyDistanceKm(easyKmAdj),
+    ...(finishMin > 0 ? [tempoDistanceKm(tempoKmAdj)] : []),
     cooldownStep(cd),
   ];
 }
@@ -166,12 +168,18 @@ function buildFastFinishSteps({ km, finishMin }) {
 function buildProgressionSteps({ km, progMin }) {
   const warm = 10;
   const cd = 5;
+  const progressionKm = clamp((Number(progMin || 0) / 12) * 1.6, 1.2, Math.max(1.2, Math.min(km * 0.35, km - 1)));
   if (progMin >= 10) {
-    const steadyMin = Math.max(4, Math.round(progMin * 0.5));
-    const tempoMin = Math.max(4, progMin - steadyMin);
-    return [warmupStep(warm), easyDistanceKm(km), steadyTime(steadyMin), tempoTime(tempoMin), cooldownStep(cd)];
+    const steadyKm = round1(progressionKm * 0.5);
+    const tempoKm = round1(progressionKm - steadyKm);
+    const [easyKmAdj, steadyKmAdj, tempoKmAdj] = ensureDistanceTotalKm(
+      [Math.max(0, km - progressionKm), steadyKm, tempoKm],
+      km
+    );
+    return [warmupStep(warm), easyDistanceKm(easyKmAdj), steadyDistanceKm(steadyKmAdj), tempoDistanceKm(tempoKmAdj), cooldownStep(cd)];
   }
-  return [warmupStep(warm), easyDistanceKm(km), tempoTime(progMin), cooldownStep(cd)];
+  const [easyKmAdj, tempoKmAdj] = ensureDistanceTotalKm([Math.max(0, km - progressionKm), progressionKm], km);
+  return [warmupStep(warm), easyDistanceKm(easyKmAdj), tempoDistanceKm(tempoKmAdj), cooldownStep(cd)];
 }
 
 function blocksForSpecific({ goal, advanced, longQualityLevel = 1 }) {
@@ -206,14 +214,22 @@ function blocksForSpecific({ goal, advanced, longQualityLevel = 1 }) {
 function buildSteadyBlocksSteps({ km, blocks }) {
   const warm = 10;
   const cd = 5;
+  const reps = Math.max(1, Number(blocks?.reps || 1));
+  const blockWorkKm = clamp((Number(blocks?.workMin || 4) / 4) * 0.8, 0.6, 2.2);
+  const blockRecoveryKm = blocks?.recMin > 0 ? clamp((Number(blocks.recMin) / 2) * 0.3, 0.2, 0.8) : 0;
+  const repeatedKm = reps * (blockWorkKm + blockRecoveryKm);
+  const scale = repeatedKm > Math.max(0.5, km * 0.45) ? (km * 0.45) / repeatedKm : 1;
+  const workKm = round1(blockWorkKm * scale);
+  const recoveryKm = round1(blockRecoveryKm * scale);
+  const easyKm = Math.max(0, km - reps * (workKm + recoveryKm));
 
   const repeat = {
     stepType: "repeat",
-    repeatCount: blocks.reps,
-    steps: [steadyTime(blocks.workMin), ...(blocks.recMin > 0 ? [easyTime(blocks.recMin)] : [])],
+    repeatCount: reps,
+    steps: [steadyDistanceKm(workKm), ...(recoveryKm > 0 ? [easyDistanceKm(recoveryKm)] : [])],
   };
 
-  return [warmupStep(warm), easyDistanceKm(km), repeat, cooldownStep(cd)];
+  return [warmupStep(warm), easyDistanceKm(easyKm), repeat, cooldownStep(cd)];
 }
 
 // ---------------------- Integrated tempo builders ----------------------
@@ -267,7 +283,6 @@ function buildLastTempoFinishSteps({ km, tempoMin, goal }) {
     warmupStep(warm),
     easyDistanceKm(easyKmAdj),
     tempoDistanceKm(tempoKmAdj),
-    tempoTime(tempoMin),
     cooldownStep(cd),
   ];
 }

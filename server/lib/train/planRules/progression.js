@@ -66,11 +66,13 @@ function computeLongRunQualityFlag({ w, W, diff, isDeload, inTaper, sessionsPerW
   if (diff === "conservative") return { qualityOnLongRun: false, longQualityLevel: 0 };
   if (inTaper) return { qualityOnLongRun: false, longQualityLevel: 0 };
   if (isDeload) return { qualityOnLongRun: false, longQualityLevel: 0 };
+  if (w <= 2) return { qualityOnLongRun: false, longQualityLevel: 0 };
 
   const everyOther = w % 2 === 0;
 
   if (diff === "standard") {
-    const on = spw >= 4 ? everyOther : false;
+    const lateEnough = w >= Math.max(7, Math.floor(W * 0.55));
+    const on = spw >= 4 ? everyOther && lateEnough : false;
     return { qualityOnLongRun: on, longQualityLevel: on ? 1 : 0 };
   }
   if (diff === "aggressive") {

@@ -1,5 +1,8 @@
 import express from "express";
-import { applyRunPlanRules } from "../lib/train/planRules/index.js";
+import {
+  applyRunPlanRules,
+  getLowFrequencyGoalWarning,
+} from "../lib/train/planRules/index.js";
 import {
   applyRecentTrainingSafeguardsToProfile,
   loadRecentReadinessRowsForUser,
@@ -10,9 +13,26 @@ import {
   normaliseDayAbbrev,
   normaliseGoalDistanceKey,
 } from "../lib/train/planRules/normalization.js";
+import { scoreGoalRealism } from "../lib/train/planRules/goalRealism.js";
+import { repairPlanAfterMissedSession } from "../lib/train/planRules/missedSessionRepair.js";
+import { applyReadinessAdjustment } from "../lib/train/planRules/readinessAdjustment.js";
+import { applyStrengthTrainingAwareness } from "../lib/train/planRules/strengthAwareness.js";
+import { recalculateUpcomingWeeks } from "../lib/train/planRules/adaptiveWeeklyRecalculation.js";
+import { buildDynamicPaceModel } from "../lib/train/planRules/pacePhysiology.js";
+import {
+  applyPlanExplanationToPlan,
+  buildPlanExplanation,
+} from "../lib/train/planRules/planExplanation.js";
+import { runExpandedFinalValidation } from "../lib/train/planRules/validateAndRepair.js";
 import { RULES } from "../lib/train/planRules/rulesConfig.js";
+import { selectRunPlanTemplate } from "../lib/train/templates/templateSelector.js";
+import { buildPlanFromTemplate } from "../lib/train/templates/templateScaler.js";
 
 const router = express.Router();
+
+const RUN_PLAN_VERSION = "run-plan-v1";
+const RULES_ENGINE_VERSION = "rules-engine-v1";
+const TEMPLATE_VERSION = "gold-template-v1";
 
 const REQUIRED_INPUT_FIELDS = [
   "athleteProfile.goal.distance",
@@ -299,6 +319,127 @@ function validateInputContract(profile) {
   return { errors };
 }
 
+function validateProfileQualityInputs(profile) {
+  const warnings = [];
+  const blockers = [];
+
+  const goal = isPlainObject(profile?.goal) ? profile.goal : {};
+  const current = isPlainObject(profile?.current) ? profile.current : {};
+  const availability = isPlainObject(profile?.availability) ? profile.availability : {};
+  const preferences = isPlainObject(profile?.preferences) ? profile.preferences : {};
+
+  const goalKey = normaliseGoalDistanceKey(goal.distance, {
+    fallback: null,
+    allowGeneral: true,
+    allowReturn: true,
+  });
+  const weeklyKm = toNumberOrNull(current.weeklyKm);
+  const longestRunKm = toNumberOrNull(current.longestRunKm);
+  const planLengthWeeks = toNumberOrNull(goal.planLengthWeeks);
+  const sessionsPerWeek = toNumberOrNull(availability.sessionsPerWeek);
+  const difficulty = String(preferences.difficulty || "").trim().toLowerCase();
+  const experience = String(current.experience || "").trim();
+
+  const issue = ({ code, severity = "warning", message, evidence = null, recommendation = null }) => ({
+    code,
+    severity,
+    message,
+    ...(evidence ? { evidence } : {}),
+    ...(recommendation ? { recommendation } : {}),
+  });
+  const addWarning = (item) => warnings.push(issue({ ...item, severity: "warning" }));
+  const addBlocker = (item) => blockers.push(issue({ ...item, severity: "blocker" }));
+
+  if (weeklyKm != null && longestRunKm != null && weeklyKm > 0 && longestRunKm > weeklyKm) {
+    addBlocker({
+      code: "LONGEST_RUN_EXCEEDS_WEEKLY_VOLUME",
+      message: "Longest recent run cannot be higher than current weekly volume.",
+      evidence: { weeklyKm, longestRunKm },
+      recommendation: "Check whether weekly volume or longest recent run was entered incorrectly.",
+    });
+  }
+
+  const minWeeksByGoal = {
+    "5K": { recommended: 6, absolute: 4 },
+    "10K": { recommended: 8, absolute: 6 },
+    HALF: { recommended: 10, absolute: 8 },
+    MARATHON: { recommended: 14, absolute: 10 },
+    ULTRA: { recommended: 16, absolute: 12 },
+  };
+  const weekRule = minWeeksByGoal[goalKey];
+  if (weekRule && planLengthWeeks != null) {
+    if (planLengthWeeks < weekRule.absolute) {
+      addBlocker({
+        code: "INSUFFICIENT_WEEKS_FOR_GOAL",
+        message: `${goalKey} plans need at least ${weekRule.absolute} weeks for a defensible build.`,
+        evidence: { goal: goalKey, planLengthWeeks, minimumWeeks: weekRule.absolute },
+        recommendation: `Increase plan length to ${weekRule.recommended}+ weeks or choose a shorter goal.`,
+      });
+    } else if (planLengthWeeks < weekRule.recommended) {
+      addWarning({
+        code: "SHORT_BUILD_FOR_GOAL",
+        message: `${goalKey} plans are safer with ${weekRule.recommended}+ weeks.`,
+        evidence: { goal: goalKey, planLengthWeeks, recommendedWeeks: weekRule.recommended },
+        recommendation: "Extend the plan length if the event date allows.",
+      });
+    }
+  }
+
+  const volumeRules = {
+    "5K": { recommended: 8, absolute: 3 },
+    "10K": { recommended: 14, absolute: 6 },
+    HALF: { recommended: 22, absolute: 12 },
+    MARATHON: { recommended: 32, absolute: 18 },
+    ULTRA: { recommended: 42, absolute: 25 },
+  };
+  const volumeRule = volumeRules[goalKey];
+  if (volumeRule && weeklyKm != null) {
+    if (weeklyKm < volumeRule.absolute) {
+      addBlocker({
+        code: "CURRENT_VOLUME_TOO_LOW_FOR_GOAL",
+        message: `Current weekly volume is too low for a ${goalKey} plan.`,
+        evidence: { goal: goalKey, weeklyKm, minimumWeeklyKm: volumeRule.absolute },
+        recommendation: "Build base mileage first or choose a shorter/lower-risk goal.",
+      });
+    } else if (weeklyKm < volumeRule.recommended) {
+      addWarning({
+        code: "CURRENT_VOLUME_BELOW_RECOMMENDED_FOR_GOAL",
+        message: `Current weekly volume is below the recommended starting point for a ${goalKey} plan.`,
+        evidence: { goal: goalKey, weeklyKm, recommendedWeeklyKm: volumeRule.recommended },
+        recommendation: "Use an easier difficulty or extend the plan length.",
+      });
+    }
+  }
+
+  if (
+    experience === "New to running" &&
+    (difficulty === "hard" || difficulty === "aggressive") &&
+    goalKey !== "GENERAL" &&
+    goalKey !== "RETURN"
+  ) {
+    addWarning({
+      code: "BEGINNER_ADVANCED_DIFFICULTY_MISMATCH",
+      message: "Beginner users should not be assigned advanced or hard plans.",
+      evidence: { experience, difficulty },
+      recommendation: "Use easy or balanced difficulty until the athlete has consistent running history.",
+    });
+  }
+
+  if (Number.isInteger(sessionsPerWeek) && Array.isArray(availability.runDays)) {
+    const uniqueRunDays = [...new Set(availability.runDays.map(normaliseDayAbbrev).filter(Boolean))];
+    if (uniqueRunDays.length !== sessionsPerWeek) {
+      addBlocker({
+        code: "RUN_DAY_COUNT_MISMATCH",
+        message: "Selected run days must match sessions per week.",
+        evidence: { sessionsPerWeek, selectedRunDays: uniqueRunDays.length },
+        recommendation: "Adjust availability.sessionsPerWeek or selected run days.",
+      });
+    }
+  }
+
+  return { warnings, blockers };
+}
+
 /**
  * Personalization anchor precedence:
  * Pace: threshold pace > recent race/PB > recentTimes fallback > default policy
@@ -394,6 +535,44 @@ function validatePersonalizationInputs(profile) {
   return { errors, warnings, hasPaceAnchor, hasHrAnchor };
 }
 
+function buildLowFrequencyAlternatives(warning) {
+  const distance = String(warning?.distance || "").toLowerCase();
+  const recommended = warning?.recommendedSessionsPerWeek || null;
+  const alternatives = [];
+
+  if (recommended) {
+    alternatives.push({
+      type: "increase_frequency",
+      message: `Increase to at least ${recommended} run days per week.`,
+    });
+  }
+
+  if (distance.includes("ultra")) {
+    alternatives.push({
+      type: "reduce_goal",
+      message: "Choose a marathon, half marathon, or general fitness goal first.",
+    });
+  } else if (distance.includes("marathon")) {
+    alternatives.push({
+      type: "reduce_goal",
+      message: "Choose a half marathon, 10K, or general fitness goal first.",
+    });
+  } else if (distance.includes("half")) {
+    alternatives.push({
+      type: "reduce_goal",
+      message: "Choose a 5K, 10K, or general fitness goal first.",
+    });
+  }
+
+  alternatives.push({
+    type: "finish_only",
+    message:
+      "Use a lower-risk finish-only plan only if the athlete accepts the limitation.",
+  });
+
+  return alternatives;
+}
+
 function flattenWorkoutSteps(steps = []) {
   const out = [];
   const queue = Array.isArray(steps) ? [...steps] : [];
@@ -411,6 +590,128 @@ function flattenWorkoutSteps(steps = []) {
   }
 
   return out;
+}
+
+function hasMissedSessionRepairInput(body = {}) {
+  const profile = body?.athleteProfile || {};
+  return Boolean(
+    body?.missedSession ||
+      (Array.isArray(body?.missedSessionIds) && body.missedSessionIds.length) ||
+      (Array.isArray(body?.completedSessions) && body.completedSessions.length) ||
+      profile?.missedSession ||
+      (Array.isArray(profile?.missedSessionIds) && profile.missedSessionIds.length) ||
+      (Array.isArray(profile?.completedSessions) && profile.completedSessions.length)
+  );
+}
+
+function getReadinessInput(body = {}) {
+  const profile = body?.athleteProfile || {};
+  return body?.readiness || profile?.readiness || profile?.current?.readiness || null;
+}
+
+function getStrengthTrainingInput(body = {}) {
+  const profile = body?.athleteProfile || {};
+  return body?.strengthTraining || profile?.strengthTraining || profile?.current?.strengthTraining || null;
+}
+
+function getCompletedSessionsInput(body = {}) {
+  const profile = body?.athleteProfile || {};
+  return body?.completedSessions || profile?.completedSessions || null;
+}
+
+function getRecentActivitiesInput(body = {}) {
+  const profile = body?.athleteProfile || {};
+  return body?.recentActivities || profile?.recentActivities || profile?.activities || null;
+}
+
+function getEnvironmentInput(body = {}) {
+  const profile = body?.athleteProfile || {};
+  return body?.environment || profile?.environment || profile?.preferences?.environment || null;
+}
+
+function templateVersionFor(template) {
+  if (!template) return null;
+  return (
+    template.templateVersion ||
+    template.version ||
+    template?.metadata?.templateVersion ||
+    template?.metadata?.version ||
+    TEMPLATE_VERSION
+  );
+}
+
+function summarizeMissedSessionRepair(result) {
+  if (!result) return null;
+  return {
+    repairApplied: Boolean(result.repairApplied),
+    repairType: result.repairType || null,
+    message: result.message || null,
+    changes: Array.isArray(result.changes) ? result.changes : [],
+  };
+}
+
+function summarizeReadinessAdjustment(result) {
+  const adjustment = result?.readinessAdjustment || null;
+  if (!adjustment) return null;
+  return {
+    applied: Boolean(adjustment.applied),
+    level: adjustment.level || null,
+    score: adjustment.score ?? null,
+    message: adjustment.message || null,
+    changes: Array.isArray(adjustment.changes) ? adjustment.changes : [],
+  };
+}
+
+function summarizeStrengthAdjustment(result) {
+  const adjustment = result?.strengthAdjustment || null;
+  if (!adjustment) return null;
+  return {
+    applied: Boolean(adjustment.applied),
+    conflictsFound: Number(adjustment.conflictsFound || 0),
+    changes: Array.isArray(adjustment.changes) ? adjustment.changes : [],
+  };
+}
+
+function summarizeWeeklyRecalculation(result) {
+  const weekly = result?.weeklyRecalculation || null;
+  if (!weekly) return null;
+  return {
+    applied: Boolean(weekly.applied),
+    completionRate: weekly.completionRate ?? null,
+    volumeCompletionRate: weekly.volumeCompletionRate ?? null,
+    intensityCompletionRate: weekly.intensityCompletionRate ?? null,
+    decision: weekly.decision || null,
+    message: weekly.message || null,
+    completionAnalysisUsed: Boolean(weekly.completionAnalysisUsed),
+    completionTrend: weekly.completionTrend || null,
+    completionDrivenChanges: Array.isArray(weekly.completionDrivenChanges)
+      ? weekly.completionDrivenChanges
+      : [],
+    changes: Array.isArray(weekly.changes) ? weekly.changes : [],
+  };
+}
+
+function buildGeneratorFeatures({
+  selectedTemplate,
+  missedRepair,
+  readinessResult,
+  strengthResult,
+  weeklyRecalculationResult,
+}) {
+  return {
+    profileValidation: true,
+    goalRealism: true,
+    templateFirst: Boolean(selectedTemplate),
+    dynamicPaceModel: true,
+    rulesEngineGuardrails: true,
+    garminSteps: true,
+    missedSessionRepair: Boolean(missedRepair),
+    readinessAdjustment: Boolean(readinessResult),
+    strengthAwareness: Boolean(strengthResult),
+    adaptiveWeeklyRecalculation: Boolean(weeklyRecalculationResult),
+    expandedFinalValidation: true,
+    planExplanation: true,
+  };
 }
 
 // POST /generate-run?summary=1
@@ -445,7 +746,55 @@ router.post("/", async (req, res) => {
 
     const allowDefaults =
       req.query?.allowDefaults === "1" || req.query?.allowDefaults === "true";
+    const allowGoalRisk =
+      req.query?.allowGoalRisk === "1" ||
+      req.query?.allowGoalRisk === "true" ||
+      req.query?.allowRisk === "1" ||
+      req.query?.allowRisk === "true";
+    const profileQuality = validateProfileQualityInputs(athleteProfile);
+    const goalRealism = scoreGoalRealism(athleteProfile);
+    const lowFrequencyWarning = getLowFrequencyGoalWarning(
+      athleteProfile?.goal?.distance,
+      athleteProfile?.availability?.sessionsPerWeek
+    );
+
+    const unsafeGoalRealism = goalRealism?.level === "unsafe";
+    if ((lowFrequencyWarning || profileQuality.blockers.length || unsafeGoalRealism) && !allowGoalRisk) {
+      return res.status(422).json({
+        error: "Goal/profile combination is not professionally defensible.",
+        code: lowFrequencyWarning?.code || profileQuality.blockers[0]?.code || "GOAL_REALISM_UNSAFE",
+        severity: "blocker",
+        warning: lowFrequencyWarning || null,
+        blockers: profileQuality.blockers,
+        warnings: profileQuality.warnings,
+        goalRealism,
+        alternatives: lowFrequencyWarning ? buildLowFrequencyAlternatives(lowFrequencyWarning) : [
+          {
+            type: "adjust_profile",
+            message: "Correct unrealistic profile inputs before generating a plan.",
+          },
+          {
+            type: "reduce_goal",
+            message: "Choose a shorter or lower-risk goal.",
+          },
+          {
+            type: "extend_build",
+            message: "Use a longer plan length if the event date allows.",
+          },
+        ],
+        hints: [
+          "Increase availability.sessionsPerWeek and provide matching runDays.",
+          "Choose a shorter goal distance.",
+          "Adjust unrealistic target time, volume, longest run, or plan length.",
+          "To generate a review-only plan anyway, pass ?allowGoalRisk=1.",
+        ],
+      });
+    }
+
     const validation = validatePersonalizationInputs(athleteProfile);
+    const readinessInput = getReadinessInput(req.body);
+    const recentActivitiesInput = getRecentActivitiesInput(req.body);
+    const environmentInput = getEnvironmentInput(req.body);
 
     if (validation.errors.length && !allowDefaults) {
       return res.status(400).json({
@@ -459,7 +808,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    let enrichedProfile = athleteProfile;
+    let enrichedProfile = { ...athleteProfile, goalRealism };
     const useRecentTraining =
       req.query?.useRecentTraining !== "0" &&
       req.query?.useRecentTraining !== "false" &&
@@ -476,35 +825,238 @@ router.post("/", async (req, res) => {
           recentTrainingRows,
           recentReadinessRows,
         });
-        enrichedProfile = adaptationResult?.athleteProfile || athleteProfile;
+        enrichedProfile = {
+          ...(adaptationResult?.athleteProfile || athleteProfile),
+          goalRealism,
+        };
       } catch (adaptErr) {
         console.log("[generate-run] recent training adaptation skipped:", adaptErr?.message || adaptErr);
       }
     }
 
-    // ✅ Rules engine generates the full plan using personalized inputs
-    const plan = applyRunPlanRules(null, enrichedProfile);
+    const dynamicPaceResult = buildDynamicPaceModel({
+      profile: enrichedProfile,
+      goalRealism,
+      readiness: readinessInput,
+      recentActivities: recentActivitiesInput,
+      environment: environmentInput,
+    });
+    enrichedProfile = {
+      ...enrichedProfile,
+      paceModel: dynamicPaceResult.paceModel,
+      paceTrace: dynamicPaceResult.paceTrace,
+    };
+
+    const selectedTemplate = selectRunPlanTemplate(enrichedProfile);
+    const planSource = selectedTemplate ? "template" : "rules_engine";
+    const templateId = selectedTemplate?.id || null;
+    const templateVersion = templateVersionFor(selectedTemplate);
+    const templatePlan = selectedTemplate
+      ? buildPlanFromTemplate({
+          template: selectedTemplate,
+          profile: enrichedProfile,
+          paceModel: dynamicPaceResult.paceModel,
+        })
+      : null;
+
+    // Rules engine still applies guardrails, Garmin steps, distance contracts, and review.
+    let plan = applyRunPlanRules(templatePlan, enrichedProfile);
+    plan = {
+      ...plan,
+      planSource,
+      ...(templateId ? { templateId } : {}),
+    };
+    let missedRepair = null;
+    if (hasMissedSessionRepairInput(req.body)) {
+      missedRepair = repairPlanAfterMissedSession({
+        plan,
+        missedSession: req.body?.missedSession || athleteProfile?.missedSession || null,
+        missedSessionIds: req.body?.missedSessionIds || athleteProfile?.missedSessionIds || null,
+        completedSessions: req.body?.completedSessions || athleteProfile?.completedSessions || null,
+        profile: enrichedProfile,
+        currentDate: req.body?.currentDate || athleteProfile?.currentDate || null,
+        goalRealism,
+      });
+      plan = missedRepair.plan;
+    }
+    let readinessResult = null;
+    if (readinessInput) {
+      readinessResult = applyReadinessAdjustment({
+        plan,
+        profile: enrichedProfile,
+        readiness: readinessInput,
+        goalRealism,
+        currentDate: req.body?.currentDate || athleteProfile?.currentDate || null,
+      });
+      plan = readinessResult.plan;
+    }
+    const strengthTrainingInput = getStrengthTrainingInput(req.body);
+    let strengthResult = null;
+    if (strengthTrainingInput) {
+      strengthResult = applyStrengthTrainingAwareness({
+        plan,
+        profile: enrichedProfile,
+        strengthTraining: strengthTrainingInput,
+        currentDate: req.body?.currentDate || athleteProfile?.currentDate || null,
+        goalRealism,
+      });
+      plan = strengthResult.plan;
+    }
+    const completedSessionsInput = getCompletedSessionsInput(req.body);
+    let weeklyRecalculationResult = null;
+    if (Array.isArray(completedSessionsInput) && completedSessionsInput.length) {
+      weeklyRecalculationResult = recalculateUpcomingWeeks({
+        plan,
+        profile: enrichedProfile,
+        completedSessions: completedSessionsInput,
+        currentDate: req.body?.currentDate || athleteProfile?.currentDate || null,
+        goalRealism,
+        readiness: readinessInput,
+      });
+      plan = weeklyRecalculationResult.plan;
+    }
+    const finalValidationResult = runExpandedFinalValidation({
+      plan,
+      profile: enrichedProfile,
+      goalRealism,
+      readiness: readinessInput,
+      completedSessions: completedSessionsInput,
+    });
+    plan = finalValidationResult.plan;
+    const planExplanation = buildPlanExplanation({
+      plan,
+      profile: enrichedProfile,
+      goalRealism,
+      paceModel: dynamicPaceResult.paceModel,
+      validationSummary: finalValidationResult.validationSummary,
+      readinessAdjustment: readinessResult?.readinessAdjustment || null,
+      strengthAdjustment: strengthResult?.strengthAdjustment || null,
+      weeklyRecalculation: weeklyRecalculationResult?.weeklyRecalculation || null,
+    });
+    plan = applyPlanExplanationToPlan(plan, planExplanation);
+
+    const generatedAt = new Date().toISOString();
+    const missedSessionRepair = summarizeMissedSessionRepair(missedRepair);
+    const readinessAdjustment = summarizeReadinessAdjustment(readinessResult);
+    const strengthAdjustment = summarizeStrengthAdjustment(strengthResult);
+    const weeklyRecalculation = summarizeWeeklyRecalculation(weeklyRecalculationResult);
+    const generatorFeatures = buildGeneratorFeatures({
+      selectedTemplate,
+      missedRepair,
+      readinessResult,
+      strengthResult,
+      weeklyRecalculationResult,
+    });
+    const planVersionMetadata = {
+      planSource,
+      templateId: templateId || null,
+      templateVersion,
+      planVersion: RUN_PLAN_VERSION,
+      rulesEngineVersion: RULES_ENGINE_VERSION,
+      generatedAt,
+      inputProfileSnapshot: athleteProfile,
+      generatorFeatures,
+      validationSummary: finalValidationResult.validationSummary,
+      goalRealism,
+      paceModel: dynamicPaceResult.paceModel,
+      planExplanation,
+      weeklyRecalculation,
+      readinessAdjustment,
+      strengthAdjustment,
+      missedSessionRepair,
+    };
+
+    const planResponse = {
+      ...plan,
+      ...planVersionMetadata,
+      planSource,
+      ...(templateId ? { templateId } : {}),
+      goalRiskValidation: {
+        allowedByOverride: Boolean(lowFrequencyWarning && allowGoalRisk),
+        warning: lowFrequencyWarning || null,
+      },
+      profileQualityValidation: {
+        allowedByOverride: Boolean(profileQuality.blockers.length && allowGoalRisk),
+        blockers: profileQuality.blockers,
+        warnings: profileQuality.warnings,
+      },
+      goalRealism,
+      paceModel: dynamicPaceResult.paceModel,
+      paceTrace: dynamicPaceResult.paceTrace,
+      planExplanation,
+      validationSummary: finalValidationResult.validationSummary,
+      validationTrace: finalValidationResult.validationTrace,
+      ...(missedRepair
+        ? {
+            missedSessionRepair,
+            missedSessionRepairTrace: missedRepair.missedSessionRepairTrace,
+          }
+        : {}),
+      ...(readinessResult
+        ? {
+            readinessAdjustment,
+            readinessAdjustmentTrace: readinessResult.readinessAdjustmentTrace,
+          }
+        : {}),
+      ...(strengthResult
+        ? {
+            strengthAdjustment,
+            strengthAdjustmentTrace: strengthResult.strengthAdjustmentTrace,
+          }
+        : {}),
+      ...(weeklyRecalculationResult
+        ? {
+            weeklyRecalculation,
+            weeklyRecalculationTrace: weeklyRecalculationResult.weeklyRecalculationTrace,
+          }
+        : {}),
+    };
 
     const summaryMode = req.query?.summary === "1" || req.query?.summary === "true";
-    if (!summaryMode) return res.json({ plan });
+    if (!summaryMode) return res.json({ plan: planResponse });
 
-    const weeks = Array.isArray(plan?.weeks) ? plan.weeks : [];
+    const weeks = Array.isArray(planResponse?.weeks) ? planResponse.weeks : [];
     const firstWeek = weeks[0];
 
     return res.json({
       ok: true,
-      planId: plan?.id ?? null,
-      name: plan?.name ?? "Run plan",
+      planId: planResponse?.id ?? null,
+      name: planResponse?.name ?? "Run plan",
+      planSource: planResponse.planSource || "rules_engine",
+      templateId: planResponse.templateId || null,
+      templateVersion: planResponse.templateVersion || null,
+      planVersion: planResponse.planVersion || null,
+      rulesEngineVersion: planResponse.rulesEngineVersion || null,
+      generatedAt: planResponse.generatedAt || null,
+      inputProfileSnapshot: planResponse.inputProfileSnapshot || null,
+      generatorFeatures: planResponse.generatorFeatures || null,
       weeksCount: weeks.length,
       personalization: {
-        paces: plan?.paces || null,
-        hrZones: plan?.hrZones || null,
-        anchorTrace: plan?.anchorTrace || null,
+        paces: planResponse?.paces || null,
+        hrZones: planResponse?.hrZones || null,
+        anchorTrace: planResponse?.anchorTrace || null,
       },
-      adaptation: plan?.adaptationTrace || null,
-      recentTrainingSummary: plan?.recentTrainingSummary || null,
-      recentReadinessSummary: plan?.recentReadinessSummary || null,
-      decisionTrace: plan?.decisionTrace || null,
+      adaptation: planResponse?.adaptationTrace || null,
+      recentTrainingSummary: planResponse?.recentTrainingSummary || null,
+      recentReadinessSummary: planResponse?.recentReadinessSummary || null,
+      decisionTrace: planResponse?.decisionTrace || null,
+      professionalReview: planResponse?.professionalReview || null,
+      goalRiskValidation: planResponse.goalRiskValidation,
+      profileQualityValidation: planResponse.profileQualityValidation,
+      goalRealism: planResponse.goalRealism,
+      paceModel: planResponse.paceModel || null,
+      paceTrace: planResponse.paceTrace || null,
+      planExplanation: planResponse.planExplanation || null,
+      missedSessionRepair: planResponse.missedSessionRepair || null,
+      missedSessionRepairTrace: planResponse.missedSessionRepairTrace || null,
+      readinessAdjustment: planResponse.readinessAdjustment || null,
+      readinessAdjustmentTrace: planResponse.readinessAdjustmentTrace || null,
+      strengthAdjustment: planResponse.strengthAdjustment || null,
+      strengthAdjustmentTrace: planResponse.strengthAdjustmentTrace || null,
+      weeklyRecalculation: planResponse.weeklyRecalculation || null,
+      weeklyRecalculationTrace: planResponse.weeklyRecalculationTrace || null,
+      validationSummary: planResponse.validationSummary || null,
+      validationTrace: planResponse.validationTrace || null,
       personalizationValidation: {
         usedDefaults: !validation.hasPaceAnchor || !validation.hasHrAnchor,
         warnings: validation.warnings,
@@ -516,6 +1068,10 @@ router.post("/", async (req, res) => {
             phase: firstWeek.phase,
             runDays: firstWeek.runDays,
             metrics: firstWeek.metrics,
+            focus: firstWeek.focus || null,
+            coachNote: firstWeek.coachNote || null,
+            riskNote: firstWeek.riskNote || null,
+            progressionReason: firstWeek.progressionReason || null,
             sessions: (firstWeek.sessions || []).map((s) => {
               const flatSteps = flattenWorkoutSteps(s?.workout?.steps);
               return {
@@ -528,6 +1084,9 @@ router.post("/", async (req, res) => {
                 stepsCount: flatSteps.length,
                 targetHr: s.targetHr ?? s?.workout?.hrTarget ?? null,
                 targetPace: s.targetPace ?? s?.workout?.paceTarget ?? null,
+                coachNote: s.coachNote || null,
+                executionTip: s.executionTip || null,
+                whyThisSession: s.whyThisSession || null,
                 // keep targets visible in summary if your engine sets them on steps
                 targetsPreview: flatSteps.map((st) => ({
                   targetType: st.targetType ?? null,
@@ -545,4 +1104,9 @@ router.post("/", async (req, res) => {
 });
 
 export default router;
-export { validateCriticalRouteInputs, validateInputContract, validatePersonalizationInputs };
+export {
+  validateCriticalRouteInputs,
+  validateInputContract,
+  validatePersonalizationInputs,
+  validateProfileQualityInputs,
+};

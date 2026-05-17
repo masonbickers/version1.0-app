@@ -214,10 +214,17 @@ function ensureWorkoutShell(s) {
       sport: base?.workout?.sport || "running",
       kind,
       estimatedDistanceMeters: est,
+      ...(base?.workout?.variant ? { variant: base.workout.variant } : {}),
+      ...(base?.workout?.title ? { title: base.workout.title } : {}),
+      ...(base?.workout?.notes ? { notes: base.workout.notes } : {}),
+      ...(base?.workout?.keyTargets ? { keyTargets: base.workout.keyTargets } : {}),
+      ...(Number.isFinite(Number(base?.workout?.warmupSec)) ? { warmupSec: Math.max(0, Math.round(Number(base.workout.warmupSec))) } : {}),
+      ...(Number.isFinite(Number(base?.workout?.cooldownSec)) ? { cooldownSec: Math.max(0, Math.round(Number(base.workout.cooldownSec))) } : {}),
       ...(Array.isArray(base?.workout?.steps) ? { steps: base.workout.steps } : {}),
       ...(Array.isArray(base?.workout?.blocks) ? { blocks: base.workout.blocks } : {}),
       ...(base?.workout?.tempo ? { tempo: base.workout.tempo } : {}),
       ...(base?.workout?.legacy ? { legacy: base.workout.legacy } : {}),
+      ...(base?.workout?.preserveTemplateStructure === true ? { preserveTemplateStructure: true } : {}),
       ...(base?.workout?.meta ? { meta: base.workout.meta } : {}),
     },
   };
@@ -436,6 +443,18 @@ function getRunDaysFromContext(week, sk, sessions) {
   return inferred;
 }
 
+function getGoalKeyFromContext(week, sk) {
+  return normaliseGoalKey(
+    week?.hints?.goalDistance ||
+      sk?.hints?.goalDistance ||
+      week?.goalDistance ||
+      sk?.goalDistance ||
+      week?.specId ||
+      sk?.specId ||
+      "other"
+  );
+}
+
 function resolveHardCapForWeek({ baseCap, week, sk, sessions }) {
   let cap = Number.isFinite(baseCap) ? baseCap : 1;
 
@@ -536,6 +555,63 @@ function getSessionKm(s) {
   );
 }
 
+function stepDistanceMetersWithRepeats(step) {
+  if (!step || typeof step !== "object") return 0;
+  const stepType = String(step?.stepType || "").toLowerCase();
+  if (stepType === "repeat" && Array.isArray(step.steps)) {
+    const reps = Math.max(1, Math.round(toNumber(step.repeatCount) ?? 1));
+    return reps * step.steps.reduce((sum, child) => sum + stepDistanceMetersWithRepeats(child), 0);
+  }
+  if (String(step?.durationType || "").toLowerCase() !== "distance") return 0;
+  return Math.max(0, toNumber(step.durationValue) ?? 0);
+}
+
+function scaleDistanceStepsToMeters(steps, targetMeters) {
+  const source = Array.isArray(steps) ? steps : [];
+  const total = source.reduce((sum, step) => sum + stepDistanceMetersWithRepeats(step), 0);
+  const target = Math.max(0, Math.round(Number(targetMeters) || 0));
+  if (!source.length || total <= 0 || target <= 0) return source;
+
+  const scale = target / total;
+
+  const scaleStep = (step) => {
+    if (!step || typeof step !== "object") return step;
+    const stepType = String(step?.stepType || "").toLowerCase();
+    if (stepType === "repeat" && Array.isArray(step.steps)) {
+      return { ...step, steps: step.steps.map(scaleStep) };
+    }
+    if (String(step?.durationType || "").toLowerCase() !== "distance") return { ...step };
+
+    const raw = Math.max(0, toNumber(step.durationValue) ?? 0);
+    const next = Math.max(0, Math.round(raw * scale));
+    return { ...step, durationValue: next };
+  };
+
+  const out = source.map(scaleStep);
+  const scaledTotal = out.reduce((sum, step) => sum + stepDistanceMetersWithRepeats(step), 0);
+  const diff = target - scaledTotal;
+  if (Math.abs(diff) <= 1) return out;
+
+  const adjustFirstDistance = (items, totalDiff, multiplier = 1) => {
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      const stepType = String(item?.stepType || "").toLowerCase();
+      if (stepType === "repeat" && Array.isArray(item.steps)) {
+        const reps = Math.max(1, Math.round(toNumber(item.repeatCount) ?? 1));
+        if (adjustFirstDistance(item.steps, totalDiff, multiplier * reps)) return true;
+      } else if (String(item?.durationType || "").toLowerCase() === "distance") {
+        const current = Math.max(0, toNumber(item.durationValue) ?? 0);
+        item.durationValue = Math.max(0, current + Math.round(totalDiff / multiplier));
+        return true;
+      }
+    }
+    return false;
+  };
+
+  adjustFirstDistance(out, diff);
+  return out;
+}
+
 function withSessionKm(s, km, note) {
   const v = round1(Math.max(0, Number(km) || 0));
   const kind = kindUpper(s);
@@ -573,6 +649,11 @@ function withSessionKm(s, km, note) {
           const easyLong = kind === "LONG" && (longVariant.startsWith("EASY") || !longVariant);
           if (kind === "EASY" || easyLong) {
             w = flattenToSingleDistanceStep(w);
+          } else if (kind === "LONG" && Array.isArray(w.steps)) {
+            w = {
+              ...w,
+              steps: scaleDistanceStepsToMeters(w.steps, meters),
+            };
           }
 
           return w;
@@ -695,6 +776,14 @@ function normaliseGoalKey(v) {
   return normaliseGoalPolicyKey(v, "other");
 }
 
+function longRunMinForGoal(goalKey = null) {
+  const goal = normaliseGoalKey(goalKey);
+  if (goal === "return") return 1.5;
+  if (goal === "general") return 2.5;
+  if (goal === "5k") return 4;
+  return LR_MIN;
+}
+
 function phaseLongRunMaxPct(phase, goalKey, weeklyTargetKm = null, longTargetKm = null) {
   const p = String(phase || "").toUpperCase().trim() || "BUILD";
   const g = normaliseGoalKey(goalKey);
@@ -722,13 +811,22 @@ function phaseLongRunMaxPct(phase, goalKey, weeklyTargetKm = null, longTargetKm 
 function resolveLongRunPctCap({ phase, goalKey, weeklyTargetKm = null, longTargetKm = null, runDaysCount = null }) {
   const phaseCap = clamp(phaseLongRunMaxPct(phase, goalKey, weeklyTargetKm, longTargetKm), 0.2, 0.6);
   const conservativeGlobal = toNumber(RULES?.longRun?.maxPctOfWeekly) ?? 0.4;
+  const goal = normaliseGoalKey(goalKey);
+  const speedGoalCap =
+    goal === "5k"
+      ? 0.36
+      : goal === "10k"
+      ? 0.38
+      : goal === "half"
+      ? 0.42
+      : null;
   if (Number.isFinite(Number(runDaysCount)) && Number(runDaysCount) === 1) {
     return 1;
   }
   if (Number.isFinite(Number(runDaysCount)) && Number(runDaysCount) > 0 && Number(runDaysCount) <= 3) {
-    return Math.min(conservativeGlobal, phaseCap);
+    return Math.min(conservativeGlobal, phaseCap, speedGoalCap ?? 1);
   }
-  return phaseCap;
+  return Math.min(phaseCap, speedGoalCap ?? 1);
 }
 
 function minQualityFloorKm({ weeklyKm, phase, goalKey }) {
@@ -850,7 +948,8 @@ function enforceEasyVsLongBalance({ sessions, weeklyRefKm, longPctCap, goalKey }
     Number.isFinite(Number(weeklyRefKm)) && Number(weeklyRefKm) > 0
       ? Number(weeklyRefKm) * (Number(longPctCap) || 0.4)
       : LR_MAX;
-  const longCap = clamp(longCapByPct, LR_MIN, LR_MAX);
+  const longMin = longRunMinForGoal(goalKey);
+  const longCap = clamp(longCapByPct, longMin, LR_MAX);
   const longRoom = round1(longCap - longKm);
   const easyFloor = 0.5;
   const maxReducible = round1(Math.max(0, maxEasy.km - easyFloor));
@@ -925,7 +1024,8 @@ function capLargestEasyRunShare({ sessions, weeklyRefKm, phase, goalKey, longPct
   let longRoom = 0;
   if (longIdx >= 0) {
     const longCapByWeek = weekly * (Number(longPctCap) || 0.4);
-    const longCap = clamp(longCapByWeek, LR_MIN, LR_MAX);
+    const longMin = longRunMinForGoal(goalKey);
+    const longCap = clamp(longCapByWeek, longMin, LR_MAX);
     longRoom = round1(Math.max(0, longCap - longKm));
   }
 
@@ -971,7 +1071,8 @@ function capLargestEasyRunShare({ sessions, weeklyRefKm, phase, goalKey, longPct
   if (remaining > 0.1 && longIdx >= 0) {
     const curLong = getSessionKm(out[longIdx]);
     const longCapByWeek = weekly * (Number(longPctCap) || 0.4);
-    const longCap = clamp(longCapByWeek, LR_MIN, LR_MAX);
+    const longMin = longRunMinForGoal(goalKey);
+    const longCap = clamp(longCapByWeek, longMin, LR_MAX);
     const room = round1(Math.max(0, longCap - curLong));
     if (room > 0.1) {
       const add = round1(Math.min(room, remaining));
@@ -1040,7 +1141,8 @@ function enforceDistanceGuardrails({ sessions, weeklyTargetKm, phase, goalKey })
   if (longIdx >= 0 && weeklyRef > 0) {
     const longCur = getSessionKm(out[longIdx]);
     const longCapByWeek = weeklyRef * longPctCap;
-    const longCap = clamp(longCapByWeek, LR_MIN, LR_MAX);
+    const longMin = longRunMinForGoal(goalKey);
+    const longCap = clamp(longCapByWeek, longMin, LR_MAX);
 
     if (longCur > longCap + 0.1) {
       const cut = round1(longCur - longCap);
@@ -1107,17 +1209,71 @@ function enforceDistanceGuardrails({ sessions, weeklyTargetKm, phase, goalKey })
   return { sessions: out, edits, notes };
 }
 
+function capLongRunShareOnly({ sessions, weeklyTargetKm, phase, goalKey }) {
+  let out = Array.isArray(sessions) ? sessions.map((s) => ({ ...s })) : [];
+  let edits = 0;
+  const notes = [];
+  const goal = normaliseGoalKey(goalKey);
+  if (goal !== "5k" && goal !== "10k" && goal !== "half") return { sessions: out, edits, notes };
+
+  const weeklyRef =
+    Number.isFinite(Number(weeklyTargetKm)) && Number(weeklyTargetKm) > 0
+      ? Number(weeklyTargetKm)
+      : out.reduce((a, s) => a + getSessionKm(s), 0);
+  if (!out.length || weeklyRef <= 0) return { sessions: out, edits, notes };
+
+  const longIdx = out.findIndex((s) => isLong(s));
+  if (longIdx < 0) return { sessions: out, edits, notes };
+
+  const runDaysCount = new Set(
+    out.map((s) => String(s?.day || "").trim()).filter((d) => ORDER.includes(d))
+  ).size;
+  const longCur = getSessionKm(out[longIdx]);
+  const longPctCap = resolveLongRunPctCap({
+    phase,
+    goalKey,
+    weeklyTargetKm: weeklyRef,
+    longTargetKm: longCur,
+    runDaysCount,
+  });
+  const longMin = longRunMinForGoal(goalKey);
+  const longCap = clamp(weeklyRef * longPctCap, longMin, LR_MAX);
+
+  if (longCur <= longCap + 0.1) return { sessions: out, edits, notes };
+
+  const cut = round1(longCur - longCap);
+  out[longIdx] = withSessionKm(
+    out[longIdx],
+    longCap,
+    `(Guardrail: long run capped to ${round1(longPctCap * 100)}% weekly)`
+  );
+  edits += 1;
+  notes.push(`long_pct_cap:${round1(longCur)}->${round1(longCap)}`);
+
+  const redist = redistributeDeltaToEasy({ sessions: out, deltaKm: cut });
+  out = redist.sessions;
+  if (Math.abs(redist.appliedKm) >= 0.1) {
+    edits += 1;
+    notes.push(`long_reallocated_to_easy:+${round1(redist.appliedKm)}`);
+  }
+
+  return { sessions: out, edits, notes };
+}
+
 function ensureLongRunMinimal({ sessions, sk, tgt, runDays }) {
   const out = Array.isArray(sessions) ? [...sessions] : [];
   if (out.some((s) => isLong(s))) return { sessions: out, added: false };
+  if (out.some((s) => isRace(s))) return { sessions: out, added: false };
 
   let longDay = pickLongDayFromSkeleton(sk, out);
   if (Array.isArray(runDays) && runDays.length && !runDays.includes(longDay)) {
     longDay = runDays.includes("Sun") ? "Sun" : runDays[runDays.length - 1];
   }
 
+  const goalKey = getGoalKeyFromContext(null, sk);
+  const longMin = longRunMinForGoal(goalKey);
   const longKmFromTarget = toNumber(tgt?.longRunKm);
-  const longKm = longKmFromTarget != null ? clamp(longKmFromTarget, LR_MIN, LR_MAX) : LR_MIN;
+  const longKm = longKmFromTarget != null ? clamp(longKmFromTarget, longMin, LR_MAX) : longMin;
 
   out.push(
     ensureWorkoutShell(
@@ -1223,7 +1379,7 @@ function repairHardSpacingMinimal({ sessions, minGapDays }) {
   };
 }
 
-function repairWeeklyDriftMinimal({ sessions, weeklyTargetKm }) {
+function repairWeeklyDriftMinimal({ sessions, weeklyTargetKm, goalKey = null }) {
   const target = toNumber(weeklyTargetKm);
   let out = stableSortSessionsByDayThenOriginal(Array.isArray(sessions) ? sessions : [])
     .map(normaliseDistanceFields)
@@ -1272,7 +1428,15 @@ function repairWeeklyDriftMinimal({ sessions, weeklyTargetKm }) {
     }
 
     if (drift > 0.1 && out.length) {
-      const i = 0;
+      const i = out.findIndex((s) => !isRace(s));
+      if (i < 0) {
+        notes.push(`weekly_drift_residual:${drift}`);
+        return {
+          sessions: stableSortSessionsByDayThenOriginal(out).map(ensureWorkoutShell),
+          edits,
+          notes,
+        };
+      }
       out[i] = withSessionKm(out[i], getSessionKm(out[i]) + drift, "(Adjusted to match weekly target)");
       edits += 1;
       drift = 0;
@@ -1295,7 +1459,7 @@ function repairWeeklyDriftMinimal({ sessions, weeklyTargetKm }) {
       const longIdx = out.findIndex((s) => isLong(s));
       if (longIdx >= 0) {
         const cur = getSessionKm(out[longIdx]);
-        const longFloor = out.length > 1 ? LR_MIN : 0.5;
+        const longFloor = out.length > 1 ? longRunMinForGoal(goalKey) : 0.5;
         const reducible = round1(Math.max(0, cur - longFloor));
         if (reducible > 0.1) {
           const sub = round1(Math.min(reducible, cut));
@@ -1313,6 +1477,7 @@ function repairWeeklyDriftMinimal({ sessions, weeklyTargetKm }) {
 
       const idxAny = out
         .map((s, i) => ({ i, km: getSessionKm(s), hard: isHard(s) && !isLong(s) }))
+        .filter(({ i }) => !isRace(out[i]))
         .sort((a, b) => {
           if (a.hard !== b.hard) return a.hard ? 1 : -1; // prefer non-quality trims first
           return b.km - a.km;
@@ -1385,10 +1550,21 @@ export function validateAndRepairPlan(plan, skeleton, targets, experience) {
     const drift = repairWeeklyDriftMinimal({
       sessions,
       weeklyTargetKm: weeklyTarget,
+      goalKey: getGoalKeyFromContext(week, sk),
     });
     let finalSessions = drift.sessions;
     guardrailEdits += drift.edits;
     guardrailNotes.push(...drift.notes);
+
+    const longRunCap = capLongRunShareOnly({
+      sessions: finalSessions,
+      weeklyTargetKm: weeklyTarget,
+      phase: week?.phase || tgt?.phase || sk?.phase,
+      goalKey: getGoalKeyFromContext(week, sk),
+    });
+    finalSessions = longRunCap.sessions;
+    guardrailEdits += longRunCap.edits;
+    guardrailNotes.push(...longRunCap.notes);
 
     finalSessions = stableSortSessionsByDayThenOriginal(finalSessions).map(ensureWorkoutShell);
 
@@ -1415,6 +1591,7 @@ export function validateAndRepairPlan(plan, skeleton, targets, experience) {
     if (longRepair.added) repairTypes.push("missing_long_run");
     if (spacing.edits > 0) repairTypes.push("hard_day_spacing");
     if (drift.edits > 0) repairTypes.push("weekly_drift");
+    if (longRunCap.edits > 0) repairTypes.push("long_run_share");
     const repairsApplied = {
       weekIndex: Number(week?.weekIndex || week?.weekNumber || idx + 1) || idx + 1,
       edits: guardrailEdits,
@@ -1460,6 +1637,469 @@ export function validateAndRepairPlan(plan, skeleton, targets, experience) {
   });
 
   return { ...plan, weeks: fixedWeeks, rulesApplied: true };
+}
+
+function clone(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function weekIndexLabel(week, index) {
+  return Number(week?.weekIndex || week?.weekNumber || index + 1) || index + 1;
+}
+
+function isRace(session = {}) {
+  return kindUpper(session) === "RACE";
+}
+
+function isCompleted(session = {}) {
+  const status = String(session?.status || session?.completionStatus || "").toLowerCase();
+  return Boolean(status === "completed" || session?.completedAt || session?.completed === true);
+}
+
+function hasWarmCooldown(session = {}) {
+  if (!isHard(session)) return true;
+  if (toNumber(session?.warmupMin) > 0 && toNumber(session?.cooldownMin) > 0) return true;
+  const steps = Array.isArray(session?.workout?.steps) ? session.workout.steps : Array.isArray(session?.steps) ? session.steps : [];
+  const flat = [];
+  const queue = [...steps];
+  while (queue.length) {
+    const step = queue.shift();
+    if (!step || typeof step !== "object") continue;
+    if (String(step?.stepType || "").toLowerCase() === "repeat" && Array.isArray(step.steps)) queue.unshift(...step.steps);
+    flat.push(step);
+  }
+  const types = flat.map((s) => String(s?.stepType || "").toLowerCase());
+  return types.includes("warmup") && types.includes("cooldown");
+}
+
+function hasTargets(session = {}) {
+  if (session?.targetPace || session?.targetHr || session?.workout?.paceTarget || session?.workout?.hrTarget) return true;
+  const steps = Array.isArray(session?.workout?.steps) ? session.workout.steps : [];
+  if (!steps.length && Array.isArray(session?.workout?.blocks)) return true;
+  return steps.some((s) => s?.targetType || s?.targetValue || s?.paceTarget || s?.hrTarget);
+}
+
+function stepCount(session = {}) {
+  const steps = Array.isArray(session?.workout?.steps) ? session.workout.steps : [];
+  let count = 0;
+  const queue = [...steps];
+  while (queue.length) {
+    const step = queue.shift();
+    if (!step || typeof step !== "object") continue;
+    count += 1;
+    if (Array.isArray(step.steps)) queue.unshift(...step.steps);
+  }
+  return count;
+}
+
+function isPreservedTemplateSession(session = {}) {
+  return Boolean(
+    session?.preserveTemplateStructure === true ||
+      session?.meta?.preserveTemplateStructure === true ||
+      session?.workout?.preserveTemplateStructure === true ||
+      session?.workout?.meta?.preserveTemplateStructure === true
+  );
+}
+
+function repairSessionKm(session, nextKm, reason, repairsApplied) {
+  const beforeKm = getSessionKm(session);
+  const km = round1(Math.max(0, Math.min(beforeKm, nextKm)));
+  if (km >= beforeKm) return false;
+  session.plannedDistanceKm = km;
+  session.distanceKm = km;
+  session.distance = km;
+  session.distanceMeters = Math.round(km * 1000);
+  session.budgetedDistanceKm = km;
+  session.budgetedComputedKm = km;
+  session.meta = {
+    ...(session.meta || {}),
+    expandedFinalValidation: { reason, beforeKm, afterKm: km },
+  };
+  if (session.workout && typeof session.workout === "object") {
+    session.workout.estimatedDistanceMeters = Math.round(km * 1000);
+    session.workout.budgetedEstimatedDistanceMeters = Math.round(km * 1000);
+    session.workout.meta = {
+      ...(session.workout.meta || {}),
+      expandedFinalValidation: { reason, beforeKm, afterKm: km },
+    };
+  }
+  repairsApplied.push({ type: "reduce_session_volume", reason, beforeKm, afterKm: km });
+  return true;
+}
+
+function recomputeExpandedMetrics(week) {
+  const sessions = Array.isArray(week?.sessions) ? week.sessions : [];
+  const plannedWeeklyKm = round1(sessions.reduce((sum, s) => sum + getSessionKm(s), 0));
+  const qualityKm = round1(sessions.reduce((sum, s) => sum + (isHard(s) && !isLong(s) ? getSessionKm(s) : 0), 0));
+  const longKm = round1(sessions.reduce((sum, s) => sum + (isLong(s) ? getSessionKm(s) : 0), 0));
+  const targetWeeklyKm = toNumber(week?.metrics?.targetWeeklyKm) ?? toNumber(week?.targets?.weeklyKm) ?? plannedWeeklyKm;
+  week.metrics = {
+    ...(week.metrics || {}),
+    plannedWeeklyKm,
+    computedWeeklyKm: plannedWeeklyKm,
+    renderedWeeklyKm: plannedWeeklyKm,
+    displayWeeklyKm: plannedWeeklyKm,
+    qualityKm,
+    qualitySharePct: plannedWeeklyKm > 0 ? round1((qualityKm / plannedWeeklyKm) * 100) : 0,
+    displayQualitySharePct: plannedWeeklyKm > 0 ? round1((qualityKm / plannedWeeklyKm) * 100) : 0,
+    longRunKm: longKm,
+    longRunSharePct: plannedWeeklyKm > 0 ? round1((longKm / plannedWeeklyKm) * 100) : 0,
+    displayLongRunSharePct: plannedWeeklyKm > 0 ? round1((longKm / plannedWeeklyKm) * 100) : 0,
+    targetWeeklyKm,
+    driftKm: round1(targetWeeklyKm - plannedWeeklyKm),
+    computedDriftKm: round1(targetWeeklyKm - plannedWeeklyKm),
+  };
+}
+
+function convertHardToEasyFinal(session, reason, repairsApplied) {
+  if (!isHard(session) || isRace(session) || isCompleted(session)) return false;
+  const beforeType = kindUpper(session);
+  const beforeKm = getSessionKm(session);
+  if (isPreservedTemplateSession(session)) {
+    const repaired = repairSessionKm(session, beforeKm * 0.75, reason, repairsApplied);
+    if (repaired) {
+      repairsApplied.push({
+        type: "reduce_preserved_template_volume",
+        reason,
+        beforeType,
+        afterType: beforeType,
+      });
+    }
+    return repaired;
+  }
+  session.type = "EASY";
+  session.sessionType = "EASY";
+  session.workoutKind = "EASY";
+  session.name = "Easy run";
+  session.keyTargets = "Comfortable pace";
+  session.workout = {
+    sport: "running",
+    kind: "EASY",
+    estimatedDistanceMeters: Math.round(beforeKm * 0.75 * 1000),
+    meta: { expandedFinalValidation: { reason, beforeType } },
+  };
+  repairSessionKm(session, beforeKm * 0.75, reason, repairsApplied);
+  repairsApplied.push({ type: "replace_hard_with_easy", reason, beforeType, afterType: "EASY" });
+  return true;
+}
+
+function addTrace(trace, rule, result, message, repairApplied = false) {
+  trace.push({ rule, result, repairApplied, message });
+}
+
+function pushIssue(list, code, message, evidence = null) {
+  list.push({ code, message, ...(evidence ? { evidence } : {}) });
+}
+
+function approvalFrom({ blockers, warnings, safetyScore }) {
+  if (blockers.length || safetyScore < 55) return "blocked";
+  if (safetyScore < 70 || warnings.length >= 8) return "needs_review";
+  if (warnings.length) return "approved_with_warnings";
+  return "approved";
+}
+
+function goalFromProfile(profile = {}) {
+  return normaliseGoalPolicyKey(profile?.goalDistance || profile?.goal?.distance || profile?.goalPolicyKey || "10K");
+}
+
+export function runExpandedFinalValidation({
+  plan,
+  profile = null,
+  goalRealism = null,
+  readiness = null,
+  completedSessions = null,
+} = {}) {
+  const nextPlan = clone(plan && typeof plan === "object" ? plan : {});
+  const blockers = [];
+  const warnings = [];
+  const repairsApplied = [];
+  const validationTrace = [];
+  const weeks = Array.isArray(nextPlan?.weeks) ? nextPlan.weeks : [];
+  const goalKey = goalFromProfile(profile || nextPlan);
+  const experience = String(profile?.current?.experience || profile?.experience || "").toLowerCase();
+  const isBeginnerProfile = experience.includes("new") || experience.includes("beginner");
+  let safetyScore = 100;
+
+  if (!weeks.length) {
+    pushIssue(blockers, "EMPTY_WEEKS", "Plan has no training weeks.");
+    addTrace(validationTrace, "structural.empty_weeks", "fail", "Plan has no weeks.");
+    safetyScore -= 50;
+    return {
+      plan: nextPlan,
+      validationSummary: {
+        blockers,
+        warnings,
+        repairsApplied,
+        safetyScore: Math.max(0, safetyScore),
+        approval: "blocked",
+      },
+      validationTrace,
+    };
+  }
+
+  const hasRace = weeks.some((w) => (w.sessions || []).some(isRace));
+  const raceGoal = ["5k", "10k", "half", "marathon", "ultra"].includes(goalKey);
+  if (raceGoal && !hasRace) {
+    pushIssue(warnings, "MISSING_RACE_SESSION", "Race-goal plan does not include an explicit race session.");
+    addTrace(validationTrace, "structural.missing_race", "warn", "No explicit race session found.");
+    safetyScore -= 5;
+  }
+
+  let deloadCount = 0;
+  let taperWeeks = 0;
+  let previousWeeklyKm = null;
+  let previousHardDay = null;
+
+  weeks.forEach((week, wi) => {
+    const sessions = Array.isArray(week?.sessions) ? week.sessions : [];
+    const weekLabel = weekIndexLabel(week, wi);
+    const phase = String(week?.phase || week?.targets?.phase || "").toUpperCase();
+    if (phase === "DELOAD" || phase === "RECOVERY") deloadCount += 1;
+    if (phase === "TAPER") taperWeeks += 1;
+
+    if (!sessions.length) {
+      pushIssue(blockers, "WEEK_WITHOUT_SESSIONS", "A training week has no sessions.", { week: weekLabel });
+      addTrace(validationTrace, "structural.week_without_sessions", "fail", `Week ${weekLabel} has no sessions.`);
+      safetyScore -= 20;
+      return;
+    }
+
+    if (!sessions.some(isLong) && !sessions.some(isRace) && sessions.length >= 2) {
+      pushIssue(warnings, "MISSING_LONG_RUN", "Training week has no long run.", { week: weekLabel });
+      addTrace(validationTrace, "structural.missing_long_run", "warn", `Week ${weekLabel} has no long run.`);
+      safetyScore -= 4;
+    }
+
+    const hardSessions = sessions.filter((s) => isHard(s) && !isLong(s) && !isRace(s));
+    if (hardSessions.length > 2) {
+      pushIssue(warnings, "TOO_MANY_HARD_SESSIONS", "Week has too many hard sessions.", { week: weekLabel, hardSessions: hardSessions.length });
+      hardSessions.slice(2).forEach((s) => convertHardToEasyFinal(s, "too_many_hard_sessions", repairsApplied));
+      addTrace(validationTrace, "load.too_many_hard_sessions", "repair", `Week ${weekLabel} hard sessions reduced.`);
+      safetyScore -= 8;
+    }
+
+    for (const session of sessions) {
+      const day = ORDER.indexOf(String(session?.day || "").trim());
+      if (isHard(session) && !isLong(session) && !isRace(session)) {
+        if (isBeginnerProfile && kindUpper(session) !== "TEMPO") {
+          const beforeType = kindUpper(session);
+          convertHardToEasyFinal(session, "beginner_advanced_intensity", repairsApplied);
+          pushIssue(warnings, "BEGINNER_ADVANCED_INTENSITY", "Beginner profile had advanced intensity and it was replaced.", { week: weekLabel, type: beforeType });
+          addTrace(validationTrace, "safety.beginner_intensity", "repair", `Week ${weekLabel} advanced intensity replaced for beginner profile.`, true);
+          safetyScore -= 8;
+          continue;
+        }
+
+        if (previousHardDay && previousHardDay.weekIndex === wi && day >= 0 && day - previousHardDay.day <= 1) {
+          convertHardToEasyFinal(session, "consecutive_hard_days", repairsApplied);
+          pushIssue(warnings, "CONSECUTIVE_HARD_DAYS", "Back-to-back hard days were repaired.", { week: weekLabel });
+          addTrace(validationTrace, "spacing.consecutive_hard_days", "repair", `Week ${weekLabel} hard-day spacing repaired.`, true);
+          safetyScore -= 8;
+        } else {
+          previousHardDay = { weekIndex: wi, day };
+        }
+      }
+
+      if (isHard(session) && !hasWarmCooldown(session)) {
+        pushIssue(warnings, "QUALITY_MISSING_WARM_COOL", "Quality session missing warm-up/cool-down.", { week: weekLabel, type: kindUpper(session) });
+        session.warmupMin = session.warmupMin || 10;
+        session.cooldownMin = session.cooldownMin || 8;
+        repairsApplied.push({ type: "add_warmup_cooldown_fields", week: weekLabel, sessionType: kindUpper(session) });
+        addTrace(validationTrace, "garmin.warmup_cooldown", "repair", `Week ${weekLabel} warm/cool fields added.`, true);
+        safetyScore -= 4;
+      }
+
+      if (isHard(session) && !hasTargets(session)) {
+        pushIssue(warnings, "MISSING_TARGETS", "Quality session missing targets.", { week: weekLabel, type: kindUpper(session) });
+        session.targetPace = session.targetPace || "controlled";
+        repairsApplied.push({ type: "add_generic_target", week: weekLabel, sessionType: kindUpper(session) });
+        safetyScore -= 4;
+      }
+
+      const steps = stepCount(session);
+      if (steps > 80) {
+        pushIssue(warnings, "TOO_MANY_GARMIN_STEPS", "Workout has too many device steps.", { week: weekLabel, steps });
+        addTrace(validationTrace, "garmin.too_many_steps", "warn", `Week ${weekLabel} has ${steps} steps.`);
+        safetyScore -= 3;
+      }
+
+      const trace = session?.meta?.workoutSelectionTrace || session?.workout?.meta?.workoutSelectionTrace;
+      if (trace && Number(trace.score) < 55) {
+        pushIssue(warnings, "LOW_WORKOUT_SELECTION_SCORE", "Workout scoring selected a low-confidence workout.", { week: weekLabel, score: trace.score });
+        convertHardToEasyFinal(session, "low_workout_selection_score", repairsApplied);
+        safetyScore -= 6;
+      }
+    }
+
+    recomputeExpandedMetrics(week);
+    const weeklyKm = toNumber(week?.metrics?.plannedWeeklyKm) ?? 0;
+    const qualityShare = toNumber(week?.metrics?.qualitySharePct) ?? 0;
+    const longShare = toNumber(week?.metrics?.longRunSharePct) ?? 0;
+
+    if (previousWeeklyKm != null && previousWeeklyKm > 0 && phase !== "DELOAD" && phase !== "TAPER" && phase !== "RECOVERY") {
+      const rampPct = ((weeklyKm - previousWeeklyKm) / previousWeeklyKm) * 100;
+      if (rampPct > 15) {
+        pushIssue(warnings, "WEEKLY_RAMP_TOO_STEEP", "Weekly volume ramp is too steep.", { week: weekLabel, rampPct: round1(rampPct) });
+        capWeekSessionsForFinal(week, previousWeeklyKm * 1.1, repairsApplied, "weekly_ramp_too_steep");
+        addTrace(validationTrace, "load.weekly_ramp", "repair", `Week ${weekLabel} volume capped.`, true);
+        safetyScore -= 8;
+      }
+    }
+    previousWeeklyKm = weeklyKm;
+
+    if (longShare > 42 && !sessions.some(isRace)) {
+      const long = sessions.find(isLong);
+      if (long) {
+        repairSessionKm(long, getSessionKm(long) * 0.85, "long_run_share_too_high", repairsApplied);
+        recomputeExpandedMetrics(week);
+        pushIssue(warnings, "LONG_RUN_SHARE_TOO_HIGH", "Long-run share was too high and reduced.", { week: weekLabel, longSharePct: longShare });
+        addTrace(validationTrace, "load.long_run_share", "repair", `Week ${weekLabel} long run reduced.`, true);
+        safetyScore -= 6;
+      }
+    }
+
+    if (qualityShare > (phase === "TAPER" || phase === "DELOAD" ? 28 : 34)) {
+      hardSessions.forEach((s) => repairSessionKm(s, getSessionKm(s) * 0.85, "quality_share_too_high", repairsApplied));
+      recomputeExpandedMetrics(week);
+      pushIssue(warnings, "QUALITY_SHARE_TOO_HIGH", "Intensity distribution was too aggressive and reduced.", { week: weekLabel, qualitySharePct: qualityShare });
+      addTrace(validationTrace, "load.quality_share", "repair", `Week ${weekLabel} quality reduced.`, true);
+      safetyScore -= 7;
+    }
+
+    if ((phase === "RECOVERY" || phase === "DELOAD") && hardSessions.length > 1) {
+      hardSessions.slice(1).forEach((s) => convertHardToEasyFinal(s, "recovery_week_too_hard", repairsApplied));
+      pushIssue(warnings, "RECOVERY_WEEK_TOO_HARD", "Recovery week had too much hard work.", { week: weekLabel });
+      safetyScore -= 6;
+    }
+
+    if (phase === "TAPER" && qualityShare > 24) {
+      hardSessions.forEach((s) => repairSessionKm(s, getSessionKm(s) * 0.8, "taper_too_heavy", repairsApplied));
+      pushIssue(warnings, "TAPER_TOO_HEAVY", "Taper week load reduced.", { week: weekLabel });
+      safetyScore -= 6;
+    }
+
+    week.days = buildWeekDaysCanonical({
+      sessions: stableSortSessionsByDayThenOriginal(week.sessions || []).map(ensureWorkoutShell),
+      runDays: Array.isArray(week.runDays) ? week.runDays : [],
+    });
+    week.sessions = stableSortSessionsByDayThenOriginal(week.sessions || []).map(ensureWorkoutShell);
+    recomputeExpandedMetrics(week);
+  });
+
+  if (weeks.length >= 8 && deloadCount === 0) {
+    pushIssue(warnings, "NO_DELOAD_FOR_LONG_PLAN", "Long plan has no deload/recovery week.");
+    addTrace(validationTrace, "load.no_deload", "warn", "No deload/recovery week found.");
+    safetyScore -= 5;
+  }
+
+  if (raceGoal && hasRace && taperWeeks === 0 && weeks.length >= 6) {
+    pushIssue(warnings, "NO_TAPER_BEFORE_RACE", "Race plan has no taper phase.");
+    addTrace(validationTrace, "race.no_taper", "warn", "No taper phase before race.");
+    safetyScore -= 8;
+  }
+
+  if (goalKey === "marathon") {
+    const maxLong = Math.max(...weeks.flatMap((w) => (w.sessions || []).filter(isLong).map(getSessionKm)), 0);
+    if (maxLong < 24) {
+      pushIssue(warnings, "MARATHON_LONG_RUN_INSUFFICIENT", "Marathon plan long runs look insufficient.", { maxLongRunKm: round1(maxLong) });
+      safetyScore -= 8;
+    }
+  }
+
+  if (goalKey === "ultra") {
+    const maxLong = Math.max(...weeks.flatMap((w) => (w.sessions || []).filter(isLong).map(getSessionKm)), 0);
+    if (maxLong < 28) {
+      pushIssue(warnings, "ULTRA_LONG_RUN_INSUFFICIENT", "Ultra plan may lack enough time-on-feet/long-run stimulus.", { maxLongRunKm: round1(maxLong) });
+      safetyScore -= 10;
+    }
+  }
+
+  if (goalKey === "5k") {
+    const avgLongShare = weeks.length
+      ? weeks.reduce((sum, w) => sum + (toNumber(w?.metrics?.longRunSharePct) ?? 0), 0) / weeks.length
+      : 0;
+    if (avgLongShare > 38) {
+      pushIssue(warnings, "FIVE_K_TOO_MARATHON_LIKE", "5K plan is too long-run dominant.");
+      safetyScore -= 5;
+    }
+  }
+
+  if (goalRealism?.level === "unsafe") {
+    pushIssue(blockers, "UNSAFE_GOAL_REALISM", "Goal realism is unsafe.");
+    safetyScore -= 20;
+  } else if (goalRealism?.level === "aggressive") {
+    pushIssue(warnings, "AGGRESSIVE_GOAL_REALISM", "Goal realism is aggressive.");
+    safetyScore -= 8;
+  }
+
+  if (readiness?.illness || readiness?.injuryPain) {
+    pushIssue(warnings, "READINESS_HEALTH_FLAG", "Illness/injury readiness flag present.");
+    safetyScore -= 10;
+  }
+
+  const paceModel = profile?.paceModel && typeof profile.paceModel === "object" ? profile.paceModel : null;
+  if (paceModel) {
+    const confidence = toNumber(paceModel.confidence);
+    const hasHrFallback = Boolean(paceModel?.hrZones?.zones);
+    if (confidence != null && confidence < 45 && !hasHrFallback) {
+      pushIssue(warnings, "LOW_PACE_CONFIDENCE_NO_HR_FALLBACK", "Pace model confidence is low and no HR fallback is available.");
+      addTrace(validationTrace, "pace.low_confidence_no_hr", "warn", "Low-confidence pace model lacks HR fallback.");
+      safetyScore -= 6;
+    }
+
+    if (paceModel?.adjustments?.preferEffortTargets === true) {
+      const strictPaceSessions = weeks
+        .flatMap((w) => (Array.isArray(w.sessions) ? w.sessions : []))
+        .filter((s) => !isRace(s) && (s?.targetPace || s?.workout?.paceTarget));
+      if (strictPaceSessions.length) {
+        pushIssue(warnings, "STRICT_PACE_IN_EFFORT_MODE", "Effort/HR mode still has strict pace targets.");
+        addTrace(validationTrace, "pace.effort_mode_targets", "warn", "Effort/HR mode found sessions with pace targets.");
+        safetyScore -= 4;
+      }
+    }
+
+    if (paceModel?.adjustments?.treadmill === true) {
+      const treadmillTargets = weeks
+        .flatMap((w) => (Array.isArray(w.sessions) ? w.sessions : []))
+        .filter((s) => s?.targetTreadmillKph || s?.workout?.treadmillSpeedKph);
+      if (!treadmillTargets.length) {
+        pushIssue(warnings, "TREADMILL_SPEED_MISSING", "Treadmill pace model did not produce km/h targets.");
+        addTrace(validationTrace, "pace.treadmill_speed", "warn", "No treadmill speed targets found.");
+        safetyScore -= 4;
+      }
+    }
+  }
+
+  const safetyScoreFinal = Math.max(0, Math.min(100, Math.round(safetyScore)));
+  const approval = approvalFrom({ blockers, warnings, safetyScore: safetyScoreFinal });
+  nextPlan.expandedFinalValidation = {
+    blockers,
+    warnings,
+    repairsApplied,
+    safetyScore: safetyScoreFinal,
+    approval,
+  };
+
+  return {
+    plan: nextPlan,
+    validationSummary: nextPlan.expandedFinalValidation,
+    validationTrace,
+  };
+}
+
+function capWeekSessionsForFinal(week, targetKm, repairsApplied, reason) {
+  const target = Number(targetKm);
+  if (!Number.isFinite(target) || target <= 0) return false;
+  const sessions = Array.isArray(week?.sessions) ? week.sessions : [];
+  const current = sessions.reduce((sum, s) => sum + getSessionKm(s), 0);
+  if (current <= target || current <= 0) return false;
+  const factor = target / current;
+  for (const s of sessions) {
+    if (isRace(s) || isCompleted(s)) continue;
+    repairSessionKm(s, getSessionKm(s) * factor, reason, repairsApplied);
+  }
+  recomputeExpandedMetrics(week);
+  return true;
 }
 
 function applyWeeklyDistanceIfPossible(sessions, weeklyKmTarget) {

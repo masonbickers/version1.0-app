@@ -124,7 +124,7 @@ export const RULES = {
   // Distance-specific guardrails (lets you go beyond Runna)
   byDistance: {
     "5k": { taperLastNWeeks: 1, longRunMaxKm: 14 },
-    "10k": { taperLastNWeeks: 1, longRunMaxKm: 18 },
+    "10k": { taperLastNWeeks: 2, longRunMaxKm: 18 },
     "half": { taperLastNWeeks: 2, longRunMaxKm: 24 },
     "mara": { taperLastNWeeks: 2, longRunMaxKm: 32 },
     "general": { taperLastNWeeks: 0, longRunMaxKm: 12 },

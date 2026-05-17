@@ -221,7 +221,15 @@ function rankRunDays(runDays, longRunDay) {
   return { ordered, lr };
 }
 
-function buildDayIntents({ runDays, longRunDay, sessionsPerWeek, difficulty, experience, spec }) {
+function intentForQualityFamily(family) {
+  const f = String(family || "").toUpperCase();
+  if (f === "HILLS") return "HILLS_PRIMARY";
+  if (f === "TEMPO") return "TEMPO_PRIMARY";
+  if (f === "THRESHOLD") return "THRESHOLD_PRIMARY";
+  return "INTERVALS_PRIMARY";
+}
+
+function buildDayIntents({ runDays, longRunDay, sessionsPerWeek, difficulty, experience, spec, qualityFamilies = null }) {
   const diff = normaliseDifficulty(difficulty);
   const { ordered, lr } = rankRunDays(runDays, longRunDay);
   const spw = normaliseSessionsPerWeek(sessionsPerWeek || ordered.length || null);
@@ -246,7 +254,14 @@ function buildDayIntents({ runDays, longRunDay, sessionsPerWeek, difficulty, exp
   const specId = String(spec?.id || spec?.name || "").toUpperCase();
   const isUltraLike = specId.includes("ULTRA");
 
-  const desiredQualitySlots = isUltraLike ? Math.min(hardTarget, 2) : hardTarget;
+  const stockFamilies = Array.isArray(qualityFamilies)
+    ? qualityFamilies.map((x) => String(x || "").toUpperCase()).filter(Boolean)
+    : null;
+  const desiredQualitySlots = stockFamilies
+    ? Math.min(stockFamilies.length, Math.max(0, ordered.length - 1))
+    : isUltraLike
+    ? Math.min(hardTarget, 2)
+    : hardTarget;
 
   const qualitySlots = chooseQualitySlots({
     orderedRunDays: ordered,
@@ -258,7 +273,11 @@ function buildDayIntents({ runDays, longRunDay, sessionsPerWeek, difficulty, exp
     const d = qualitySlots[i];
     if (!byDay[d]) continue;
 
-    if (i === 0) {
+    if (stockFamilies) {
+      byDay[d].intent = intentForQualityFamily(stockFamilies[i]);
+      byDay[d].priority = "A";
+      byDay[d].tags.push("quality", String(stockFamilies[i] || "quality").toLowerCase(), "stock_template");
+    } else if (i === 0) {
       byDay[d].intent = isUltraLike ? "HILLS_PRIMARY" : "INTERVALS_PRIMARY";
       byDay[d].priority = "A";
       byDay[d].tags.push("quality", isUltraLike ? "hills" : "speed");
@@ -343,25 +362,37 @@ export function buildSkeleton(inputs = {}) {
     sessionsPerWeek,
   });
 
-  const dayIntents = buildDayIntents({
-    runDays,
-    longRunDay,
-    sessionsPerWeek,
-    difficulty,
-    experience,
-    spec,
-  });
+  const stockPlan =
+    inputs?.stockPlan && typeof inputs.stockPlan === "object" ? inputs.stockPlan : null;
 
   const taperLastNWeeks =
     inputs?.taperLastNWeeks ?? null;
 
   const weeks = [];
   for (let w = 1; w <= planLengthWeeks; w++) {
-    const phase = derivePhaseForWeek({
+    const stockWeek = Array.isArray(stockPlan?.templateWeeks)
+      ? stockPlan.templateWeeks[w - 1] || null
+      : null;
+    const phase = String(stockWeek?.phase || "").toUpperCase().trim() || derivePhaseForWeek({
       weekIndex: w,
       planLengthWeeks,
       taperLastNWeeks,
     });
+    const qualityFamilies = Array.isArray(stockWeek?.qualityFamilies)
+      ? stockWeek.qualityFamilies
+      : null;
+    const dayIntents = buildDayIntents({
+      runDays,
+      longRunDay,
+      sessionsPerWeek,
+      difficulty,
+      experience,
+      spec,
+      qualityFamilies,
+    });
+    const weekHardDaysTarget = qualityFamilies
+      ? Math.min(qualityFamilies.length, Math.max(0, runDays.length - 1))
+      : hardDaysTarget;
 
     const days = DAY_ORDER.map((day) => {
       const meta = dayIntents[day] || null;
@@ -378,24 +409,26 @@ export function buildSkeleton(inputs = {}) {
 
     const weekHints = {
       difficulty: normaliseDifficulty(difficulty),
-      qualityHint: hardDaysTarget >= 2 ? "two_quality_days" : hardDaysTarget === 1 ? "one_quality_day" : "easy_only",
+      qualityHint: weekHardDaysTarget >= 2 ? "two_quality_days" : weekHardDaysTarget === 1 ? "one_quality_day" : "easy_only",
       specId: spec?.id || null,
       goalDistance: String(goalDistance || ""),
+      ...(qualityFamilies ? { stockQualityFamilies: [...qualityFamilies] } : {}),
     };
 
     weeks.push({
       weekIndex: w,
       week: w,
       phase,
-      hardDaysTarget,
+      hardDaysTarget: weekHardDaysTarget,
       runDays: [...runDays],
       days,
       sessions: [],
       hints: weekHints,
       specId: spec?.id || null,
       _spec: spec || null,
+      ...(stockWeek ? { stockTemplate: { ...stockWeek } } : {}),
     });
   }
 
-  return { weeks, spec };
+  return { weeks, spec, ...(stockPlan ? { stockPlan } : {}) };
 }

@@ -7,13 +7,14 @@
 // ✅ Legacy fields derived from blocks (reps/repDistanceM/recovery) so old UI won’t drift
 //
 // RUNNA-LEVEL CONTRACT (IMPORTANT):
-// ✅ totalKm is the distance budget for the SESSION excluding warmup/cooldown.
-// ✅ warmup/cooldown are time steps added by renderer; they must not squeeze main sets.
-// ✅ Main-set + recoveries should approximately equal totalKm.
+// ✅ totalKm is the executable session distance budget.
+// ✅ warmup/cooldown are time steps added by renderer, so their estimated distance
+//    is reserved before fitting the main set.
+// ✅ Main-set + recoveries should fit the remaining distance budget.
 // ✅ If a chosen workout under-fills the budget after fitting, add a FILL_DISTANCE block.
 //
 // ✅ Updates in this version:
-// - Budget uses full totalKm (no buffer subtraction).
+// - Budget reserves warmup/cooldown estimated distance before fitting blocks.
 // - Adds FILL_DISTANCE block to top-up to budget.
 // - fitBlocksToBudget trims filler first if we’re over budget.
 // - sumTotalMeters understands FILL_DISTANCE.
@@ -403,7 +404,14 @@ function sumTotalMeters(blocks = [], profile) {
       continue;
     }
 
-    if (b.type === "REPEAT_TIME" || b.type === "CRUISE_TIME" || b.type === "HILL_REPEAT_TIME") continue;
+    if (b.type === "REPEAT_TIME" || b.type === "CRUISE_TIME" || b.type === "HILL_REPEAT_TIME") {
+      const reps = Math.max(0, Number(b.reps || 0));
+      const gaps = Math.max(0, reps - 1);
+      const workSec = Math.max(0, Number(b.workSec || b.seconds || 0));
+      const recSec = Math.max(0, Number(b.recoverSec || b.recSec || 0));
+      sum += metersFromTimeAtEasyPace(reps * workSec + gaps * recSec, profile);
+      continue;
+    }
   }
 
   return Math.max(0, Math.round(sum));
@@ -1315,6 +1323,29 @@ function fitBlocksToBudget(blocks = [], budgetM, profile) {
     return { blocks: out, fitSteps };
   }
 
+  if (b0.type === "REPEAT_TIME" || b0.type === "CRUISE_TIME" || b0.type === "HILL_REPEAT_TIME") {
+    const minReps = b0.type === "CRUISE_TIME" ? 2 : 3;
+    let reps = clamp(Number(b0.reps || 0) || 4, minReps, 30);
+    while (reps > minReps && total() > bM) {
+      reps -= 1;
+      b0.reps = reps;
+      fitSteps.push(`reps→${reps}`);
+      if (trimFillerIfNeeded()) break;
+    }
+
+    const minWorkSec = b0.type === "HILL_REPEAT_TIME" ? 45 : 90;
+    let workSec = Math.max(minWorkSec, Number(b0.workSec || b0.seconds || 0) || minWorkSec);
+    while (workSec > minWorkSec && total() > bM) {
+      workSec = Math.max(minWorkSec, workSec - 30);
+      b0.workSec = workSec;
+      fitSteps.push(`workSec→${workSec}`);
+      if (trimFillerIfNeeded()) break;
+    }
+
+    trimFillerIfNeeded();
+    return { blocks: out, fitSteps };
+  }
+
   trimFillerIfNeeded();
   return { blocks: out, fitSteps };
 }
@@ -1522,8 +1553,22 @@ export function buildIntervalsWorkout({
     weekIndex,
   });
 
-  const baseWarm = goalKey === "MARATHON" || goalKey === "ULTRA" ? 16 : 14;
-  const baseCool = goalKey === "MARATHON" || goalKey === "ULTRA" ? 12 : 10;
+  const totalM =
+    Number.isFinite(Number(totalKm)) && Number(totalKm) > 0 ? Math.round(Number(totalKm) * 1000) : null;
+  const sessionBudgetKm = totalM != null ? totalM / 1000 : null;
+
+  const baseWarm =
+    sessionBudgetKm != null && sessionBudgetKm <= 5.5 ? 8 :
+    sessionBudgetKm != null && sessionBudgetKm <= 7 ? 10 :
+    sessionBudgetKm != null && sessionBudgetKm <= 9 ? 12 :
+    goalKey === "MARATHON" || goalKey === "ULTRA" ? 16 :
+    14;
+  const baseCool =
+    sessionBudgetKm != null && sessionBudgetKm <= 5.5 ? 5 :
+    sessionBudgetKm != null && sessionBudgetKm <= 7 ? 6 :
+    sessionBudgetKm != null && sessionBudgetKm <= 9 ? 8 :
+    goalKey === "MARATHON" || goalKey === "ULTRA" ? 12 :
+    10;
 
   const volBump = wkKm >= 70 ? 3 : wkKm >= 55 ? 2 : wkKm >= 40 ? 1 : 0;
   const phaseBump = phase === "specific" ? 1 : 0;
@@ -1534,9 +1579,6 @@ export function buildIntervalsWorkout({
 
   const warmupSec = warmupMin * 60;
   const cooldownSec = cooldownMin * 60;
-
-  const totalM =
-    Number.isFinite(Number(totalKm)) && Number(totalKm) > 0 ? Math.round(Number(totalKm) * 1000) : null;
 
   let picked = pickBest({
     candidates,
@@ -1563,7 +1605,8 @@ export function buildIntervalsWorkout({
 
   // Fit to distance budget (Runna-level = full budget, no subtracting buffer)
   if (totalM != null) {
-    const budgetM = Math.max(800, totalM);
+    const warmCoolM = metersFromTimeAtEasyPace(warmupSec + cooldownSec, profile);
+    const budgetM = Math.max(800, totalM - warmCoolM);
 
     const chosen = chooseCandidateThatFits({
       ranked,
@@ -1789,7 +1832,8 @@ export function buildIntervalsWorkoutById({
   const totalM =
     Number.isFinite(Number(totalKm)) && Number(totalKm) > 0 ? Math.round(Number(totalKm) * 1000) : null;
   if (totalM != null) {
-    const budgetM = Math.max(800, totalM);
+    const warmCoolM = metersFromTimeAtEasyPace((Number(base?.warmupSec || 0) || 0) + (Number(base?.cooldownSec || 0) || 0), profile);
+    const budgetM = Math.max(800, totalM - warmCoolM);
     const fitted = fitBlocksToBudget(blocks, budgetM, profile);
     blocks = fitted.blocks;
 
@@ -1816,9 +1860,17 @@ export function buildIntervalsWorkoutById({
   const workBeforeFloorM = sumWorkMeters(blocks);
   const preFloorKeepRatio =
     requestedWorkM > 0 ? workBeforeFloorM / requestedWorkM : 1;
-  const floorRatio = intervalSpecFidelityFloorRatio(phase, isDeload);
-  const fidelityPolicy = floorRatio > 0 ? "hard_floor" : "taper_relaxed";
-  const fidelityFloorBypassedReason = floorRatio > 0 ? null : "taper_phase_policy";
+  const requestedExecutableM =
+    totalM != null
+      ? sumTotalMeters(requestedBlocks, profile) +
+        metersFromTimeAtEasyPace((Number(base?.warmupSec || 0) || 0) + (Number(base?.cooldownSec || 0) || 0), profile)
+      : null;
+  const requestedFitsSessionBudget =
+    requestedExecutableM == null || totalM == null || requestedExecutableM <= Math.round(totalM * 1.25);
+  const floorRatio = requestedFitsSessionBudget ? intervalSpecFidelityFloorRatio(phase, isDeload) : 0;
+  const fidelityPolicy = floorRatio > 0 ? "hard_floor" : phase === "taper" ? "taper_relaxed" : "budget_relaxed";
+  const fidelityFloorBypassedReason =
+    floorRatio > 0 ? null : requestedFitsSessionBudget ? "taper_phase_policy" : "requested_spec_exceeds_session_budget";
   let fidelityFloorApplied = false; // true only when we actually clamp to requested blocks
   if (floorRatio > 0 && preFloorKeepRatio < floorRatio) {
     blocks = requestedBlocks;

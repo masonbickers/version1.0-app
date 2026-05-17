@@ -3,6 +3,7 @@ export default {
   name: "5K",
   phases: ["BASE", "BUILD", "BUILD", "DELOAD", "SPECIFIC", "SPECIFIC", "TAPER", "TAPER"],
   longRun: {
+    minKm: 4,
     minOfCurrentLongest: 0.8,
     targetWeeklyFraction: 0.22,
     maxKm: 16,

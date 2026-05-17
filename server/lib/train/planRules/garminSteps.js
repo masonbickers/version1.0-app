@@ -197,6 +197,11 @@ function preserveBlueprintFields(bp, w) {
 
     blocks: Array.isArray(bp.blocks) ? bp.blocks : Array.isArray(w.blocks) ? w.blocks : [],
     title: bp.title ?? w.title,
+    summary: bp.summary ?? w.summary,
+    description: bp.description ?? w.description,
+    displayLabels: bp.displayLabels ?? w.displayLabels,
+    workoutSteps: Array.isArray(bp.workoutSteps) ? bp.workoutSteps : Array.isArray(w.workoutSteps) ? w.workoutSteps : undefined,
+    preserveTemplateStructure: bp.preserveTemplateStructure === true || w.preserveTemplateStructure === true,
     notes: bp.notes ?? w.notes,
     keyTargets: bp.keyTargets ?? w.keyTargets,
     meta: cleanedMeta,
@@ -375,6 +380,17 @@ function steadyStepDistance({ meters, targetType = "none", targetValue = null })
   return step;
 }
 
+function raceStepDistance({ meters, targetType = "none", targetValue = null }) {
+  const step = {
+    stepType: "race effort",
+    durationType: "distance",
+    durationValue: round(meters),
+    targetType,
+  };
+  if (targetValue != null) step.targetValue = targetValue;
+  return step;
+}
+
 function steadyStepTime({ seconds, targetType = "none", targetValue = null }) {
   const step = {
     stepType: "steady",
@@ -448,8 +464,8 @@ function resolveWarmCooldownSec({ session, blueprint, kindHint }) {
   const mWarm = toNum(blueprint?.meta?.warmupSec);
   const mCool = toNum(blueprint?.meta?.cooldownSec);
 
-  const warmupSec = sWarm ?? bWarm ?? mWarm ?? defaultWarm;
-  const cooldownSec = sCool ?? bCool ?? mCool ?? defaultCool;
+  const warmupSec = bWarm ?? mWarm ?? sWarm ?? defaultWarm;
+  const cooldownSec = bCool ?? mCool ?? sCool ?? defaultCool;
 
   return {
     warmupSec: clamp(warmupSec, 0, 30 * 60),
@@ -606,12 +622,72 @@ function buildEasyWorkout({ meters, profile }) {
   };
 }
 
+function buildEasyWorkoutWithStrides({ meters, profile, session }) {
+  const strideCfg =
+    session?.meta?.strides && typeof session.meta.strides === "object"
+      ? session.meta.strides
+      : null;
+  const reps = clamp(round(toNum(strideCfg?.reps) ?? 6), 4, 8);
+  const durSec = clamp(round(toNum(strideCfg?.durSec) ?? 20), 10, 30);
+  const recSec = clamp(round(toNum(strideCfg?.recoverySec) ?? 75), 45, 120);
+  const stridePace = clamp(calc10kPaceSecPerKm(profile) - 25, 160, 360);
+  const easyTgt = hrTarget(profile, "z2");
+  const recTgt = hrTarget(profile, "z1");
+
+  return {
+    sport: "running",
+    estimatedDistanceMeters: round(meters),
+    variant: "EASY_PLUS_STRIDES",
+    steps: applyHrFallbackToSteps(
+      [
+        steadyStepDistance({
+          meters: Math.max(0, round(meters)),
+          targetType: easyTgt.targetType,
+          targetValue: easyTgt.targetValue,
+        }),
+        repeatBlock({
+          repeatCount: reps,
+          steps: [
+            steadyStepTime({
+              seconds: durSec,
+              targetType: "pace_range",
+              targetValue: paceToTargetRange(stridePace, 12),
+            }),
+            recoveryStep({ seconds: recSec, ...recTgt }),
+          ],
+        }),
+      ],
+      profile,
+      "EASY"
+    ),
+  };
+}
+
 function buildLongWorkout({ meters, profile }) {
   const tgt = hrTarget(profile, "z2");
   return {
     sport: "running",
     estimatedDistanceMeters: round(meters),
     steps: [steadyStepDistance({ meters, targetType: tgt.targetType, targetValue: tgt.targetValue })],
+  };
+}
+
+function buildRaceWorkout({ meters, profile }) {
+  const target =
+    paceRangeFromProfile(profile, "race") ||
+    paceToTargetRange(calc10kPaceSecPerKm(profile), 10);
+
+  return {
+    sport: "running",
+    estimatedDistanceMeters: round(meters),
+    variant: "RACE",
+    steps: [
+      raceStepDistance({
+        meters,
+        targetType: "pace_range",
+        targetValue: target,
+      }),
+    ],
   };
 }
 
@@ -700,7 +776,30 @@ function intensityToPaceKey(intensityLabel, kindHint) {
   return "tempo";
 }
 
+function shouldPreferEffortTargets(profile, paceKey = null) {
+  const model = profile?.paceModel;
+  if (!model || typeof model !== "object") return false;
+  if (model?.adjustments?.preferEffortTargets === true) return true;
+  const mode = String(model?.adjustments?.targetMode || "").toLowerCase();
+  if (mode.includes("effort")) return true;
+  const key = String(paceKey || "").toLowerCase();
+  return mode.includes("hr_fallback") && key !== "racepace";
+}
+
+function treadmillKphFromRange(profile, paceRange) {
+  if (!profile?.paceModel?.adjustments?.treadmill || !paceRange) return null;
+  const min = toNum(paceRange.minSecPerKm);
+  const max = toNum(paceRange.maxSecPerKm);
+  if (min == null || max == null || min <= 0 || max <= 0) return null;
+  return {
+    minKph: round1(3600 / max),
+    maxKph: round1(3600 / min),
+  };
+}
+
 function paceRangeFromProfile(profile, paceKey) {
+  if (shouldPreferEffortTargets(profile, paceKey)) return null;
+
   const p = profile?.paces;
   if (!p || typeof p !== "object") return null;
 
@@ -765,6 +864,7 @@ function targetForIntensity({ profile, intensityLabel, intensityKey, isDeload, k
 
   // easy is HR-driven by fallback
   if (paceKey === "easy") return { targetType: "none", targetValue: null };
+  if (shouldPreferEffortTargets(profile, paceKey)) return { targetType: "none", targetValue: null };
 
   const fromProfile = paceRangeFromProfile(profile, paceKey);
   if (fromProfile) return { targetType: "pace_range", targetValue: fromProfile };
@@ -778,6 +878,296 @@ function targetForIntensity({ profile, intensityLabel, intensityKey, isDeload, k
 
   const pace = clamp(pace10k + delta, 160, 420);
   return { targetType: "pace_range", targetValue: paceToTargetRange(pace, tol) };
+}
+
+function isPreservedTemplateSession(session = {}) {
+  return Boolean(
+    session?.preserveTemplateStructure === true ||
+      session?.meta?.preserveTemplateStructure === true ||
+      session?.workout?.preserveTemplateStructure === true ||
+      session?.workout?.meta?.preserveTemplateStructure === true
+  );
+}
+
+function templateText(value) {
+  return String(value || "").trim();
+}
+
+function templateLabel(value, fallback = "Run") {
+  const raw = templateText(value || fallback)
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+  if (!raw) return fallback;
+  return raw
+    .split(" ")
+    .map((part) => (/^\d+k$/i.test(part) ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()))
+    .join(" ");
+}
+
+function withTemplateStepLabel(step, label, extra = {}) {
+  const cleanLabel = templateLabel(label, "Run");
+  return {
+    ...step,
+    label: cleanLabel,
+    title: cleanLabel,
+    name: cleanLabel,
+    templateAuthored: true,
+    ...extra,
+  };
+}
+
+function templateTargetFor({ profile, intensity, intensityKey, kind, isDeload }) {
+  return targetForIntensity({
+    profile,
+    intensityLabel: intensity,
+    intensityKey,
+    isDeload,
+    kindHint: kind,
+    forcePaceInDeload: true,
+  });
+}
+
+function templateWorkTimeStep({ seconds, intensity, intensityKey, kind, profile, isDeload }) {
+  const target = templateTargetFor({ profile, intensity, intensityKey, kind, isDeload });
+  return withTemplateStepLabel(
+    steadyStepTime({ seconds, targetType: target.targetType, targetValue: target.targetValue }),
+    intensity || kind,
+    { targetPlaceholder: intensityKey || intensity || null }
+  );
+}
+
+function templateWorkDistanceStep({ meters, intensity, intensityKey, kind, profile, isDeload }) {
+  const target = templateTargetFor({ profile, intensity, intensityKey, kind, isDeload });
+  return withTemplateStepLabel(
+    steadyStepDistance({ meters, targetType: target.targetType, targetValue: target.targetValue }),
+    intensity || kind,
+    { targetPlaceholder: intensityKey || intensity || null }
+  );
+}
+
+function templateRecoveryTimeStep({ seconds, profile }) {
+  const recTgt = hrTarget(profile, "z1");
+  return withTemplateStepLabel(recoveryStep({ seconds, ...recTgt }), "Easy recovery", {
+    targetPlaceholder: "easy",
+  });
+}
+
+function templateRecoveryDistanceStep({ meters, profile }) {
+  const recTgt = hrTarget(profile, "z1");
+  return withTemplateStepLabel(recoveryStepDistance({ meters, ...recTgt }), "Easy recovery", {
+    targetPlaceholder: "easy",
+  });
+}
+
+function templateWarmupStep(seconds, profile) {
+  const wuTgt = hrTarget(profile, "z1");
+  return withTemplateStepLabel(warmupStep({ seconds, ...wuTgt }), "Warm-up");
+}
+
+function templateCooldownStep(seconds, profile) {
+  const cdTgt = hrTarget(profile, "z1");
+  return withTemplateStepLabel(cooldownStep({ seconds, ...cdTgt }), "Cool-down");
+}
+
+function buildTemplateBlockSteps({ block, profile, isDeload, kind }) {
+  const steps = [];
+  if (!block || typeof block !== "object") return steps;
+
+  const type = String(block.type || "").toUpperCase();
+
+  if (type === "REPEAT") {
+    const repeatCount = Number(block?.repeatCount ?? block?.reps ?? 0) || 0;
+    const workSec = Number(block?.work?.valueSec ?? block?.workSec ?? 0) || 0;
+    const workM = Number(block?.work?.valueM ?? block?.workM ?? 0) || 0;
+    const recSec = Number(block?.recover?.valueSec ?? block?.recoverSec ?? 0) || 0;
+    const recM = Number(block?.recover?.valueM ?? block?.recoverM ?? 0) || 0;
+    const intensity = block?.work?.intensity ?? block?.intensity ?? kind;
+    const intensityKey = block?.work?.intensityKey ?? block?.intensityKey ?? null;
+    const inner = [];
+    if (workM > 0) inner.push(templateWorkDistanceStep({ meters: workM, intensity, intensityKey, kind, profile, isDeload }));
+    else if (workSec > 0) inner.push(templateWorkTimeStep({ seconds: workSec, intensity, intensityKey, kind, profile, isDeload }));
+    if (recM > 0) inner.push(templateRecoveryDistanceStep({ meters: recM, profile }));
+    else if (recSec > 0) inner.push(templateRecoveryTimeStep({ seconds: recSec, profile }));
+    if (repeatCount > 0 && inner.length) steps.push({ ...repeatBlock({ repeatCount, steps: inner }), templateAuthored: true });
+    return steps;
+  }
+
+  if (type === "REPEAT_TIME" || type === "CRUISE_TIME" || type === "HILL_REPEAT_TIME") {
+    const repeatCount = Number(block?.repeatCount ?? block?.reps ?? 0) || 0;
+    const workSec = Number(block?.workSec ?? block?.seconds ?? block?.work?.valueSec ?? 0) || 0;
+    const recSec = Number(block?.recoverSec ?? block?.recSec ?? block?.recover?.valueSec ?? 0) || 0;
+    const intensity = block?.intensity ?? block?.intensityLabel ?? block?.work?.intensity ?? kind;
+    const intensityKey = block?.intensityKey ?? block?.work?.intensityKey ?? null;
+    const inner = [];
+    if (workSec > 0) inner.push(templateWorkTimeStep({ seconds: workSec, intensity, intensityKey, kind, profile, isDeload }));
+    if (recSec > 0) inner.push(templateRecoveryTimeStep({ seconds: recSec, profile }));
+    if (repeatCount > 0 && inner.length) steps.push({ ...repeatBlock({ repeatCount, steps: inner }), templateAuthored: true });
+    return steps;
+  }
+
+  if (type === "REPEAT_DISTANCE") {
+    const repeatCount = Number(block?.repeatCount ?? block?.reps ?? 0) || 0;
+    const workM = Number(block?.workM ?? block?.meters ?? block?.work?.valueM ?? 0) || 0;
+    const recSec = Number(block?.recover?.sec ?? block?.recover?.valueSec ?? block?.recoverSec ?? 0) || 0;
+    const recM = Number(block?.recover?.m ?? block?.recover?.valueM ?? block?.recoverM ?? 0) || 0;
+    const intensity = block?.intensity ?? block?.intensityLabel ?? block?.work?.intensity ?? kind;
+    const intensityKey = block?.intensityKey ?? block?.work?.intensityKey ?? null;
+    const inner = [];
+    if (workM > 0) inner.push(templateWorkDistanceStep({ meters: workM, intensity, intensityKey, kind, profile, isDeload }));
+    if (recM > 0) inner.push(templateRecoveryDistanceStep({ meters: recM, profile }));
+    else if (recSec > 0) inner.push(templateRecoveryTimeStep({ seconds: recSec, profile }));
+    if (repeatCount > 0 && inner.length) steps.push({ ...repeatBlock({ repeatCount, steps: inner }), templateAuthored: true });
+    return steps;
+  }
+
+  if (type === "PROGRESSIVE") {
+    const segments = Array.isArray(block?.segments) ? block.segments : [];
+    for (const segment of segments) {
+      const seconds = Number(segment?.sec ?? segment?.seconds ?? segment?.work?.valueSec ?? 0) || 0;
+      if (seconds <= 0) continue;
+      const intensity = segment?.intensity ?? segment?.work?.intensity ?? kind;
+      const intensityKey = segment?.intensityKey ?? segment?.work?.intensityKey ?? null;
+      steps.push(templateWorkTimeStep({ seconds, intensity, intensityKey, kind, profile, isDeload }));
+    }
+    return steps;
+  }
+
+  return steps;
+}
+
+function buildTemplateAuthoredMainSteps({ session, profile, isDeload, kind, totalMeters }) {
+  const bp = session?.workout && typeof session.workout === "object" ? session.workout : {};
+  if (Array.isArray(bp?.steps) && bp.steps.length) return bp.steps.map((step) => ({ ...step, templateAuthored: true }));
+
+  const blocks = Array.isArray(bp?.blocks) ? bp.blocks : [];
+  const fromBlocks = blocks.flatMap((block) => buildTemplateBlockSteps({ block, profile, isDeload, kind }));
+  if (fromBlocks.length) return fromBlocks;
+
+  if (kind === "RACE") {
+    const target = templateTargetFor({ profile, intensity: "RACEPACE", intensityKey: "racepace", kind, isDeload });
+    return [
+      withTemplateStepLabel(
+        raceStepDistance({ meters: totalMeters || 10000, targetType: target.targetType, targetValue: target.targetValue }),
+        "Race day",
+        { targetPlaceholder: "race_pace" }
+      ),
+    ];
+  }
+
+  if (kind === "LONG" && String(bp?.variant || session?.target || "").toUpperCase().includes("STEADY")) {
+    const easyMeters = Math.round((totalMeters || 0) * 0.75);
+    const steadyMeters = Math.max(0, (totalMeters || 0) - easyMeters);
+    const easyTarget = templateTargetFor({ profile, intensity: "EASY", intensityKey: "easy", kind, isDeload });
+    const steadyTarget = templateTargetFor({ profile, intensity: "STEADY", intensityKey: "steady", kind, isDeload });
+    return [
+      withTemplateStepLabel(
+        steadyStepDistance({ meters: easyMeters, targetType: easyTarget.targetType, targetValue: easyTarget.targetValue }),
+        "Easy long run",
+        { targetPlaceholder: "easy" }
+      ),
+      withTemplateStepLabel(
+        steadyStepDistance({ meters: steadyMeters, targetType: steadyTarget.targetType, targetValue: steadyTarget.targetValue }),
+        "Steady finish",
+        { targetPlaceholder: "steady" }
+      ),
+    ].filter((step) => Number(step.durationValue) > 0);
+  }
+
+  if (kind === "EASY" && session?.meta?.includeStrides) {
+    const easyTarget = templateTargetFor({ profile, intensity: "EASY", intensityKey: "easy", kind, isDeload });
+    const strideTarget = templateTargetFor({ profile, intensity: "5K", intensityKey: "interval", kind: "STRIDES", isDeload });
+    return [
+      withTemplateStepLabel(
+        steadyStepDistance({ meters: totalMeters, targetType: easyTarget.targetType, targetValue: easyTarget.targetValue }),
+        "Easy aerobic",
+        { targetPlaceholder: "easy" }
+      ),
+      {
+        ...repeatBlock({
+          repeatCount: Number(session?.meta?.strides || 6) || 6,
+          steps: [
+            withTemplateStepLabel(
+              steadyStepTime({ seconds: 20, targetType: strideTarget.targetType, targetValue: strideTarget.targetValue }),
+              "Stride",
+              { targetPlaceholder: "strides" }
+            ),
+            templateRecoveryTimeStep({ seconds: 60, profile }),
+          ],
+        }),
+        templateAuthored: true,
+      },
+    ];
+  }
+
+  const intensity = session?.target || (kind === "LONG" ? "EASY" : kind);
+  const intensityKey = session?.targetPlaceholder || session?.target || null;
+  const target = templateTargetFor({ profile, intensity, intensityKey, kind, isDeload });
+  return [
+    withTemplateStepLabel(
+      steadyStepDistance({ meters: totalMeters, targetType: target.targetType, targetValue: target.targetValue }),
+      session?.structure || intensity || kind,
+      { targetPlaceholder: intensityKey }
+    ),
+  ];
+}
+
+export function buildTemplateWorkoutSteps(session, profile = {}, ctx = {}) {
+  const kind = getSessionKind(session);
+  const bp = session?.workout && typeof session.workout === "object" ? session.workout : {};
+  const baseKm = toNum(session?.plannedDistanceKm) ?? toNum(session?.distanceKm) ?? 0;
+  const totalMeters = Math.max(0, Math.round(baseKm * 1000));
+  const isDeload = !!ctx?.isDeload;
+  const { warmupSec, cooldownSec } = resolveWarmCooldownSec({ session, blueprint: bp, kindHint: kind });
+  const mainSteps = buildTemplateAuthoredMainSteps({ session, profile, isDeload, kind, totalMeters });
+  const steps = [];
+
+  if (warmupSec > 0) steps.push(templateWarmupStep(warmupSec, profile));
+  steps.push(...mainSteps);
+  if (cooldownSec > 0) steps.push(templateCooldownStep(cooldownSec, profile));
+
+  const garminSteps = applyHrFallbackToSteps(steps, profile, kind);
+  const summary = templateText(session?.structure || bp?.summary || session?.keyTargets || session?.title || session?.name || kind);
+  const description = templateText(
+    session?.description ||
+      bp?.description ||
+      [session?.purpose, session?.executionTip].filter(Boolean).join(" ")
+  );
+  const displayLabels = {
+    summary,
+    mainSet: summary,
+    target: templateText(session?.target || session?.targetPlaceholder || bp?.targetPlaceholder),
+    purpose: templateText(session?.purpose),
+    executionTip: templateText(session?.executionTip),
+  };
+
+  return {
+    workoutSteps: garminSteps,
+    garminSteps,
+    summary,
+    description,
+    displayLabels,
+    workout: {
+      sport: "running",
+      kind,
+      estimatedDistanceMeters: totalMeters,
+      preserveTemplateStructure: true,
+      templateRendered: true,
+      summary,
+      description,
+      displayLabels,
+      workoutSteps: garminSteps,
+      steps: garminSteps,
+      blocks: Array.isArray(bp?.blocks) ? bp.blocks : [],
+      targetPlaceholder: session?.target || bp?.targetPlaceholder || null,
+      structure: session?.structure || bp?.structure || null,
+      meta: {
+        ...(bp?.meta && typeof bp.meta === "object" ? bp.meta : {}),
+        preserveTemplateStructure: true,
+        templateRendered: true,
+        legacyWorkoutGenerationSkipped: true,
+      },
+    },
+  };
 }
 
 function flattenStepsForTargets(steps = []) {
@@ -885,14 +1275,14 @@ function hasQualityLongContent(steps = []) {
 
 function defaultHrZoneForKind(kind) {
   const k = String(kind || "").toUpperCase();
-  if (k === "INTERVALS" || k === "STRIDES") return "z4";
+  if (k === "INTERVALS" || k === "STRIDES" || k === "RACE") return "z4";
   if (k === "TEMPO" || k === "THRESHOLD") return "z3";
   return "z2";
 }
 
 function isQualityKindForSummary(kind) {
   const k = String(kind || "").toUpperCase();
-  return k === "INTERVALS" || k === "TEMPO" || k === "THRESHOLD" || k === "STRIDES";
+  return k === "INTERVALS" || k === "TEMPO" || k === "THRESHOLD" || k === "STRIDES" || k === "RACE";
 }
 
 function isBpmRange(v) {
@@ -964,10 +1354,14 @@ function defaultPaceRangeForKind({ profile, kind, isDeload }) {
 function deriveSessionGuidance({ steps, profile, kind, isDeload }) {
   const k = String(kind || "").toUpperCase();
   const isQualityLong = k === "LONG" && hasQualityLongContent(steps);
-  const paceFromSteps = isQualityLong ? strongestExplicitPaceRange(steps) : firstExplicitTargetValue(steps, "pace_range");
+  const effortMode = shouldPreferEffortTargets(profile, k);
+  const paceFromStepsRaw = isQualityLong ? strongestExplicitPaceRange(steps) : firstExplicitTargetValue(steps, "pace_range");
+  const paceFromSteps = effortMode ? null : paceFromStepsRaw;
   const hrFromSteps = isQualityLong ? strongestExplicitMainHrRange(steps) : firstExplicitMainHrRange(steps);
   const hrZone = defaultHrZoneForKind(kind);
-  const fallbackPace = isQualityLong
+  const fallbackPace = effortMode
+    ? null
+    : isQualityLong
     ? paceRangeFromProfile(profile, "tempo") || defaultPaceRangeForKind({ profile, kind: "TEMPO", isDeload: false })
     : defaultPaceRangeForKind({ profile, kind, isDeload });
   const fallbackHrFromProfile = isQualityLong
@@ -985,6 +1379,7 @@ function deriveSessionGuidance({ steps, profile, kind, isDeload }) {
 
   return {
     paceRange: paceFromSteps || fallbackPace || null,
+    treadmillKph: treadmillKphFromRange(profile, paceFromSteps || fallbackPace || null),
     hrRange,
     source: {
       pace: paceFromSteps ? "steps" : fallbackPace ? "default" : null,
@@ -1735,6 +2130,11 @@ export function buildGarminWorkoutForSession(session, profile, ctx = {}) {
 
   const isDeload = !!ctx?.isDeload;
 
+  if (isPreservedTemplateSession(session)) {
+    const rendered = buildTemplateWorkoutSteps(session, profile, ctx);
+    return injectKindIntoWorkout(kind, rendered.workout);
+  }
+
   if (blueprintKind === "STRIDES") {
     const w = buildStridesWorkout({ meters: totalMeters, profile, session });
     return injectKindIntoWorkout("STRIDES", w);
@@ -1844,6 +2244,10 @@ export function buildGarminWorkoutForSession(session, profile, ctx = {}) {
     return injectKindIntoWorkout("STRIDES", w);
   }
 
+  if (kind === "RACE") {
+    return injectKindIntoWorkout("RACE", buildRaceWorkout({ meters: totalMeters, profile }));
+  }
+
   if (kind === "LONG") {
     const bp = session?.workout && typeof session.workout === "object" ? session.workout : {};
     const fallbackVariant =
@@ -1863,6 +2267,12 @@ export function buildGarminWorkoutForSession(session, profile, ctx = {}) {
 
     const flat = { ...buildLongWorkout({ meters: totalMeters, profile }), variant: fallbackVariant };
     return injectKindIntoWorkout("LONG", preserveBlueprintFields(bp, flat));
+  }
+
+  if (kind === "EASY" && session?.meta?.includeStrides) {
+    const bp = session?.workout && typeof session.workout === "object" ? session.workout : {};
+    const w = buildEasyWorkoutWithStrides({ meters: totalMeters, profile, session });
+    return injectKindIntoWorkout("EASY", preserveBlueprintFields(bp, w));
   }
 
   return injectKindIntoWorkout(kind, buildEasyWorkout({ meters: totalMeters, profile }));
@@ -1905,6 +2315,7 @@ function fallbackPaceForKind({ kind, profile }) {
   const k = String(kind || "").toUpperCase();
   const p = profile?.paces || {};
   if (k === "INTERVALS" || k === "STRIDES") return midPaceSecPerKm(p.interval) ?? estimateEasySecPerKm(profile);
+  if (k === "RACE") return midPaceSecPerKm(p.race) ?? calc10kPaceSecPerKm(profile);
   if (k === "THRESHOLD" || k === "TEMPO") return midPaceSecPerKm(p.tempo) ?? estimateEasySecPerKm(profile);
   if (k === "LONG" || k === "EASY") return midPaceSecPerKm(p.easy) ?? estimateEasySecPerKm(profile);
   return estimateEasySecPerKm(profile);
@@ -1924,10 +2335,6 @@ function stepMetersEstimate(step, { profile, kind }) {
   if (durationValue <= 0) return 0;
   if (durationType === "distance") return durationValue;
   if (durationType !== "time") return 0;
-  // Time-based warmup/recovery/cooldown segments are guidance/load management,
-  // not additive distance budget in the exported contract.
-  if (stepType === "warmup" || stepType === "cooldown" || stepType === "recovery") return 0;
-
   const paceFromTarget = paceFromStepTarget(step);
   const longTempoPace = midPaceSecPerKm(profile?.paces?.tempo);
   const longSteadyPace = midPaceSecPerKm(profile?.paces?.steady);
@@ -2043,7 +2450,7 @@ function qualityMetersFromStep(step) {
 
 function isHardKind(kind) {
   const k = String(kind || "").toUpperCase();
-  return k === "INTERVALS" || k === "THRESHOLD" || k === "TEMPO" || k === "HILLS";
+  return k === "INTERVALS" || k === "THRESHOLD" || k === "TEMPO" || k === "HILLS" || k === "RACE";
 }
 
 function formatDurationLabel(step) {
@@ -2128,7 +2535,7 @@ function isGenericQualitySummary(text) {
 function computeTotalKmForSession({ session, kind, profile, steps }) {
   const baseKm = toNum(session?.plannedDistanceKm) ?? toNum(session?.distanceKm) ?? 0;
 
-  if (kind === "EASY") {
+  if (kind === "EASY" || kind === "RACE") {
     return {
       warmupMin: null,
       cooldownMin: null,
@@ -2289,13 +2696,37 @@ export function attachGarminStepsToSessions(plan, profile) {
       // ✅ IMPORTANT: preserve blueprint fields on the final workout object too
       const bp =
         sessionForBuild?.workout && typeof sessionForBuild.workout === "object" ? sessionForBuild.workout : null;
+      const preserveTemplateStructure = isPreservedTemplateSession(sessionForBuild);
 
       // keep variant/blocks/meta visible on workoutBuilt (and infer if needed)
       const workout = preserveBlueprintFields(bp, workoutBuilt);
 
       let keyTargets = sessionForBuild?.keyTargets;
       let notes = sessionForBuild?.notes;
-      if (isHardKind(durableKind) && durableKind !== "LONG") {
+      let summary = sessionForBuild?.summary || workout?.summary || null;
+      let description = sessionForBuild?.description || workout?.description || null;
+      let displayLabels = workout?.displayLabels || sessionForBuild?.displayLabels || null;
+      let workoutSteps = Array.isArray(workout?.workoutSteps) ? workout.workoutSteps : steps;
+
+      if (preserveTemplateStructure) {
+        summary = sessionForBuild?.structure || summary || keyTargets || sessionForBuild?.name || durableKind;
+        keyTargets = sessionForBuild?.structure || keyTargets || summary;
+        description =
+          description ||
+          [sessionForBuild?.purpose, sessionForBuild?.executionTip].filter(Boolean).join(" ").trim() ||
+          notes ||
+          null;
+        notes = sessionForBuild?.executionTip || notes || description;
+        displayLabels = {
+          ...(displayLabels && typeof displayLabels === "object" ? displayLabels : {}),
+          summary,
+          mainSet: summary,
+          target: sessionForBuild?.target || sessionForBuild?.targetPlaceholder || null,
+          purpose: sessionForBuild?.purpose || null,
+          executionTip: sessionForBuild?.executionTip || null,
+        };
+        workoutSteps = steps;
+      } else if (isHardKind(durableKind) && durableKind !== "LONG") {
         const keyTargetMainSet =
           !isGenericQualitySummary(keyTargets) && String(keyTargets || "").trim()
             ? String(keyTargets).trim()
@@ -2352,6 +2783,13 @@ export function attachGarminStepsToSessions(plan, profile) {
               : {}),
             distanceSemanticsModel: "dual_budget_and_rendered",
             budgetPrimary: true,
+            ...(preserveTemplateStructure
+              ? {
+                  preserveTemplateStructure: true,
+                  templateRendered: true,
+                  legacyWorkoutGenerationSkipped: true,
+                }
+              : {}),
             sessionKm: budgetSessionKm,
             budgetedSessionKm: budgetSessionKm,
             renderedSessionKm,
@@ -2366,14 +2804,27 @@ export function attachGarminStepsToSessions(plan, profile) {
                 ? "primary_quality_segment"
                 : "session_overall",
           },
+          ...(summary ? { summary } : {}),
+          ...(description ? { description } : {}),
+          ...(displayLabels ? { displayLabels } : {}),
+          workoutSteps,
+          preserveTemplateStructure: preserveTemplateStructure || workout?.preserveTemplateStructure === true,
+          templateRendered: preserveTemplateStructure || workout?.templateRendered === true,
           steps,
           paceTarget: guidance.paceRange,
           hrTarget: guidance.hrRange,
+          treadmillSpeedKph: guidance.treadmillKph,
         },
 
         steps,
+        workoutSteps,
+        ...(summary ? { summary } : {}),
+        ...(description ? { description } : {}),
+        ...(displayLabels ? { displayLabels } : {}),
+        preserveTemplateStructure: preserveTemplateStructure || sessionForBuild?.preserveTemplateStructure === true,
         targetPace: guidance.paceRange,
         targetHr: guidance.hrRange,
+        targetTreadmillKph: guidance.treadmillKph,
         targetSource: guidance.source,
         targetPacePrimary: isQualityLongSession ? guidance.paceRange : null,
         targetHrPrimary: isQualityLongSession ? guidance.hrRange : null,

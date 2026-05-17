@@ -25,6 +25,7 @@ import { buildEasyAddOn } from "./workouts/easyWorkouts.js";
 import { getIntervalsWorkout } from "./workouts/intervalWorkouts.js"; // ✅ spec-driven intervals via id
 import { buildLongRunDetails } from "./workouts/longRunWorkouts.js";
 import { getTempoWorkout } from "./workouts/tempoWorkouts.js";
+import { pickBestScoredWorkout } from "./workoutScoring.js";
 
 const ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -133,6 +134,55 @@ function weekWaveShiftPct(weekIndex, phase) {
       : [0.0, 0.6, -0.4, 0.3];
   return wave[(Math.max(1, i) - 1) % wave.length];
 }
+function singleQualityIntentForVariety({ currentIntent, goalKey, phase, weekIndex }) {
+  const current = String(currentIntent || "").toUpperCase();
+  if (current.includes("HILLS")) return current;
+
+  const p = String(phase || "").toUpperCase();
+  const g = String(goalKey || "").toLowerCase();
+  const i = Math.max(1, Number(weekIndex || 1));
+
+  if (p === "DELOAD") return "THRESHOLD_PRIMARY";
+  if (p === "TAPER") return g === "5k" || g === "10k" ? "INTERVALS_PRIMARY" : "TEMPO_PRIMARY";
+
+  if (g === "5k") {
+    const pattern = ["INTERVALS_PRIMARY", "THRESHOLD_PRIMARY", "INTERVALS_PRIMARY", "TEMPO_PRIMARY"];
+    return pattern[(i - 1) % pattern.length];
+  }
+
+  if (g === "10k") {
+    const pattern = ["INTERVALS_PRIMARY", "THRESHOLD_PRIMARY", "TEMPO_PRIMARY", "THRESHOLD_PRIMARY"];
+    return pattern[(i - 1) % pattern.length];
+  }
+
+  if (g === "half") {
+    const pattern =
+      p === "BUILD" || p === "SPECIFIC"
+        ? ["THRESHOLD_PRIMARY", "TEMPO_PRIMARY", "THRESHOLD_PRIMARY", "INTERVALS_PRIMARY"]
+        : ["INTERVALS_PRIMARY", "THRESHOLD_PRIMARY", "TEMPO_PRIMARY", "THRESHOLD_PRIMARY"];
+    return pattern[(i - 1) % pattern.length];
+  }
+
+  return current || "INTERVALS_PRIMARY";
+}
+function halfMarathonQualityIntentForSlot({ currentIntent, phase, weekIndex, slotIndex }) {
+  const current = String(currentIntent || "").toUpperCase();
+  if (current.includes("HILLS")) return current;
+
+  const p = String(phase || "").toUpperCase();
+  const i = Math.max(1, Number(weekIndex || 1));
+  const slot = Math.max(0, Number(slotIndex || 0));
+
+  if (p === "DELOAD") return "THRESHOLD_PRIMARY";
+  if (p === "TAPER") return "TEMPO_PRIMARY";
+  if (p !== "BUILD" && p !== "SPECIFIC") {
+    return current || singleQualityIntentForVariety({ currentIntent, goalKey: "half", phase, weekIndex });
+  }
+
+  if (slot === 0) return i % 2 === 0 ? "TEMPO_PRIMARY" : "THRESHOLD_PRIMARY";
+  if (i % 4 === 3) return "INTERVALS_PRIMARY";
+  return i % 2 === 0 ? "THRESHOLD_PRIMARY" : "TEMPO_PRIMARY";
+}
 function getQualityKmBounds({ goalKey, expKey, difficultyKey, weeklyKm, sessionsPerWeek }) {
   const cfg = RULES?.fillSessionsPolicy?.qualitySessionKmBounds || {};
   let minQ = getMinQualityKm();
@@ -211,6 +261,7 @@ function getLongAbsMin(goalKey = null) {
   const goal = String(goalKey || "").toLowerCase();
   if (goal === "return") return 1.5;
   if (goal === "general") return 2.5;
+  if (goal === "5k") return 4;
   return toNum(RULES?.longRun?.minKm) ?? 6;
 }
 function getLongAbsMax() {
@@ -319,6 +370,7 @@ function pickFromPool({ pool = [], used = new Set() }) {
 function pickIntervalFromPoolForBudget({
   pool = [],
   used = new Set(),
+  recentWorkoutIds = [],
   weekIndex,
   profile,
   isDeload = false,
@@ -326,6 +378,7 @@ function pickIntervalFromPoolForBudget({
   totalKm,
   weekWeeklyKm,
   phaseOverride,
+  spec = null,
 } = {}) {
   const rawPool = Array.isArray(pool) ? pool : [];
   const normalized = rawPool
@@ -335,6 +388,31 @@ function pickIntervalFromPoolForBudget({
 
   const fresh = normalized.filter((x) => x?.id && !used.has(x.id));
   const candidates = fresh.length ? fresh : normalized;
+  const scored = pickBestScoredWorkout({
+    candidates,
+    family: "intervals",
+    phase: phaseOverride,
+    weekIndex,
+    profile,
+    targetSessionKm: totalKm,
+    recentWorkoutIds,
+    spec,
+    buildWorkout: (c) => getIntervalsWorkout({
+      id: c?.id || null,
+      weekIndex,
+      profile,
+      isDeload,
+      totalWeeks,
+      totalKm,
+      weekWeeklyKm,
+      phaseOverride,
+      goalKeyOverride: null,
+    }),
+  });
+  if (scored?.picked?.id) {
+    used.add(scored.picked.id);
+    return scored;
+  }
 
   let best = null;
   const phaseLc = String(phaseOverride || "").toLowerCase();
@@ -386,6 +464,7 @@ function tempoWorkMin(workout) {
 function pickTempoFromPoolForProgression({
   pool = [],
   used = new Set(),
+  recentWorkoutIds = [],
   weekIndex,
   profile,
   isDeload = false,
@@ -395,6 +474,7 @@ function pickTempoFromPoolForProgression({
   phaseOverride,
   totalKm,
   prevProgressWorkMin = null,
+  spec = null,
 } = {}) {
   const arr0 = Array.isArray(pool) ? pool : [];
   const arr = arr0
@@ -421,6 +501,33 @@ function pickTempoFromPoolForProgression({
       return tempoWorkMin(w) >= progressionFloor;
     });
     if (!freshCanHold) candidates = arr;
+  }
+
+  const scored = pickBestScoredWorkout({
+    candidates,
+    family: "tempo",
+    phase: phaseOverride,
+    weekIndex,
+    profile,
+    targetSessionKm: totalKm,
+    recentWorkoutIds,
+    spec,
+    previousWorkout: prevProgressWorkMin != null ? { workMin: prevProgressWorkMin } : null,
+    buildWorkout: (c) => getTempoWorkout({
+      id: c?.id || null,
+      weekIndex,
+      profile,
+      isDeload,
+      totalWeeks,
+      weekWeeklyKm,
+      phaseOverride,
+      goalKeyOverride: null,
+      totalKm,
+    }),
+  });
+  if (scored?.picked?.id) {
+    used.add(scored.picked.id);
+    return scored;
   }
 
   let best = null;
@@ -479,6 +586,70 @@ function makeSessionBase({ day, type, name, km, notes = "", purpose = "", keyTar
     keyTargets,
     meta: { budgetReason: "initial", budgetDeltaKm: 0 },
   };
+}
+
+function dynamicPaceRange(profile, key) {
+  const model = profile?.paceModel;
+  const p = model?.trainingPaces?.[key];
+  if (!model || !p || typeof p !== "object") return null;
+  const min = toNum(p.minSecPerKm);
+  const max = toNum(p.maxSecPerKm);
+  if (min != null && max != null && min > 0 && max >= min) {
+    return {
+      minSecPerKm: Math.round(min),
+      maxSecPerKm: Math.round(max),
+      min: p.min || null,
+      max: p.max || null,
+    };
+  }
+  return null;
+}
+
+function dynamicKphRange(profile, key) {
+  const p = profile?.paceModel?.trainingPaces?.[key];
+  const minKph = toNum(p?.minKph);
+  const maxKph = toNum(p?.maxKph);
+  if (minKph != null && maxKph != null) return { minKph, maxKph };
+  const r = dynamicPaceRange(profile, key);
+  if (!r) return null;
+  return {
+    minKph: round1(3600 / r.maxSecPerKm),
+    maxKph: round1(3600 / r.minSecPerKm),
+  };
+}
+
+function annotateWithDynamicPace(s, profile, paceKey) {
+  const model = profile?.paceModel;
+  if (!s || !model || !paceKey) return s;
+  ensureMeta(s);
+  const targetMode = model?.adjustments?.targetMode || "pace";
+  const preferEffort = model?.adjustments?.preferEffortTargets === true || String(targetMode).includes("effort");
+  s.meta.dynamicPace = {
+    source: "pacePhysiology",
+    paceKey,
+    confidence: model?.confidence ?? null,
+    targetMode,
+  };
+
+  if (preferEffort) {
+    s.targetMode = "effort_hr";
+    s.targetPace = null;
+    s.keyTargets = s.keyTargets && !/pace range/i.test(s.keyTargets)
+      ? s.keyTargets
+      : "Effort / HR guided";
+    return s;
+  }
+
+  const range = dynamicPaceRange(profile, paceKey);
+  if (range) {
+    s.targetMode = targetMode;
+    s.targetPace = range;
+  }
+  const kph = dynamicKphRange(profile, paceKey);
+  if (kph && model?.adjustments?.treadmill) {
+    s.targetTreadmillKph = kph;
+  }
+  return s;
 }
 
 // ---------------- easy distribution ----------------
@@ -545,8 +716,7 @@ function allocateWeekKmDeterministic({
       Number.isFinite(totalWeeklyKm) && totalWeeklyKm > 0 && targetLongKm != null
         ? clamp(targetLongKm / totalWeeklyKm + 0.02, 0.26, 0.52)
         : null;
-    const longMaxPct =
-      longMaxPctFromTarget != null ? Math.max(longMaxPctBase, longMaxPctFromTarget) : longMaxPctBase;
+    const longMaxPct = longMaxPctBase;
     const longTargetRaw = toNum(tgt?.longRunKm) ?? (totalWeeklyKm * longTargetPct) / 100;
     const longCapByPct = totalWeeklyKm * longMaxPct;
 
@@ -564,6 +734,10 @@ function allocateWeekKmDeterministic({
       targetFromProgressionKm: toNum(tgt?.longRunKm),
       targetRawKm: round1(longTargetRaw),
       capByPctKm: round1(longCapByPct),
+      progressionTargetCapIgnoredPct:
+        longMaxPctFromTarget != null && longMaxPctFromTarget > longMaxPctBase
+          ? round1(longMaxPctFromTarget * 100)
+          : null,
       targetKm: longTarget,
     };
   }
@@ -588,7 +762,19 @@ function allocateWeekKmDeterministic({
       difficultyQualityShiftPct(difficultyKey) +
       weekWaveShiftPct(weekIndex, phase);
     const phaseMaxPct = getQualityShareMaxPctByPhase(phase);
-    const maxQualityKmByPhase = round1((totalWeeklyKm * phaseMaxPct) / 100);
+    const lowMileageQualityCapPct =
+      totalWeeklyKm < 35 && (expKey === "new" || expKey === "some")
+        ? phase === "taper"
+          ? 20
+          : phase === "deload"
+          ? 18
+          : 22
+        : null;
+    const effectiveMaxPct =
+      lowMileageQualityCapPct != null
+        ? Math.min(phaseMaxPct, lowMileageQualityCapPct)
+        : phaseMaxPct;
+    const maxQualityKmByPhase = round1((totalWeeklyKm * effectiveMaxPct) / 100);
     const targetQualityKm = round1((totalWeeklyKm * phaseTargetPct) / 100);
     const maxQualityKmBySessions = round1(Math.max(0, Number(maxQ) || 0) * qualitySessionCount);
     const maxQualityKmByBudget = round1(Math.max(0, remainingAfterLong - minEasyTotal));
@@ -601,7 +787,9 @@ function allocateWeekKmDeterministic({
     qualityReason = {
       mode: "phase_target_capped",
       targetSharePct: round1(phaseTargetPct),
-      maxSharePct: round1(phaseMaxPct),
+      maxSharePct: round1(effectiveMaxPct),
+      configuredMaxSharePct: round1(phaseMaxPct),
+      lowMileageQualityCapPct,
       targetQualityKm,
       capQualityKm: qualityCap,
       floorQualityKm: qualityFloor,
@@ -680,6 +868,7 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
   const spec = skeleton?.spec || null;
 
   const used = { tempo: new Set(), intervals: new Set() };
+  const recentWorkoutIds = [];
   let prevPrimaryQualityFamily = null; // "INTERVALS" | "THRESHOLD"
   let prevThresholdProgressWorkMin = null;
 
@@ -733,7 +922,11 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
         ? 2
         : 1;
     const maxQualitySlots = Math.max(0, runDays.length - 1); // reserve one slot for LONG
-    let desiredHard = Math.min(requestedQualitySessions, maxQualitySlots);
+    const maxQualityByFrequency =
+      sessionsPerWeek <= 3
+        ? clampInt(RULES?.intensityTargets?.maxQualitySessionsPerWeekAt3Runs ?? 1, 0, maxQualitySlots)
+        : clampInt(RULES?.intensityTargets?.maxQualitySessionsPerWeek ?? maxQualitySlots, 0, maxQualitySlots);
+    let desiredHard = Math.min(requestedQualitySessions, maxQualitySlots, maxQualityByFrequency);
     let qualityCandidates = runDays
       .filter((d) => qualityIntents.has(dayMeta.get(d)?.intent))
       .map((day) => ({ day, intent: dayMeta.get(day)?.intent || "" }));
@@ -775,6 +968,18 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
           qualityCandidates.length % 2 === 0 ? "INTERVALS_PRIMARY" : "THRESHOLD_PRIMARY";
         qualityCandidates.push({ day, intent: nextIntent });
       }
+    }
+
+    if (goalKey === "half" && (phase === "build" || phase === "specific")) {
+      qualityCandidates = qualityCandidates.map((candidate, slotIndex) => ({
+        ...candidate,
+        intent: halfMarathonQualityIntentForSlot({
+          currentIntent: candidate?.intent,
+          phase,
+          weekIndex,
+          slotIndex,
+        }),
+      }));
     }
 
     const pickPrimaryFamily = () => {
@@ -857,6 +1062,19 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
     if (desiredHard > 0 && qualityCandidates.length) {
       qualitySlots = pickQualityCandidates(desiredHard);
     }
+    if (qualitySlots.length === 1) {
+      qualitySlots = qualitySlots.map((slot) => ({
+        ...slot,
+        intent: singleQualityIntentForVariety({
+          currentIntent: slot?.intent,
+          goalKey,
+          phase,
+          weekIndex,
+        }),
+      }));
+      const family = familyFromIntent(qualitySlots[0]?.intent);
+      if (family) prevPrimaryQualityFamily = family;
+    }
     const qualityDays = qualitySlots.map((x) => x.day);
 
     const easyDays = runDays.filter((d) => d !== longRunDay && !qualityDays.includes(d));
@@ -932,6 +1150,11 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
       const isEasyLongVariant = String(details?.variant || "EASY")
         .toUpperCase()
         .startsWith("EASY");
+      if (!isEasyLongVariant) {
+        s.name = "Long run with finish effort";
+        s.title = "Long run with finish effort";
+      }
+      annotateWithDynamicPace(s, profile, isEasyLongVariant ? "easy" : "steady");
 
       s.workout =
         details?.workout && typeof details.workout === "object"
@@ -976,6 +1199,7 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
         const chosen = pickTempoFromPoolForProgression({
           pool,
           used: used.tempo,
+          recentWorkoutIds,
           weekIndex,
           profile,
           isDeload: !!tgt?.isDeload,
@@ -985,6 +1209,7 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
           phaseOverride: phase,
           totalKm: getPlannedKm(s),
           prevProgressWorkMin: prevThresholdProgressWorkMin,
+          spec,
         });
         const picked = chosen?.picked || null;
 
@@ -1003,6 +1228,7 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
 
         if (s.workout?.keyTargets) s.keyTargets = s.workout.keyTargets;
         if (s.workout?.notes) s.notes = s.workout.notes;
+        annotateWithDynamicPace(s, profile, isTempo ? "tempo" : "threshold");
 
         ensureMeta(s);
         const requestedSpecId = picked?.id || null;
@@ -1014,6 +1240,16 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
           s.workout.meta.requestedSpecId = requestedSpecId;
           s.workout.meta.templatePickId = requestedSpecId;
           s.workout.meta.specPickId = deliveredSpecId;
+        }
+        if (chosen?.workoutSelectionTrace) {
+          s.meta.workoutSelectionTrace = chosen.workoutSelectionTrace;
+          if (s.workout?.meta && typeof s.workout.meta === "object") {
+            s.workout.meta.workoutSelectionTrace = chosen.workoutSelectionTrace;
+          }
+        }
+        if (requestedSpecId) {
+          recentWorkoutIds.push(requestedSpecId);
+          if (recentWorkoutIds.length > 6) recentWorkoutIds.shift();
         }
 
         if (!tgt?.isDeload && !tgt?.isTaper) {
@@ -1045,6 +1281,7 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
         const chosen = pickIntervalFromPoolForBudget({
           pool,
           used: used.intervals,
+          recentWorkoutIds,
           weekIndex,
           profile,
           isDeload: !!tgt?.isDeload,
@@ -1052,6 +1289,7 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
           totalKm: getPlannedKm(s),
           weekWeeklyKm: weeklyKm,
           phaseOverride: phase,
+          spec,
         });
         const picked = chosen?.picked || null;
 
@@ -1072,6 +1310,7 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
 
         if (s.workout?.keyTargets) s.keyTargets = s.workout.keyTargets;
         if (s.workout?.notes) s.notes = s.workout.notes;
+        annotateWithDynamicPace(s, profile, "interval");
 
         ensureMeta(s);
         const requestedSpecId = picked?.id || null;
@@ -1083,6 +1322,16 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
           s.workout.meta.requestedSpecId = requestedSpecId;
           s.workout.meta.templatePickId = requestedSpecId;
           s.workout.meta.specPickId = deliveredSpecId;
+        }
+        if (chosen?.workoutSelectionTrace) {
+          s.meta.workoutSelectionTrace = chosen.workoutSelectionTrace;
+          if (s.workout?.meta && typeof s.workout.meta === "object") {
+            s.workout.meta.workoutSelectionTrace = chosen.workoutSelectionTrace;
+          }
+        }
+        if (requestedSpecId) {
+          recentWorkoutIds.push(requestedSpecId);
+          if (recentWorkoutIds.length > 6) recentWorkoutIds.shift();
         }
 
         sessions.push(s);
@@ -1120,12 +1369,14 @@ export function fillSessionsFromSkeleton({ skeleton, targets, profile }) {
       if (addOn?.keyTargets) s.keyTargets = addOn.keyTargets;
       if (addOn?.notes) s.notes = addOn.notes;
       if (addOn?.variant) s.name = String(addOn.variant).includes("STRIDES") ? "Easy + strides" : s.name;
+      annotateWithDynamicPace(s, profile, "easy");
 
       s.workout = workoutEasyBlueprint({ km: getPlannedKm(s), includeStrides: !!addOn?.includeStrides });
 
       ensureMeta(s);
       s.meta.easyVariant = addOn?.variant || null;
       s.meta.includeStrides = !!addOn?.includeStrides;
+      s.meta.strides = addOn?.strides || null;
       s.meta.steadyFinish = addOn?.steadyFinish || null;
       s.meta.drills = addOn?.drills || null;
       s.meta.recommendedMinutes = addOn?.recommendedMinutes || null;

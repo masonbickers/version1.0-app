@@ -1263,12 +1263,24 @@ export function buildTempoWorkoutById({
     fittedBlocks = fitTempoBlocksToBudget(fittedBlocks, mainBudgetM, profile);
   }
 
-  // Enforce hard fidelity floor for requested specs (except taper).
+  // Enforce hard fidelity floor for requested specs only when the requested
+  // workout can plausibly fit the executable session budget.
   const fittedWorkSec = roundToWholeMinute(sumWorkSecFromBlocks(fittedBlocks));
-  const floorRatio = tempoSpecFidelityFloorRatio(phase, isDeload);
+  const requestedExecutableSec =
+    totalM != null
+      ? requestedWorkSec +
+        Number(warmupSec || 0) +
+        Number(cooldownSec || 0)
+      : null;
+  const totalSecBudget =
+    totalM != null ? Math.round((totalM / 1000) * estimateEasySecPerKm(profile)) : null;
+  const requestedFitsSessionBudget =
+    requestedExecutableSec == null || totalSecBudget == null || requestedExecutableSec <= Math.round(totalSecBudget * 1.25);
+  const floorRatio = requestedFitsSessionBudget ? tempoSpecFidelityFloorRatio(phase, isDeload) : 0;
   const preFloorKeepRatio = requestedWorkSec > 0 ? fittedWorkSec / requestedWorkSec : 1;
-  const fidelityPolicy = floorRatio > 0 ? "hard_floor" : "taper_relaxed";
-  const fidelityFloorBypassedReason = floorRatio > 0 ? null : "taper_phase_policy";
+  const fidelityPolicy = floorRatio > 0 ? "hard_floor" : phase === "taper" ? "taper_relaxed" : "budget_relaxed";
+  const fidelityFloorBypassedReason =
+    floorRatio > 0 ? null : requestedFitsSessionBudget ? "taper_phase_policy" : "requested_spec_exceeds_session_budget";
   let fidelityFloorApplied = false; // true only when we actually clamp to requested blocks
   if (floorRatio > 0 && preFloorKeepRatio < floorRatio) {
     fittedBlocks = requestedBlocks;
