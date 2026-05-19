@@ -46,7 +46,6 @@ import {
   activityMatchIdentity,
   buildLinkedActivityPayload,
   ignoredActivityMatchKey,
-  isActivitySessionMatchIgnored,
   matchImportedActivityToPlannedSession as matchImportedActivityToPlannedSessionStrict,
 } from "../../../src/train/utils/activitySessionMatch";
 import {
@@ -186,8 +185,6 @@ const SAMPLE_WORKOUTS = [
   },
 ];
 
-const NO_PLAN_NOTE =
-  "Start with one sample workout or quick log today. Build your full plan once your weekly rhythm is clearer.";
 const TIP_CARD_IMAGE_A = require("../../../assets/images/run.jpeg");
 const TIP_CARD_IMAGE_B = require("../../../assets/images/home/img_home_hero_today.jpg");
 
@@ -571,6 +568,33 @@ function parseDateLike(value) {
 function resolvePlanWeekZeroStart(planDoc, sessionLogMap = null) {
   if (!planDoc) return null;
 
+  const explicitPlanStart = parseDateLike(
+    planDoc?.startDate ||
+      planDoc?.plan?.startDate ||
+      planDoc?.meta?.startDate ||
+      planDoc?.athleteProfile?.goal?.startDate ||
+      planDoc?.goal?.startDate
+  );
+  if (explicitPlanStart) return startOfISOWeek(explicitPlanStart);
+
+  const requestedWeeks = Number(
+    planDoc?.planLengthWeeks ||
+      planDoc?.plan?.goal?.planLengthWeeks ||
+      planDoc?.athleteProfile?.goal?.planLengthWeeks ||
+      planDoc?.goal?.planLengthWeeks ||
+      (Array.isArray(planDoc?.weeks) ? planDoc.weeks.length : 0)
+  );
+  const explicitTargetDate = parseDateLike(
+    planDoc?.targetDate ||
+      planDoc?.eventDate ||
+      planDoc?.plan?.goal?.targetDate ||
+      planDoc?.athleteProfile?.goal?.targetDate ||
+      planDoc?.goal?.targetDate
+  );
+  if (explicitTargetDate && Number.isFinite(requestedWeeks) && requestedWeeks > 0) {
+    return startOfISOWeek(addDays(explicitTargetDate, -((Math.round(requestedWeeks) - 1) * 7)));
+  }
+
   const planId = String(planDoc?.id || "").trim();
   if (planId && sessionLogMap && typeof sessionLogMap === "object") {
     const anchorVotes = new Map();
@@ -637,6 +661,14 @@ function resolvePlanWeekZeroStart(planDoc, sessionLogMap = null) {
 }
 
 function deriveCurrentPlanWeekIndex(plans, today = new Date(), totalWeeks = 0, sessionLogMap = null) {
+  const rawWeekIndex = deriveRawCurrentPlanWeekIndex(plans, today, sessionLogMap);
+  const clamped = Math.max(0, rawWeekIndex);
+
+  if (totalWeeks > 0) return Math.min(clamped, totalWeeks - 1);
+  return clamped;
+}
+
+function deriveRawCurrentPlanWeekIndex(plans, today = new Date(), sessionLogMap = null) {
   const anchors = (Array.isArray(plans) ? plans : [])
     .map((planDoc) => resolvePlanWeekZeroStart(planDoc, sessionLogMap))
     .filter(Boolean)
@@ -647,11 +679,7 @@ function deriveCurrentPlanWeekIndex(plans, today = new Date(), totalWeeks = 0, s
   const baseWeekStart = anchors[0];
   const todayWeekStart = startOfISOWeek(today);
   const diffDays = Math.floor((todayWeekStart.getTime() - baseWeekStart.getTime()) / 86400000);
-  const rawWeekIndex = Math.floor(diffDays / 7);
-  const clamped = Math.max(0, rawWeekIndex);
-
-  if (totalWeeks > 0) return Math.min(clamped, totalWeeks - 1);
-  return clamped;
+  return Math.floor(diffDays / 7);
 }
 
 function buildSessionKey(planId, weekIndex, dayIndex, sessionIndex) {
@@ -713,23 +741,65 @@ function getSessionGuidance(sess) {
   return parts.join(" · ");
 }
 
+function normaliseDistanceValueKm(value, unitHint = "") {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+
+  const hint = String(unitHint || "").toLowerCase();
+  if (hint.includes("meter") || hint === "m") return n / 1000;
+  if (hint.includes("km") || hint.includes("kilometer")) return n;
+
+  return n > 300 ? n / 1000 : n;
+}
+
+function sessionDistanceKm(sess, { includeActual = false } = {}) {
+  const candidates = [
+    includeActual ? sess?.actualDistanceKm : null,
+    sess?.workout?.totalDistanceKm,
+    sess?.totalDistanceKm,
+    sess?.renderedDistanceKm,
+    sess?.computedTotalKm,
+    sess?.targetDistanceKm,
+    sess?.distanceKm,
+    sess?.plannedDistanceKm,
+    sess?.distance,
+  ];
+
+  for (const candidate of candidates) {
+    const km = normaliseDistanceValueKm(candidate);
+    if (km != null) return km;
+  }
+
+  const meterCandidates = [
+    sess?.workout?.estimatedDistanceMeters,
+    sess?.estimatedDistanceMeters,
+    sess?.targetDistanceMeters,
+    sess?.plannedDistanceMeters,
+    sess?.distanceMeters,
+  ];
+
+  for (const candidate of meterCandidates) {
+    const km = normaliseDistanceValueKm(candidate, "meters");
+    if (km != null) return km;
+  }
+
+  return null;
+}
+
 function sumSessionMeta(sess) {
   const durationMin =
     sess?.workout?.totalDurationSec != null
       ? Math.round(sess.workout.totalDurationSec / 60)
       : sess?.targetDurationMin ?? sess?.durationMin ?? null;
 
-  const distanceKm =
-    sess?.workout?.totalDistanceKm != null
-      ? sess.workout.totalDistanceKm
-      : sess?.targetDistanceKm ?? sess?.distanceKm ?? sess?.plannedDistanceKm ?? null;
+  const distanceKm = sessionDistanceKm(sess);
 
   const pace = sess?.workout?.steps?.find?.((st) => st?.pace?.secPerKm)?.pace?.secPerKm;
   const paceFmt = pace ? formatPaceFromSecPerKm(pace) : null;
 
   const parts = [];
   if (durationMin) parts.push(`${durationMin}m`);
-  if (distanceKm) parts.push(`${Number(distanceKm).toFixed(1)}k`);
+  if (distanceKm) parts.push(`${Number(distanceKm).toFixed(1)} km`);
   if (paceFmt) parts.push(paceFmt);
   return parts.join(" · ");
 }
@@ -848,8 +918,15 @@ function estimateTotalsFromWorkoutSteps(steps) {
   const walk = (step, repsMultiplier = 1) => {
     if (!step) return;
 
-    if (step.type === "repeat" && Array.isArray(step.steps)) {
-      const reps = Number(step.reps || 1);
+    const stepKind = String(step.type || step.stepType || "").toLowerCase();
+    const isApiStep =
+      step.stepType != null ||
+      step.repeatCount != null ||
+      step.targetType != null ||
+      step.estimatedDistanceMeters != null;
+
+    if (stepKind === "repeat" && Array.isArray(step.steps)) {
+      const reps = Number(step.reps ?? step.repeatCount ?? 1);
       step.steps.forEach((inner) => walk(inner, repsMultiplier * reps));
       return;
     }
@@ -859,9 +936,10 @@ function estimateTotalsFromWorkoutSteps(steps) {
     if (!Number.isFinite(val) || val <= 0) return;
 
     if (durType === "distance") {
-      totalDistanceKm += val * repsMultiplier;
+      const km = normaliseDistanceValueKm(val);
+      if (km != null) totalDistanceKm += km * repsMultiplier;
     } else if (durType === "time") {
-      totalDurationSec += val * 60 * repsMultiplier;
+      totalDurationSec += (isApiStep ? val : val * 60) * repsMultiplier;
     }
   };
 
@@ -963,7 +1041,7 @@ const normaliseSessionForPlan = (sess) => {
     const workoutSteps = stockStepsToWorkoutSteps(sess.steps);
     const totals = totalsFromStockSteps(workoutSteps);
 
-    const explicitKm = Number(sess?.distanceKm ?? sess?.distance ?? sess?.plannedDistanceKm ?? 0) || 0;
+    const explicitKm = sessionDistanceKm(sess) || 0;
 
     const totalDistanceKm = explicitKm || totals.totalDistanceKm || 0;
     const totalDurationSec = totals.totalDurationSec || 0;
@@ -982,7 +1060,8 @@ const normaliseSessionForPlan = (sess) => {
       name: title,
       type: sess?.type || "Run",
       sessionType: sessionType || "run",
-      targetDistanceKm: sess?.targetDistanceKm ?? (totalDistanceKm ? totalDistanceKm : undefined),
+      targetDistanceKm:
+        normaliseDistanceValueKm(sess?.targetDistanceKm) ?? (totalDistanceKm ? totalDistanceKm : undefined),
       targetDurationMin: sess?.targetDurationMin ?? (totalDurationSec ? Math.round(totalDurationSec / 60) : undefined),
       totalDistanceKm,
       totalDurationSec,
@@ -1006,10 +1085,7 @@ const normaliseSessionForPlan = (sess) => {
         ? existingWorkout.totalDurationSec / 60
         : sess.targetDurationMin ?? sess.durationMin ?? 0;
 
-    const distanceKmRaw =
-      existingWorkout.totalDistanceKm != null
-        ? existingWorkout.totalDistanceKm
-        : sess.targetDistanceKm ?? sess.distanceKm ?? 0;
+    const distanceKmRaw = sessionDistanceKm({ ...sess, workout: existingWorkout }) || 0;
 
     const durationMin = Number(durationMinRaw || 0) || undefined;
     const distanceKm = Number(distanceKmRaw || 0) || undefined;
@@ -1021,15 +1097,15 @@ const normaliseSessionForPlan = (sess) => {
         ? Math.round(durationMin * 60)
         : 0;
 
-    const totalDistanceKm =
-      existingWorkout.totalDistanceKm != null ? existingWorkout.totalDistanceKm : distanceKm || 0;
+    const totalDistanceKm = distanceKm || 0;
 
     return {
       ...sess,
       title: sess.title || sess.name || sess.type || "Session",
       sessionType: sportKind === "strength" ? "gym" : sessionType || "training",
       targetDurationMin: sess.targetDurationMin != null ? sess.targetDurationMin : durationMin,
-      targetDistanceKm: sess.targetDistanceKm != null ? sess.targetDistanceKm : distanceKm,
+      targetDistanceKm:
+        normaliseDistanceValueKm(sess.targetDistanceKm) ?? distanceKm,
       totalDurationSec,
       totalDistanceKm,
       workout: {
@@ -1048,8 +1124,7 @@ const normaliseSessionForPlan = (sess) => {
 
   const durationMinRaw =
     baseWithSegments.targetDurationMin != null ? baseWithSegments.targetDurationMin : baseWithSegments.durationMin;
-  const distanceKmRaw =
-    baseWithSegments.targetDistanceKm != null ? baseWithSegments.targetDistanceKm : baseWithSegments.distanceKm;
+  const distanceKmRaw = sessionDistanceKm(baseWithSegments);
 
   const durationMin = Number(durationMinRaw || 0) || undefined;
   const distanceKm = Number(distanceKmRaw || 0) || undefined;
@@ -1098,7 +1173,7 @@ const normaliseSessionForPlan = (sess) => {
   const totalsFromSteps = estimateTotalsFromWorkoutSteps(workoutSteps);
 
   const finalDistanceKm =
-    totalsFromSteps.totalDistanceKm || baseWithSegments.workout?.totalDistanceKm || distanceKm || 0;
+    totalsFromSteps.totalDistanceKm || sessionDistanceKm(baseWithSegments) || distanceKm || 0;
   const finalDurationSec =
     totalsFromSteps.totalDurationSec ||
     baseWithSegments.workout?.totalDurationSec ||
@@ -1115,7 +1190,7 @@ const normaliseSessionForPlan = (sess) => {
     targetDurationMin:
       baseWithSegments.targetDurationMin != null ? baseWithSegments.targetDurationMin : finalDurationMin || undefined,
     targetDistanceKm:
-      baseWithSegments.targetDistanceKm != null ? baseWithSegments.targetDistanceKm : finalDistanceKm || undefined,
+      normaliseDistanceValueKm(baseWithSegments.targetDistanceKm) ?? (finalDistanceKm || undefined),
     totalDistanceKm: finalDistanceKm || undefined,
     totalDurationSec: finalDurationSec || undefined,
     workout: {
@@ -1170,8 +1245,25 @@ function timestampMs(v) {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-function resolveSessionLogStatus(log) {
+function resolveSessionLogStatus(log, plannedIsoDate = "") {
   const raw = String(log?.status || "").trim().toLowerCase();
+  const plannedIso = String(plannedIsoDate || "").trim();
+  if (plannedIso) {
+    const logDate =
+      parseDateLike(log?.date) ||
+      parseDateLike(log?.scheduledDate) ||
+      parseDateLike(log?.statusAt) ||
+      parseDateLike(log?.skippedAt) ||
+      parseDateLike(log?.completedAt);
+    const logIso = logDate ? toISODate(logDate) : "";
+    const isMissedSkip =
+      raw === "skipped" ||
+      !!log?.skippedAt ||
+      !!log?.missed ||
+      !!log?.autoMissed;
+    if (isMissedSkip && logIso && logIso !== plannedIso) return "";
+  }
+
   if (raw === "completed" || raw === "skipped") return raw;
   if (log?.skippedAt) return "skipped";
   if (log?.completedAt || log?.lastTrainSessionId) return "completed";
@@ -1215,15 +1307,88 @@ function completedTrainSessionMeta(session) {
       ? Math.round(Number(session.workout.totalDurationSec || 0) / 60)
       : session?.actualDurationMin ?? session?.durationMin ?? session?.targetDurationMin ?? null;
 
-  const distanceKm =
-    session?.workout?.totalDistanceKm != null
-      ? session.workout.totalDistanceKm
-      : session?.actualDistanceKm ?? session?.distanceKm ?? session?.targetDistanceKm ?? null;
+  const distanceKm = sessionDistanceKm(session, { includeActual: true });
 
   const parts = [];
   if (durationMin) parts.push(`${Math.round(Number(durationMin))}m`);
-  if (distanceKm) parts.push(`${Number(distanceKm).toFixed(1)}k`);
+  if (distanceKm) parts.push(`${Number(distanceKm).toFixed(1)} km`);
   return parts.join(" · ");
+}
+
+function importedActivityMeta(activity) {
+  const parts = [];
+  if (activity?.distanceMeters) {
+    parts.push(`${(Number(activity.distanceMeters) / 1000).toFixed(1)} km`);
+  }
+  if (activity?.durationSeconds) {
+    parts.push(`${Math.round(Number(activity.durationSeconds) / 60)} min`);
+  }
+  if (activity?.paceSecPerKm) {
+    parts.push(formatPaceFromSecPerKm(activity.paceSecPerKm));
+  }
+  if (activity?.provider) parts.push(activity.provider);
+  return parts.join(" · ");
+}
+
+function importedActivityWhen(activity) {
+  if (!activity?.startMs) return "";
+  return new Date(activity.startMs).toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function importedActivityFeedWhen(activity) {
+  if (!activity?.startMs) return "";
+  const date = new Date(activity.startMs);
+  const today = new Date();
+  const todayKey = toISODate(today);
+  const activityKey = toISODate(date);
+  const yesterdayKey = toISODate(addDays(today, -1));
+  const time = date.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  if (activityKey === todayKey) return `Today at ${time}`;
+  if (activityKey === yesterdayKey) return `Yesterday at ${time}`;
+  return `${date.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} at ${time}`;
+}
+
+function importedActivityTypeLabel(activity) {
+  const raw = String(activity?.type || "").trim();
+  if (!raw) return `${activity?.provider || "Imported"} activity`;
+  const compact = raw
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (/strength|weight|gym|resistance/.test(compact)) return "Weight training";
+  if (/run|running/.test(compact)) return "Run";
+  if (/walk|walking/.test(compact)) return "Walk";
+  if (/ride|cycling|bike|biking/.test(compact)) return "Ride";
+  if (/swim/.test(compact)) return "Swim";
+  return `${activity?.provider || "Imported"} activity`;
+}
+
+function importedActivityFeedStats(activity) {
+  const distanceKm = Number(activity?.distanceMeters || 0) / 1000;
+  const durationMin = Number(activity?.durationSeconds || 0) / 60;
+  const stats = [
+    distanceKm > 0 ? ["Distance", `${distanceKm.toFixed(1)} km`] : null,
+    activity?.averageHeartRate ? ["Avg HR", `${Math.round(Number(activity.averageHeartRate))} bpm`] : null,
+    activity?.calories ? ["Cal", `${Math.round(Number(activity.calories))} Cal`] : null,
+    distanceKm <= 0 && durationMin > 0 ? ["Time", `${Math.round(durationMin)} min`] : null,
+    activity?.paceSecPerKm ? ["Pace", formatPaceFromSecPerKm(activity.paceSecPerKm)] : null,
+  ].filter(Boolean);
+  return stats.slice(0, 3);
+}
+
+function userInitial(value) {
+  const text = String(value || "You").trim();
+  const parts = text.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return text.slice(0, 1).toUpperCase() || "Y";
 }
 
 function readExternalActivityTimeMs(activity = {}) {
@@ -1328,145 +1493,6 @@ function matchImportedActivityToSession(activity, plannedSession) {
   return matchImportedActivityToPlannedSessionStrict(activity, plannedSession);
 }
 
-function formatPaceShort(secPerKm) {
-  const value = Number(secPerKm);
-  if (!Number.isFinite(value) || value <= 0) return "";
-  const mins = Math.floor(value / 60);
-  const secs = Math.round(value % 60).toString().padStart(2, "0");
-  return `${mins}:${secs}/km`;
-}
-
-function externalActivityMeta(activity) {
-  const parts = [];
-  if (activity?.startMs) {
-    parts.push(
-      new Date(activity.startMs).toLocaleTimeString("en-GB", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    );
-  }
-  if (activity?.distanceMeters) {
-    parts.push(`${(Number(activity.distanceMeters) / 1000).toFixed(1)} km`);
-  }
-  if (activity?.durationSeconds) {
-    parts.push(`${Math.round(Number(activity.durationSeconds) / 60)} min`);
-  }
-  if (activity?.device) parts.push(activity.device);
-  return parts.join(" · ");
-}
-
-function externalActivityStats(activity) {
-  const stats = [];
-  if (activity?.distanceMeters) {
-    stats.push({ key: "distance", label: "Distance", value: `${(Number(activity.distanceMeters) / 1000).toFixed(1)} km` });
-  }
-  if (activity?.paceSecPerKm) {
-    stats.push({ key: "pace", label: "Pace", value: formatPaceShort(activity.paceSecPerKm) });
-  }
-  if (activity?.durationSeconds) {
-    stats.push({ key: "time", label: "Time", value: `${Math.round(Number(activity.durationSeconds) / 60)} min` });
-  }
-  if (activity?.averageHeartRate) {
-    stats.push({ key: "hr", label: "Avg HR", value: `${Math.round(Number(activity.averageHeartRate))} bpm` });
-  }
-  if (activity?.calories) {
-    stats.push({ key: "cal", label: "Cal", value: `${Math.round(Number(activity.calories))}` });
-  }
-  return stats.slice(0, 4);
-}
-
-function activityBenefit(activity) {
-  const text = `${activity?.title || ""} ${activity?.type || ""}`.toLowerCase();
-  const km = Number(activity?.distanceMeters || 0) / 1000;
-  const minutes = Number(activity?.durationSeconds || 0) / 60;
-
-  if (/race|time trial|test/.test(text)) {
-    return {
-      label: "Race",
-      title: "Performance check",
-      body: "This gives a clear benchmark for current fitness and pacing under pressure.",
-      icon: "target",
-    };
-  }
-  if (/vo2|interval|repeat|speed|1k|800|400/.test(text)) {
-    return {
-      label: "VO2 Max",
-      title: "Top-end engine",
-      body: "This works high-end aerobic power and teaches you to hold pace when the effort bites.",
-      icon: "zap",
-    };
-  }
-  if (/tempo|threshold|progression/.test(text)) {
-    return {
-      label: "Threshold",
-      title: "Sustained strength",
-      body: "This builds the ability to run faster for longer without tipping too far into fatigue.",
-      icon: "activity",
-    };
-  }
-  if (/strength|weight|gym|lifting/.test(text)) {
-    return {
-      label: "Strength",
-      title: "Durability",
-      body: "This supports stronger mechanics, better resilience and more robust running.",
-      icon: "bar-chart-2",
-    };
-  }
-  if (/recovery|walk|easy/.test(text) || minutes <= 35) {
-    return {
-      label: "Recovery",
-      title: "Low-stress volume",
-      body: "This adds movement and consistency without taking too much from the next session.",
-      icon: "refresh-cw",
-    };
-  }
-  if (/long/.test(text) || km >= 12 || minutes >= 75) {
-    return {
-      label: "Endurance",
-      title: "Long aerobic base",
-      body: "This builds the endurance base that lets harder sessions and races feel more controlled.",
-      icon: "map",
-    };
-  }
-  return {
-    label: "Base",
-    title: "Aerobic base",
-    body: "This builds aerobic fitness and keeps the week moving without needing maximal effort.",
-    icon: "activity",
-  };
-}
-
-function dayActivitySuggestion(activities, nextSession) {
-  const benefits = activities.map(activityBenefit);
-  const labels = new Set(benefits.map((item) => item.label));
-  const nextTitle = nextSession?.title ? `${nextSession.dayLabel} · ${nextSession.title}` : "";
-
-  if (labels.has("VO2 Max") || labels.has("Race") || labels.has("Threshold")) {
-    return nextTitle
-      ? `Keep the next one controlled: ${nextTitle}. Avoid stacking another hard effort immediately.`
-      : "Next best move: easy aerobic work, mobility, or a rest day before another hard session.";
-  }
-  if (labels.has("Endurance")) {
-    return nextTitle
-      ? `Recover first, then build into ${nextTitle}. Keep intensity low for the next 24 hours.`
-      : "Next best move: recovery, food, sleep and a low-stress session tomorrow.";
-  }
-  if (labels.has("Strength")) {
-    return nextTitle
-      ? `Pair this with easy running before ${nextTitle}, so legs are ready for quality work.`
-      : "Next best move: easy aerobic work or mobility to absorb the strength load.";
-  }
-  if (labels.has("Recovery")) {
-    return nextTitle
-      ? `Good low-stress work. You should be fresher for ${nextTitle}.`
-      : "Next best move: you can handle a normal planned session if sleep and soreness are good.";
-  }
-  return nextTitle
-    ? `This is useful base work. Next up: ${nextTitle}.`
-    : "Next best move: keep the next session purposeful, not just more volume.";
-}
-
 function isResolvedSessionStatus(status) {
   return status === "completed" || status === "skipped";
 }
@@ -1528,96 +1554,6 @@ function focusedDaySummaryLabel(day) {
     ? new Date(day.date).toLocaleDateString("en-GB", { weekday: "long" })
     : "";
   return fullWeekday || day.dateLabel || day.dayLabel || "Selected day";
-}
-
-function activityDetectedLabel(count) {
-  return `${count} ${count === 1 ? "activity" : "activities"} detected`;
-}
-
-function externalActivityMatches(activity, candidate) {
-  if (!activity || !candidate) return false;
-  const target = resolveLinkedActivityTarget(candidate) || {
-    id: String(candidate?.id || candidate?.activityId || candidate?.sourceDocId || candidate?.reference || ""),
-    source: String(candidate?.source || candidate?.collection || ""),
-  };
-  const activityIds = [
-    activity?.id,
-    activity?.upstreamId,
-    activity?.activityId,
-    activity?.sourceDocId,
-    activity?.reference,
-  ]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
-  const targetId = String(target?.id || "").trim();
-  if (!targetId || !activityIds.includes(targetId)) return false;
-
-  const targetSource = String(target?.source || "").trim();
-  return !targetSource || !activity?.source || targetSource === activity.source;
-}
-
-function activityIsInList(activity, list = []) {
-  return (Array.isArray(list) ? list : []).some((item) => externalActivityMatches(activity, item));
-}
-
-function deriveDetectedActivityStatus({
-  activity,
-  focusedDayModel,
-  focusedDayCards,
-  focusedDay,
-  ignoredSuggestedMatchKeys,
-}) {
-  const linkStatus = String(activity?.linkStatus || "").trim().toLowerCase();
-  const linkedCards = [
-    ...(focusedDayModel?.completedSessions || []),
-    ...(focusedDayModel?.unplannedSessions || []),
-  ];
-  const hasLinkedCard = linkedCards.some((card) => externalActivityMatches(activity, card?.linkedActivity));
-
-  if (activity?.linkedSessionKey || activity?.linkedTrainSessionId || linkStatus === "linked" || hasLinkedCard) {
-    return "Linked";
-  }
-  if (linkStatus === "ignored" || linkStatus === "rejected" || linkStatus === "dismissed") {
-    return "Ignored";
-  }
-  const plannedCards = (Array.isArray(focusedDayCards) ? focusedDayCards : []).filter(
-    (card) => card?.key && !card?.isExtraCompletedSession
-  );
-  const hasPersistedIgnoredMatch = plannedCards.some((card) =>
-    isActivitySessionMatchIgnored({
-      activity,
-      sessionKey: card.key,
-      sessionLog: card.log,
-    })
-  );
-  if (hasPersistedIgnoredMatch) return "Ignored";
-
-  const hasSuggestedMatch = (focusedDayModel?.suggestedMatches || []).some((match) =>
-    externalActivityMatches(activity, match?.activity)
-  );
-  if (hasSuggestedMatch) return "Needs review";
-
-  const hasIgnoredSuggestedMatch = plannedCards.some((card) => {
-    const ignoreKey = ignoredActivityMatchKey(activity, card.key);
-    if (!ignoredSuggestedMatchKeys?.[ignoreKey]) return false;
-    return matchImportedActivityToSession(activity, {
-      ...card,
-      isoDate: focusedDay?.isoDate,
-    });
-  });
-  if (hasIgnoredSuggestedMatch) return "Ignored";
-
-  const isReviewStatus =
-    linkStatus === "needs_review" ||
-    linkStatus === "needs-review" ||
-    linkStatus === "review" ||
-    linkStatus === "pending_review" ||
-    linkStatus === "pending-review";
-  if (isReviewStatus && activityIsInList(activity, focusedDayModel?.unresolvedActivities)) {
-    return "Needs review";
-  }
-
-  return "Unlinked";
 }
 
 function dayStatusFromModel({
@@ -1760,6 +1696,11 @@ export default function TrainIndex() {
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const currentUid = String(auth.currentUser?.uid || "");
+  const currentUserLabel =
+    auth.currentUser?.displayName ||
+    String(auth.currentUser?.email || "").split("@")[0] ||
+    "You";
+  const currentUserInitial = userInitial(currentUserLabel);
   const hasWarmCache =
     !!currentUid &&
     TRAIN_INDEX_SCREEN_CACHE.hydrated &&
@@ -1798,6 +1739,7 @@ export default function TrainIndex() {
     }
     return getTodayPlanDayIndex(new Date());
   });
+  const [calendarWeekOffset, setCalendarWeekOffset] = useState(0);
 
   const [daySheetOpen, setDaySheetOpen] = useState(false);
   const [daySheetIndex, setDaySheetIndex] = useState(0);
@@ -1830,7 +1772,6 @@ export default function TrainIndex() {
   const [sessionLogsReadyKey, setSessionLogsReadyKey] = useState(() =>
     hasWarmCache ? String(TRAIN_INDEX_SCREEN_CACHE.sessionLogsReadyKey || "") : ""
   );
-  const [sampleCategory, setSampleCategory] = useState("all");
   const [tipsOpen, setTipsOpen] = useState(false);
   const [tipTopicKey] = useState("gut-training");
   const [weekStripWidth, setWeekStripWidth] = useState(() => {
@@ -1944,23 +1885,18 @@ export default function TrainIndex() {
     [currentWeekIndex, router, selectedDayIndex]
   );
 
-  const openExternalActivityFromTrain = useCallback(
-    (activity, options = {}) => {
-      const id = String(activity?.id || activity?.reference || "").trim();
-      const source = storedActivitySourceFromProvider(activity?.provider, activity?.source);
-      if (!id || !source) return false;
-      const linkedTrainSessionId = String(
-        options?.linkedTrainSessionId ||
-          activity?.linkedTrainSessionId ||
-          activity?.trainSessionId ||
-          ""
-      ).trim();
+  const openLinkedActivityFromTrain = useCallback(
+    (linkedActivity, options = {}) => {
+      const target = resolveLinkedActivityTarget(linkedActivity);
+      if (!target) return false;
+      const linkedTrainSessionId = String(options?.linkedTrainSessionId || "").trim();
       router.push({
         pathname: "/me/activity/[id]",
         params: {
-          id,
-          source,
+          id: target.id,
+          source: target.source,
           from: "train",
+          provider: linkedActivity?.provider || "",
           ...(linkedTrainSessionId ? { linkTrainSessionId: linkedTrainSessionId } : {}),
           returnWeekIndex: String(currentWeekIndex),
           returnDayIndex: String(selectedDayIndex),
@@ -1968,6 +1904,30 @@ export default function TrainIndex() {
         },
       });
       return true;
+    },
+    [currentWeekIndex, router, selectedDayIndex]
+  );
+
+  const openImportedActivityFromTrain = useCallback(
+    (activity) => {
+      const id = String(activity?.id || activity?.upstreamId || "").trim();
+      const source = String(activity?.source || "").trim();
+      if (!id || !source) return;
+      router.push({
+        pathname: "/me/activity/[id]",
+        params: {
+          id,
+          source,
+          from: "train",
+          provider: activity?.provider || "",
+          ...(activity?.linkedTrainSessionId
+            ? { linkTrainSessionId: String(activity.linkedTrainSessionId) }
+            : {}),
+          returnWeekIndex: String(currentWeekIndex),
+          returnDayIndex: String(selectedDayIndex),
+          returnToken: String(Date.now()),
+        },
+      });
     },
     [currentWeekIndex, router, selectedDayIndex]
   );
@@ -2159,19 +2119,38 @@ export default function TrainIndex() {
     }
   }, [hasExplicitTrainReturn, normalisePlanDoc]);
 
+  const visibleWeeksCount = useMemo(() => {
+    if (!hasPlan) return 0;
+    return Math.max(plan?.weeks?.length || 0, companionPlan?.weeks?.length || 0, 1);
+  }, [hasPlan, plan?.weeks?.length, companionPlan?.weeks?.length]);
+  const maxWeekIndex = useMemo(
+    () => Math.max((visibleWeeksCount || 1) - 1, 0),
+    [visibleWeeksCount]
+  );
+
   const activePlanIds = useMemo(
     () => [...new Set([plan?.id, companionPlan?.id].filter(Boolean).map(String))],
     [companionPlan?.id, plan?.id]
   );
   const activePlanKey = useMemo(() => activePlanIds.join("|"), [activePlanIds]);
-  const showResolvedPlanState =
+  const baseResolvedPlanState =
     hasPlan &&
     !loading &&
     !!activePlanKey &&
     sessionLogsReady &&
     sessionLogsReadyKey === activePlanKey;
-  const isResolvingActivePlan = loading || (hasPlan && !showResolvedPlanState);
-  const showEmptyPlanState = !loading && !hasPlan;
+  const activePlanRawWeekIndex = useMemo(
+    () => deriveRawCurrentPlanWeekIndex([plan, companionPlan], calendarNow, sessionLogMap),
+    [calendarNow, companionPlan, plan, sessionLogMap]
+  );
+  const planWindowComplete =
+    baseResolvedPlanState &&
+    visibleWeeksCount > 0 &&
+    activePlanRawWeekIndex >= visibleWeeksCount;
+  const showResolvedPlanState = baseResolvedPlanState && !planWindowComplete;
+  const showCompletedPlanState = baseResolvedPlanState && planWindowComplete;
+  const isResolvingActivePlan = loading || (hasPlan && !baseResolvedPlanState);
+  const showEmptyPlanState = !loading && (!hasPlan || showCompletedPlanState);
 
   useEffect(() => {
     (async () => {
@@ -2403,15 +2382,6 @@ export default function TrainIndex() {
     return byIso;
   }, [externalActivities]);
 
-  const visibleWeeksCount = useMemo(() => {
-    if (!hasPlan) return 0;
-    return Math.max(plan?.weeks?.length || 0, companionPlan?.weeks?.length || 0, 1);
-  }, [hasPlan, plan?.weeks?.length, companionPlan?.weeks?.length]);
-  const maxWeekIndex = useMemo(
-    () => Math.max((visibleWeeksCount || 1) - 1, 0),
-    [visibleWeeksCount]
-  );
-
   useEffect(() => {
     if (!hasPlan) return;
     setCurrentWeekIndex((prev) =>
@@ -2539,6 +2509,10 @@ export default function TrainIndex() {
     shiftWeek(4);
   }, [shiftWeek]);
 
+  const shiftCalendarWeek = useCallback((delta) => {
+    setCalendarWeekOffset((prev) => Math.min(0, prev + Math.trunc(Number(delta || 0))));
+  }, []);
+
   const weekSwipeResponder = useMemo(
     () =>
       PanResponder.create({
@@ -2602,11 +2576,16 @@ export default function TrainIndex() {
       if (!srcPlan?.id) return;
       const srcWeek = srcPlan?.weeks?.[safeWeekIndex];
       if (!srcWeek?.days?.length) return;
+      if (!out.weekStartDate && srcWeek?.weekStartDate) out.weekStartDate = srcWeek.weekStartDate;
+      if (!out.weekEndDate && srcWeek?.weekEndDate) out.weekEndDate = srcWeek.weekEndDate;
 
       srcWeek.days.forEach((day, dayIdx) => {
         const resolvedDayIndex = DAYS.indexOf(String(day?.day || ""));
         const safeDayIndex = resolvedDayIndex >= 0 ? resolvedDayIndex : dayIdx;
         if (safeDayIndex < 0 || safeDayIndex > DAYS.length - 1) return;
+
+        if (!out.days[safeDayIndex].date && day?.date) out.days[safeDayIndex].date = day.date;
+        if (!out.days[safeDayIndex].isoDate && day?.isoDate) out.days[safeDayIndex].isoDate = day.isoDate;
 
         const sessions = Array.isArray(day?.sessions) ? day.sessions : [];
         sessions.forEach((sess, sessIdx) => {
@@ -2693,11 +2672,93 @@ export default function TrainIndex() {
     return byIso;
   }, [completedTrainSessions, linkedTrainSessionIds]);
 
+  const allCompletedSessionsByIso = useMemo(() => {
+    const byIso = {};
+    (Array.isArray(completedTrainSessions) ? completedTrainSessions : []).forEach((session) => {
+      const status = String(session?.status || "").trim().toLowerCase();
+      const isCompleted =
+        status === "completed" ||
+        !!session?.completedAt ||
+        !!session?.actualDurationMin ||
+        !!session?.actualDistanceKm ||
+        Number(session?.workout?.totalDurationSec || 0) > 0 ||
+        Number(session?.workout?.totalDistanceKm || 0) > 0;
+      if (!isCompleted) return;
+
+      const isoDate = trainSessionIsoDate(session);
+      if (!isoDate) return;
+      if (!byIso[isoDate]) byIso[isoDate] = [];
+      byIso[isoDate].push(session);
+    });
+
+    Object.values(byIso).forEach((sessions) => {
+      sessions.sort((a, b) => timestampMs(a?.completedAt || a?.createdAt) - timestampMs(b?.completedAt || b?.createdAt));
+    });
+
+    return byIso;
+  }, [completedTrainSessions]);
+
+  const calendarBrowseDate = useMemo(
+    () => addDays(calendarNow, calendarWeekOffset * 7),
+    [calendarNow, calendarWeekOffset]
+  );
+
+  const calendarWeekGrid = useMemo(() => {
+    const weekStart = startOfISOWeek(calendarBrowseDate);
+    return DAYS.map((dayLabel, dayIdx) => {
+      const date = addDays(weekStart, dayIdx);
+      const isoDate = toISODate(date);
+      const completedCards = (allCompletedSessionsByIso[isoDate] || []).map((session, extraIdx) => ({
+        sess: session,
+        title:
+          session?.title ||
+          session?.name ||
+          session?.sessionType ||
+          session?.primaryActivity ||
+          "Completed session",
+        meta: completedTrainSessionMeta(session),
+        guidance: session?.notes || "",
+        key: null,
+        log: null,
+        status: "completed",
+        savedTrainSessionId: String(session?.id || "").trim() || null,
+        linkedActivity: session?.linkedActivity || null,
+        isExtraCompletedSession: true,
+        extraSessionIndex: extraIdx,
+      }));
+      const detectedCards = (externalActivitiesByIso[isoDate] || []).map((activity, activityIdx) => ({
+        sess: activity,
+        title: activity?.title || activity?.type || "Detected activity",
+        meta: "",
+        key: null,
+        log: null,
+        status: "detected",
+        isDetectedActivity: true,
+        extraSessionIndex: activityIdx,
+      }));
+      const cards = [...completedCards, ...detectedCards];
+
+      return {
+        dayLabel,
+        dayIdx,
+        date,
+        dateLabel: fmtDayDate(date),
+        dateShort: new Date(date).toLocaleDateString("en-GB", { day: "numeric", month: "short" }),
+        isoDate,
+        isToday: isoDate === todayIso,
+        cards,
+        sessionSummary: summariseCardStatuses(cards),
+        dayStatus: cards.length ? "partial" : "rest",
+      };
+    });
+  }, [allCompletedSessionsByIso, calendarBrowseDate, externalActivitiesByIso, todayIso]);
+
   const buildWeekGrid = useCallback((weekData, sourceWeekIndex) => {
     const safeWeekIndex = Number.isFinite(Number(sourceWeekIndex))
       ? Math.round(Number(sourceWeekIndex))
       : 0;
-    const derivedWeekStart = addDays(planWeekZeroStart, safeWeekIndex * 7);
+    const explicitWeekStart = parseDateLike(weekData?.weekStartDate || weekData?.startDate);
+    const derivedWeekStart = explicitWeekStart || addDays(planWeekZeroStart, safeWeekIndex * 7);
 
     return (Array.isArray(weekData?.days) ? weekData.days : []).map((d, dayIdx) => {
       const explicitDate = parseDateLike(d?.date || d?.isoDate);
@@ -2728,7 +2789,7 @@ export default function TrainIndex() {
           ? buildSessionKey(keyPlanId, keyWeekIndex, keyDayIndex, keySessionIndex)
           : null;
         const log = key ? sessionLogMap[key] || null : null;
-        const status = resolveSessionLogStatus(log);
+        const status = resolveSessionLogStatus(log, isoDate);
         const savedTrainSessionId = String(log?.lastTrainSessionId || "").trim() || null;
 
         return {
@@ -2795,6 +2856,22 @@ export default function TrainIndex() {
     () => buildWeekGrid(week, currentWeekIndex),
     [buildWeekGrid, week, currentWeekIndex]
   );
+  const calendarBrowsePlanWeekIndex = useMemo(() => {
+    if (!showCompletedPlanState) return null;
+    const idx = Math.round(Number(activePlanRawWeekIndex || 0) + Number(calendarWeekOffset || 0));
+    if (idx < 0 || idx >= visibleWeeksCount) return null;
+    return idx;
+  }, [activePlanRawWeekIndex, calendarWeekOffset, showCompletedPlanState, visibleWeeksCount]);
+  const historicalPlanWeekGrid = useMemo(() => {
+    if (calendarBrowsePlanWeekIndex == null) return null;
+    return buildWeekGrid(
+      mergeWeekAtIndex(calendarBrowsePlanWeekIndex),
+      calendarBrowsePlanWeekIndex
+    );
+  }, [buildWeekGrid, calendarBrowsePlanWeekIndex, mergeWeekAtIndex]);
+  const displayWeekGrid = showResolvedPlanState
+    ? weekGrid
+    : historicalPlanWeekGrid || calendarWeekGrid;
 
   const activeWeekAutoSyncRef = useRef("");
   const missedSessionReconcileRef = useRef("");
@@ -2802,6 +2879,7 @@ export default function TrainIndex() {
     if (!hasPlan || loading) return;
     if (!visibleWeeksCount) return;
     if (!sessionLogsReady) return;
+    if (planWindowComplete) return;
 
     if (!activePlanKey) return;
     if (sessionLogsReadyKey !== activePlanKey) return;
@@ -2836,6 +2914,7 @@ export default function TrainIndex() {
     currentWeekIndex,
     hasPlan,
     loading,
+    planWindowComplete,
     sessionLogsReady,
     sessionLogsReadyKey,
     visibleWeeksCount,
@@ -2904,10 +2983,13 @@ export default function TrainIndex() {
     }));
   }, [buildWeekGrid, clampWeekIndex, currentWeekIndex, mergeWeekAtIndex]);
 
-  const today = useMemo(() => weekGrid.find((x) => x.isToday) || null, [weekGrid]);
+  const today = useMemo(
+    () => displayWeekGrid.find((x) => x.isToday) || null,
+    [displayWeekGrid]
+  );
   const focusedDay = useMemo(
-    () => weekGrid?.[selectedDayIndex] || today || weekGrid?.[0] || null,
-    [weekGrid, selectedDayIndex, today]
+    () => displayWeekGrid?.[selectedDayIndex] || today || displayWeekGrid?.[0] || null,
+    [displayWeekGrid, selectedDayIndex, today]
   );
   const externalActivitiesForFocusedDay = useMemo(() => {
     const isoDate = String(focusedDay?.isoDate || "");
@@ -2981,6 +3063,50 @@ export default function TrainIndex() {
       dayStatus,
     };
   }, [externalActivitiesForFocusedDay, focusedDay, focusedDayCards, suggestedActivityMatches]);
+  const noPlanCompletedRows = useMemo(() => {
+    const sessionRows = [
+      ...focusedDayModel.completedSessions,
+      ...focusedDayModel.unplannedSessions,
+    ].map((card) => ({
+      kind: "session",
+      id: card.savedTrainSessionId || card.key || card.title,
+      title: card.title,
+      meta: `${card.isExtraCompletedSession ? "Completed session" : "Planned session"}${
+        card.meta ? ` · ${card.meta}` : ""
+      }`,
+      icon: typeIconName(card.sess),
+      card,
+    }));
+    const sessionIds = new Set(
+      sessionRows
+        .map((row) => String(row.card?.savedTrainSessionId || "").trim())
+        .filter(Boolean)
+    );
+    const activityRows = focusedDayModel.detectedActivities
+      .filter((activity) => {
+        const linkedTrainSessionId = String(activity?.linkedTrainSessionId || "").trim();
+        return !linkedTrainSessionId || !sessionIds.has(linkedTrainSessionId);
+      })
+      .map((activity) => ({
+        kind: "activity",
+        id: `${activity.source}:${activity.id}`,
+        title: activity.title || `${activity.provider || "Imported"} activity`,
+        meta: importedActivityMeta(activity),
+        when: importedActivityWhen(activity),
+        feedWhen: importedActivityFeedWhen(activity),
+        device: activity.device || "",
+        typeLabel: importedActivityTypeLabel(activity),
+        providerLabel: activity.provider || "Imported",
+        stats: importedActivityFeedStats(activity),
+        icon: "activity",
+        activity,
+      }));
+    return [...sessionRows, ...activityRows];
+  }, [
+    focusedDayModel.completedSessions,
+    focusedDayModel.detectedActivities,
+    focusedDayModel.unplannedSessions,
+  ]);
   const focusedDaySummary = useMemo(() => {
     const plannedCount = focusedDayModel.plannedSessions.length;
     const completedCount =
@@ -2999,7 +3125,6 @@ export default function TrainIndex() {
     if (completedCount > 0) parts.push(`${completedCount} completed`);
     if (skippedCount > 0) parts.push(`${skippedCount} skipped`);
     if (needsReviewCount > 0) parts.push(`${needsReviewCount} needs review`);
-    if (detectedCount > 0) parts.push(activityDetectedLabel(detectedCount));
 
     return {
       parts,
@@ -3055,6 +3180,7 @@ export default function TrainIndex() {
         ? suggestedActivityMatch?.provider || suggestedActivityMatch?.activity?.provider || "Imported"
         : "",
       savedTrainSessionId: heroCard?.savedTrainSessionId || null,
+      linkedActivity: heroCard?.linkedActivity || null,
       linkedProvider: normaliseStr(heroCard?.linkedActivity?.provider || ""),
       isRestDay: !session,
       title,
@@ -3085,15 +3211,14 @@ export default function TrainIndex() {
     week.days?.forEach((d, dayIdx) =>
       d.sessions?.forEach((sess, sessIdx) => {
         sessions += 1;
+        const dayDate = parseDateLike(d?.date || d?.isoDate) || addDays(planWeekZeroStart, currentWeekIndex * 7 + dayIdx);
+        const dayIso = toISODate(dayDate);
         const duration =
           sess.workout?.totalDurationSec != null
             ? sess.workout.totalDurationSec / 60
             : sess.targetDurationMin ?? sess.durationMin ?? 0;
 
-        const dist =
-          sess.workout?.totalDistanceKm != null
-            ? sess.workout.totalDistanceKm
-            : sess.targetDistanceKm ?? sess.distanceKm ?? sess.plannedDistanceKm ?? 0;
+        const dist = sessionDistanceKm(sess) || 0;
 
         mins += Number(duration || 0);
         km += Number(dist || 0);
@@ -3114,7 +3239,7 @@ export default function TrainIndex() {
         const key = keyPlanId
           ? buildSessionKey(keyPlanId, keyWeekIndex, keyDayIndex, keySessionIndex)
           : null;
-        const status = resolveSessionLogStatus(key ? sessionLogMap[key] : null);
+        const status = resolveSessionLogStatus(key ? sessionLogMap[key] : null, dayIso);
         if (status === "completed") completed += 1;
         if (status === "skipped") skipped += 1;
       })
@@ -3129,7 +3254,7 @@ export default function TrainIndex() {
       resolved: completed + skipped,
       pending: Math.max(sessions - completed - skipped, 0),
     };
-  }, [currentWeekIndex, plan?.id, sessionLogMap, week]);
+  }, [currentWeekIndex, plan?.id, planWeekZeroStart, sessionLogMap, week]);
 
   const nextSession = useMemo(() => {
     if (!hasPlan || !focusedDay) return null;
@@ -3164,34 +3289,6 @@ export default function TrainIndex() {
     week,
   ]);
 
-  const focusedDayCompletionInsight = useMemo(() => {
-    if (!focusedDayModel.detectedActivities.length) return null;
-    const benefits = focusedDayModel.detectedActivities.map(activityBenefit);
-    const priority = ["Race", "VO2 Max", "Threshold", "Endurance", "Strength", "Base", "Recovery"];
-    const primary =
-      [...benefits].sort((a, b) => priority.indexOf(a.label) - priority.indexOf(b.label))[0] ||
-      benefits[0];
-    const totalKm = focusedDayModel.detectedActivities.reduce(
-      (sum, activity) => sum + Number(activity.distanceMeters || 0) / 1000,
-      0
-    );
-    const totalMin = focusedDayModel.detectedActivities.reduce(
-      (sum, activity) => sum + Number(activity.durationSeconds || 0) / 60,
-      0
-    );
-    const summaryBits = [
-      `${focusedDayModel.detectedActivities.length} detected`,
-      totalKm > 0 ? `${totalKm.toFixed(1)} km` : null,
-      totalMin > 0 ? `${Math.round(totalMin)} min` : null,
-    ].filter(Boolean);
-
-    return {
-      benefit: primary,
-      summary: summaryBits.join(" · "),
-      suggestion: dayActivitySuggestion(focusedDayModel.detectedActivities, nextSession),
-    };
-  }, [focusedDayModel.detectedActivities, nextSession]);
-
   const planProgress = useMemo(() => {
     if (!visibleWeeksCount) return 0;
     return Math.min(100, Math.round(((currentWeekIndex + 1) / visibleWeeksCount) * 100));
@@ -3222,6 +3319,7 @@ export default function TrainIndex() {
   const dynamicSubtitle = useMemo(() => {
     const dayLabel = focusedDayModel.label || todayHero?.dayLabel || "Selected day";
     if (isResolvingActivePlan) return "Loading your training";
+    if (showCompletedPlanState) return "Your last plan is complete · start a new block when you are ready";
     if (showEmptyPlanState) return "No active plan yet";
     if (todayHero?.status === "completed") {
       return `${dayLabel} is complete · ${weekTotals.resolved}/${weekTotals.sessions} sessions marked this week`;
@@ -3240,6 +3338,7 @@ export default function TrainIndex() {
     focusedDayModel.label,
     nextSession,
     isResolvingActivePlan,
+    showCompletedPlanState,
     showEmptyPlanState,
     todayFirst,
     todayHero?.dayLabel,
@@ -3250,10 +3349,11 @@ export default function TrainIndex() {
 
   const headerContextChip = useMemo(() => {
     if (isResolvingActivePlan) return "Loading";
+    if (showCompletedPlanState) return "Plan complete";
     if (showEmptyPlanState) return "No active plan";
     if (hasRunPlan && hasStrengthPlan) return "2 plans running";
     return "Active plan";
-  }, [isResolvingActivePlan, showEmptyPlanState, hasRunPlan, hasStrengthPlan]);
+  }, [isResolvingActivePlan, showCompletedPlanState, showEmptyPlanState, hasRunPlan, hasStrengthPlan]);
 
   const headerContextMeta = useMemo(() => {
     const nowLabel = new Date(calendarNow).toLocaleDateString("en-GB", {
@@ -3262,9 +3362,39 @@ export default function TrainIndex() {
       month: "short",
     });
     const selectedDate = showResolvedPlanState ? focusedDay?.dateLabel || nowLabel : nowLabel;
+    if (showEmptyPlanState) return focusedDay?.dateLabel || nowLabel;
     if (!showResolvedPlanState) return selectedDate;
     return `${selectedDate} · Week ${currentWeekIndex + 1} of ${visibleWeeksCount || 1}`;
-  }, [calendarNow, currentWeekIndex, visibleWeeksCount, focusedDay?.dateLabel, showResolvedPlanState]);
+  }, [calendarNow, currentWeekIndex, visibleWeeksCount, focusedDay?.dateLabel, showEmptyPlanState, showResolvedPlanState]);
+
+  const calendarBrowseWeekLabel = useMemo(() => {
+    if (calendarBrowsePlanWeekIndex != null) {
+      const planWeek = mergeWeekAtIndex(calendarBrowsePlanWeekIndex);
+      return `Week ${calendarBrowsePlanWeekIndex + 1} of ${visibleWeeksCount || 1}${
+        planWeek?.title ? ` · ${planWeek.title}` : ""
+      }`;
+    }
+
+    const start = startOfISOWeek(calendarBrowseDate);
+    const end = addDays(start, 6);
+    const startLabel = start.toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+    });
+    const endLabel = end.toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+    });
+    if (calendarWeekOffset === 0) return `This week · ${startLabel}-${endLabel}`;
+    if (calendarWeekOffset === -1) return `Last week · ${startLabel}-${endLabel}`;
+    return `${startLabel}-${endLabel}`;
+  }, [
+    calendarBrowseDate,
+    calendarBrowsePlanWeekIndex,
+    calendarWeekOffset,
+    mergeWeekAtIndex,
+    visibleWeeksCount,
+  ]);
 
   const todayHeroSupport = useMemo(() => {
     const dayLabel = focusedDayModel.label || todayHero?.dayLabel || "selected day";
@@ -3317,24 +3447,7 @@ export default function TrainIndex() {
     return "Building";
   }, [hasPlan, planProgress, weekTotals.pending, weekTotals.resolved, weekTotals.sessions]);
 
-  const sampleCategories = useMemo(
-    () => [
-      { key: "all", label: "All" },
-      { key: "running", label: "Running" },
-      { key: "strength", label: "Strength" },
-      { key: "hybrid", label: "Hybrid" },
-      { key: "recovery", label: "Recovery" },
-    ],
-    []
-  );
-  const visibleSamples = useMemo(() => {
-    if (sampleCategory === "all") return SAMPLE_WORKOUTS;
-    return SAMPLE_WORKOUTS.filter((w) => w.category === sampleCategory);
-  }, [sampleCategory]);
   const recommendedSample = useMemo(() => {
-    if (!visibleSamples.length) return null;
-    if (sampleCategory !== "all") return visibleSamples[0];
-
     const day = new Date().getDay();
     const preferredCategory =
       day === 0 || day === 1
@@ -3346,15 +3459,12 @@ export default function TrainIndex() {
         : "running";
 
     return (
-      visibleSamples.find((w) => w.category === preferredCategory) ||
-      visibleSamples.find((w) => w.category === "running") ||
-      visibleSamples[0]
+      SAMPLE_WORKOUTS.find((w) => w.category === preferredCategory) ||
+      SAMPLE_WORKOUTS.find((w) => w.category === "running") ||
+      SAMPLE_WORKOUTS[0] ||
+      null
     );
-  }, [sampleCategory, visibleSamples]);
-  const orderedSamples = useMemo(() => {
-    if (!recommendedSample) return visibleSamples;
-    return [recommendedSample, ...visibleSamples.filter((w) => w.key !== recommendedSample.key)];
-  }, [recommendedSample, visibleSamples]);
+  }, []);
   const sampleRecommendationReason = useMemo(() => {
     if (!recommendedSample) return "";
     if (recommendedSample.category === "recovery") return "Low-stress option to stay consistent today.";
@@ -3473,7 +3583,7 @@ export default function TrainIndex() {
       setRecordDayIndex(dayIdx);
       setRecordType("run");
 
-      const day = weekGrid?.[dayIdx];
+      const day = displayWeekGrid?.[dayIdx];
       const defaultTitle =
         day?.cards?.[0]?.title ||
         (day?.dayLabel === "Sat" || day?.dayLabel === "Sun" ? "Training" : "Session");
@@ -3486,7 +3596,7 @@ export default function TrainIndex() {
       setRecordNotes("");
       setRecordOpen(true);
     },
-    [weekGrid]
+    [displayWeekGrid]
   );
 
   const handleHeaderDayPress = useCallback(
@@ -3503,7 +3613,7 @@ export default function TrainIndex() {
       const uid = auth.currentUser?.uid;
       if (!uid) throw new Error("Not signed in");
 
-      const day = weekGrid?.[recordDayIndex];
+      const day = displayWeekGrid?.[recordDayIndex];
       const isoDate = day?.isoDate || toISODate(new Date());
 
       const t = String(recordType || "run").toLowerCase();
@@ -3561,7 +3671,7 @@ export default function TrainIndex() {
     recordRpe,
     recordTitle,
     recordType,
-    weekGrid,
+    displayWeekGrid,
   ]);
 
   const handleSendTodayToWatch = useCallback(async () => {
@@ -3624,7 +3734,10 @@ export default function TrainIndex() {
     router.push("/train/view-plan");
   }, [plan?.id, router]);
 
-  const activeDay = useMemo(() => weekGrid?.[daySheetIndex] || null, [weekGrid, daySheetIndex]);
+  const activeDay = useMemo(
+    () => displayWeekGrid?.[daySheetIndex] || null,
+    [displayWeekGrid, daySheetIndex]
+  );
   const activeLiveSession = useMemo(() => {
     if (!liveHydrated || !liveActivity?.isActive) return null;
     const route = String(liveActivity?.route || "").trim();
@@ -3688,6 +3801,16 @@ export default function TrainIndex() {
 
   const openPlannedCard = useCallback(
     (card, fallbackDayIdx = null) => {
+      if (card?.status === "completed" && card?.linkedActivity) {
+        const opened = openLinkedActivityFromTrain(card.linkedActivity, {
+          linkedTrainSessionId: card.savedTrainSessionId,
+        });
+        if (opened) return;
+      }
+      if (card?.status === "completed" && card?.key) {
+        goToSession(card.key);
+        return;
+      }
       if (card?.savedTrainSessionId && card?.status === "completed") {
         openHistorySessionFromTrain(card.savedTrainSessionId);
         return;
@@ -3700,7 +3823,7 @@ export default function TrainIndex() {
         openDaySheet(fallbackDayIdx);
       }
     },
-    [goToSession, openDaySheet, openHistorySessionFromTrain]
+    [goToSession, openDaySheet, openHistorySessionFromTrain, openLinkedActivityFromTrain]
   );
 
   const ignoreSuggestedActivityMatch = useCallback(async () => {
@@ -3759,7 +3882,7 @@ export default function TrainIndex() {
       const { activity, sessionCard } = suggestedActivityMatch;
       const linkedActivity = buildLinkedActivityPayload(activity);
 
-      const { trainSessionId } = await linkExternalActivityToPlannedSession({
+      const { trainSessionId, completionAnalysis } = await linkExternalActivityToPlannedSession({
         uid,
         encodedKey: sessionCard.key,
         linkedActivity,
@@ -3781,6 +3904,7 @@ export default function TrainIndex() {
             linkedSessionKey: sessionCard.key,
             linkedTrainSessionId: trainSessionId,
             linkStatus: "linked",
+            ...(completionAnalysis ? { completionAnalysis } : {}),
             linkedAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           },
@@ -3796,7 +3920,11 @@ export default function TrainIndex() {
       Alert.alert("Activity linked", "This activity now completes the planned session.", [
         {
           text: "View session",
-          onPress: () => openHistorySessionFromTrain(trainSessionId),
+          onPress: () => {
+            if (linkedActivity && openLinkedActivityFromTrain(linkedActivity, { linkedTrainSessionId: trainSessionId })) return;
+            if (sessionCard.key) return goToSession(sessionCard.key);
+            openHistorySessionFromTrain(trainSessionId);
+          },
         },
         { text: "OK", style: "cancel" },
       ]);
@@ -3806,7 +3934,7 @@ export default function TrainIndex() {
     } finally {
       setLinkingSuggestedMatch(false);
     }
-  }, [focusedDay?.isoDate, openHistorySessionFromTrain, suggestedActivityMatch]);
+  }, [focusedDay?.isoDate, goToSession, openHistorySessionFromTrain, openLinkedActivityFromTrain, suggestedActivityMatch]);
 
   const todayHeroPrimaryLabel = useMemo(() => {
     if (todayHero?.status === "completed" && todayHero?.savedTrainSessionId) return "View session";
@@ -3815,6 +3943,8 @@ export default function TrainIndex() {
     if (todayHero?.key) return "Start session";
     return "Log session";
   }, [todayHero?.key, todayHero?.savedTrainSessionId, todayHero?.status]);
+  const showSelectedDayHero =
+    showResolvedPlanState && todayHero?.status !== "completed";
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg, paddingTop: insets.top }}>
@@ -3841,7 +3971,7 @@ export default function TrainIndex() {
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
+        {/* Header and week selector */}
         <View style={s.header}>
           <View style={s.headerTopRow}>
             <Text style={[s.headerTitle, { color: theme.headerTitle }]}>Train</Text>
@@ -3916,6 +4046,39 @@ export default function TrainIndex() {
                   activeOpacity={0.85}
                 >
                   <Text style={[s.weekJumpText, { color: theme.text }]}>+4 wk</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : showEmptyPlanState ? (
+            <View style={s.headerWeekRow}>
+              <Text style={[s.headerWeekLabel, { color: theme.subtext }]}>
+                {calendarBrowseWeekLabel}
+              </Text>
+              <View style={s.weekControls}>
+                <TouchableOpacity
+                  onPress={() => shiftCalendarWeek(-1)}
+                  style={[
+                    s.weekNav,
+                    { borderColor: theme.border, backgroundColor: theme.card2 },
+                  ]}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="chevron-left" size={16} color={theme.text} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => shiftCalendarWeek(1)}
+                  disabled={calendarWeekOffset >= 0}
+                  style={[
+                    s.weekNav,
+                    {
+                      borderColor: theme.border,
+                      backgroundColor: theme.card2,
+                      opacity: calendarWeekOffset >= 0 ? 0.45 : 1,
+                    },
+                  ]}
+                  activeOpacity={0.85}
+                >
+                  <Feather name="chevron-right" size={16} color={theme.text} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -4039,6 +4202,92 @@ export default function TrainIndex() {
                 ))}
               </Animated.View>
             </View>
+          ) : showEmptyPlanState ? (
+            <View style={[s.noPlanWeekStrip, s.activePlanWeekStrip]}>
+              <View style={s.weekCarouselPanel}>
+                {displayWeekGrid.map((item) => {
+                  const dayNum = new Date(item.date).getDate();
+                  const sessionCount = Array.isArray(item.cards) ? item.cards.length : 0;
+                  const hasSessions = sessionCount > 0;
+                  const isToday = !!item.isToday;
+                  const isSelected = item.dayIdx === selectedDayIndex;
+                  const visibleDots = hasSessions ? Math.min(sessionCount, 3) : 0;
+                  const stripStatus = item.dayStatus || "rest";
+                  const stripStyle = dayStatusStyles(stripStatus, theme, {
+                    isSelected,
+                    isToday,
+                    hasSessions,
+                  });
+
+                  return (
+                    <TouchableOpacity
+                      key={item.isoDate}
+                      style={s.noPlanWeekDay}
+                      onPress={() => handleHeaderDayPress(item)}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[
+                          s.noPlanWeekDow,
+                          {
+                            color: isSelected || isToday ? theme.text : theme.subtext,
+                            opacity: !isSelected && !isToday && !hasSessions ? 0.7 : 1,
+                          },
+                        ]}
+                      >
+                        {String(item.dayLabel || "").toUpperCase()}
+                      </Text>
+                      <View
+                        style={[
+                          s.noPlanWeekDateWrap,
+                          {
+                            backgroundColor: stripStyle.backgroundColor,
+                            borderColor: stripStyle.borderColor,
+                          },
+                        ]}
+                      >
+                        <Text style={[s.noPlanWeekDate, { color: stripStyle.textColor }]}>
+                          {dayNum}
+                        </Text>
+                      </View>
+                      <View style={s.noPlanWeekSessionMarkerRow}>
+                        {hasSessions
+                          ? item.cards.slice(0, visibleDots).map((card, dotIdx) => {
+                              const status = String(card?.status || "").toLowerCase();
+                              const dotColor =
+                                status === "completed"
+                                  ? theme.primaryBg
+                                  : status === "skipped"
+                                  ? "#F87171"
+                                  : isSelected || isToday
+                                  ? theme.primaryBg
+                                  : theme.text;
+
+                              return (
+                                <View
+                                  key={`${item.isoDate}-dot-${dotIdx}`}
+                                  style={[
+                                    s.noPlanWeekSessionDot,
+                                    {
+                                      backgroundColor: dotColor,
+                                      opacity: isSelected ? 1 : isToday ? 0.95 : 0.82,
+                                    },
+                                  ]}
+                                />
+                              );
+                            })
+                          : null}
+                        {sessionCount > 3 ? (
+                          <Text style={[s.noPlanWeekSessionMoreText, { color: theme.subtext }]}>
+                            +{sessionCount - 3}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
           ) : isResolvingActivePlan ? (
             <View
               style={[
@@ -4055,6 +4304,7 @@ export default function TrainIndex() {
           ) : null}
         </View>
 
+        {/* Focused-day summary */}
         {showResolvedPlanState ? (
           <View
             style={[
@@ -4075,6 +4325,7 @@ export default function TrainIndex() {
           </View>
         ) : null}
 
+        {/* Active live session */}
         {activeLiveSession ? (
           <View
             style={[
@@ -4124,6 +4375,7 @@ export default function TrainIndex() {
           </View>
         ) : null}
 
+        {/* Needs review */}
         {suggestedActivityMatch ? (
           <View
             style={[
@@ -4190,7 +4442,8 @@ export default function TrainIndex() {
           </View>
         ) : null}
 
-        {/* Today hero */}
+        {/* Main selected-day session hero */}
+        {showSelectedDayHero || !showResolvedPlanState ? (
         <View style={s.heroWrap}>
           <LinearGradient
             colors={["transparent", "transparent"]}
@@ -4259,11 +4512,39 @@ export default function TrainIndex() {
                 <Text style={[s.heroSupport, s.heroSupportTight, { color: theme.subtext }]} numberOfLines={2}>
                   {todayHeroSupport}
                 </Text>
+                {todayHero?.status === "completed" && todayHero?.linkedProvider ? (
+                  <View style={s.heroSourceRow}>
+                    <View
+                      style={[
+                        s.heroSourcePill,
+                        {
+                          backgroundColor: withHexAlpha(theme.primaryBg, theme.isDark ? "18" : "24"),
+                          borderColor: withHexAlpha(theme.primaryBg, theme.isDark ? "66" : "80"),
+                        },
+                      ]}
+                    >
+                      <Feather name="watch" size={13} color={theme.primaryBg} />
+                      <Text style={[s.heroSourceText, { color: theme.primaryBg }]}>
+                        {todayHero.linkedProvider}
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
 
                 <View style={[s.heroActions, s.heroActionsTight]}>
                   <TouchableOpacity
                     onPress={() => {
                       if (todayHero?.status === "completed" && todayHero?.savedTrainSessionId) {
+                        if (todayHero?.linkedActivity) {
+                          const opened = openLinkedActivityFromTrain(todayHero.linkedActivity, {
+                            linkedTrainSessionId: todayHero.savedTrainSessionId,
+                          });
+                          if (opened) return;
+                        }
+                        if (todayHero?.key) {
+                          goToSession(todayHero.key);
+                          return;
+                        }
                         openHistorySessionFromTrain(todayHero.savedTrainSessionId);
                         return;
                       }
@@ -4400,9 +4681,13 @@ export default function TrainIndex() {
             ) : (
               <>
                 <Text style={[s.heroDate, { color: theme.subtext }]}>{headerContextMeta}</Text>
-                <Text style={[s.heroTitle, { color: theme.text }]}>Start your training block</Text>
+                <Text style={[s.heroTitle, { color: theme.text }]}>
+                  {showCompletedPlanState ? "Plan complete" : "Start your training block"}
+                </Text>
                 <Text style={[s.heroSupport, { color: theme.subtext }]}>
-                  Build a full plan or quickly log a sample session today.
+                  {showCompletedPlanState
+                    ? "Your last plan has finished. Start a new block or quick log today."
+                    : "Start a new block or quick log today."}
                 </Text>
 
                 <View style={s.heroActions}>
@@ -4412,7 +4697,7 @@ export default function TrainIndex() {
                     activeOpacity={0.9}
                   >
                     <Feather name="sparkles" size={16} color={theme.primaryText} />
-                    <Text style={[s.primaryBtnText, { color: theme.primaryText }]}>Create plan</Text>
+                    <Text style={[s.primaryBtnText, { color: theme.primaryText }]}>Create new plan</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -4428,9 +4713,11 @@ export default function TrainIndex() {
             )}
           </LinearGradient>
         </View>
+        ) : null}
 
         {showResolvedPlanState ? (
           <>
+            {/* Completed training */}
             <View style={s.section}>
               <View style={s.sectionHead}>
                 <Text style={[s.sectionTitle, { color: theme.text }]}>Completed training</Text>
@@ -4478,162 +4765,6 @@ export default function TrainIndex() {
                 <View style={[s.restCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
                   <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>
                     Nothing completed for {focusedDayModel.label} yet.
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            <View style={s.section}>
-              <View style={s.sectionHead}>
-                <Text style={[s.sectionTitle, { color: theme.text }]}>Detected activities</Text>
-                <Text style={[s.sectionSubtleInline, { color: theme.subtext }]}>
-                  {focusedDayModel.detectedActivities.length}
-                </Text>
-              </View>
-              {focusedDayCompletionInsight ? (
-                <View
-                  style={[
-                    s.completedInsightCard,
-                    { backgroundColor: quietInsetSurface, borderColor: quietBorder },
-                  ]}
-                >
-                  <View style={s.completedInsightTop}>
-                    <View style={[s.completedBenefitIcon, { backgroundColor: theme.primaryBg }]}>
-                      <Feather
-                        name={focusedDayCompletionInsight.benefit.icon}
-                        size={15}
-                        color={theme.primaryText}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[s.completedInsightEyebrow, { color: theme.subtext }]}>
-                        {focusedDayCompletionInsight.summary}
-                      </Text>
-                      <Text style={[s.completedInsightTitle, { color: theme.text }]}>
-                        {focusedDayCompletionInsight.benefit.label} · {focusedDayCompletionInsight.benefit.title}
-                      </Text>
-                    </View>
-                  </View>
-                  <Text style={[s.completedInsightBody, { color: theme.subtext }]}>
-                    {focusedDayCompletionInsight.benefit.body}
-                  </Text>
-                  <View style={[s.completedNextBox, { borderColor: quietBorder }]}>
-                    <Text style={[s.completedNextLabel, { color: theme.text }]}>Next best move</Text>
-                    <Text style={[s.completedNextText, { color: theme.subtext }]}>
-                      {focusedDayCompletionInsight.suggestion}
-                    </Text>
-                  </View>
-                </View>
-              ) : null}
-              {focusedDayModel.detectedActivities.length ? (
-                <View style={s.completedActivityList}>
-                  {focusedDayModel.detectedActivities.map((activity) => {
-                    const benefit = activityBenefit(activity);
-                    const stats = externalActivityStats(activity);
-                    const meta = externalActivityMeta(activity);
-                    const detectedStatus = deriveDetectedActivityStatus({
-                      activity,
-                      focusedDayModel,
-                      focusedDayCards,
-                      focusedDay,
-                      ignoredSuggestedMatchKeys,
-                    });
-                    const isLinked = detectedStatus === "Linked";
-                    const isNeedsReview = detectedStatus === "Needs review";
-                    const isIgnored = detectedStatus === "Ignored";
-                    return (
-                      <TouchableOpacity
-                        key={`${activity.source}:${activity.id}`}
-                        activeOpacity={0.86}
-                        onPress={() => openExternalActivityFromTrain(activity)}
-                        style={[
-                          s.completedActivityRow,
-                          { backgroundColor: quietInsetSurface, borderColor: quietBorder },
-                        ]}
-                      >
-                        <View style={s.completedActivityMainRow}>
-                          <View style={[s.completedActivityIcon, { borderColor: theme.border }]}>
-                            <Feather name={benefit.icon} size={15} color={theme.text} />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <View style={s.completedActivityTitleRow}>
-                              <Text
-                                style={[s.completedActivityTitle, { color: theme.text }]}
-                                numberOfLines={1}
-                              >
-                                {activity.title}
-                              </Text>
-                              <View
-                                style={[
-                                  s.completedBenefitChip,
-                                  s.detectedActivityStatusChip,
-                                  {
-                                    backgroundColor: isNeedsReview
-                                      ? theme.primaryBg
-                                      : isLinked
-                                      ? withHexAlpha(theme.primaryBg, theme.isDark ? "22" : "2F")
-                                      : isIgnored
-                                      ? "rgba(148,163,184,0.16)"
-                                      : quietSectionSurface,
-                                    borderColor: isNeedsReview
-                                      ? theme.primaryBg
-                                      : isLinked
-                                      ? withHexAlpha(theme.primaryBg, theme.isDark ? "78" : "9A")
-                                      : isIgnored
-                                      ? "rgba(148,163,184,0.36)"
-                                      : quietBorder,
-                                  },
-                                ]}
-                              >
-                                <Text
-                                  style={[
-                                    s.completedBenefitChipText,
-                                    {
-                                      color: isNeedsReview
-                                        ? theme.primaryText
-                                        : isLinked
-                                        ? theme.primaryBg
-                                        : isIgnored
-                                        ? theme.subtext
-                                        : theme.text,
-                                    },
-                                  ]}
-                                >
-                                  {detectedStatus}
-                                </Text>
-                              </View>
-                            </View>
-                            <Text
-                              style={[s.completedActivityMeta, { color: theme.subtext }]}
-                              numberOfLines={1}
-                            >
-                              {activity.provider}{meta ? ` · ${meta}` : ""}
-                            </Text>
-                          </View>
-                          <Feather name="chevron-right" size={17} color={theme.subtext} />
-                        </View>
-                        {stats.length ? (
-                          <View style={s.completedActivityStats}>
-                            {stats.map((stat) => (
-                              <View key={stat.key} style={s.completedActivityStat}>
-                                <Text style={[s.completedActivityStatLabel, { color: theme.subtext }]}>
-                                  {stat.label}
-                                </Text>
-                                <Text style={[s.completedActivityStatValue, { color: theme.text }]}>
-                                  {stat.value}
-                                </Text>
-                              </View>
-                            ))}
-                          </View>
-                        ) : null}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              ) : (
-                <View style={[s.restCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
-                  <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>
-                    No Garmin or Strava activity detected for {focusedDayModel.label}.
                   </Text>
                 </View>
               )}
@@ -4763,110 +4894,162 @@ export default function TrainIndex() {
           </>
         ) : showEmptyPlanState ? (
           <>
-            {/* Sample workouts */}
+            {/* No-plan state */}
             <View style={s.section}>
-              <Text style={[s.sectionTitle, { color: theme.text }]}>Sample workouts</Text>
-              <Text style={[s.sampleIntro, { color: theme.subtext }]}>
-                Pick one structured sample and log it in seconds.
+              <Text style={[s.sectionTitle, { color: theme.text }]}>Today&apos;s activity</Text>
+              <Text style={[s.sectionSubtle, { color: theme.subtext }]}>
+                Completed training and detected Garmin/Strava activity for the selected day.
               </Text>
-
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.sampleTabRow}>
-                {sampleCategories.map((cat) => {
-                  const active = sampleCategory === cat.key;
-                  return (
-                    <TouchableOpacity
-                      key={`sample-tab-${cat.key}`}
-                      onPress={() => setSampleCategory(cat.key)}
-                      style={[
-                        s.sampleTab,
-                        active
-                          ? { backgroundColor: theme.primaryBg, borderColor: "rgba(0,0,0,0)" }
-                          : { backgroundColor: theme.card2, borderColor: theme.border },
-                      ]}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={{ color: active ? theme.primaryText : theme.subtext, fontWeight: active ? "700" : "600", fontSize: 12 }}>
-                        {cat.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.noPlanCarouselRow}>
-                {orderedSamples.map((sample, idx) => {
-                  const isRecommended = idx === 0 && sample.key === recommendedSample?.key;
-                  return (
-                    <View
-                      key={sample.key}
-                      style={[s.sampleFeaturedCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
-                    >
-                      <View style={s.sampleFeaturedTop}>
-                        <View style={[s.sampleTypePill, { borderColor: quietBorder, backgroundColor: quietSectionSurface }]}>
-                          <Feather name={sampleIconName(sample.type)} size={13} color={theme.text} />
-                          <Text style={[s.sampleTypeText, { color: theme.text }]}>{sample.type}</Text>
-                        </View>
-                        {isRecommended ? (
-                          <Text style={[s.sampleRecoLabel, { color: theme.subtext }]}>Recommended today</Text>
-                        ) : null}
-                      </View>
-
-                      <Text style={[s.sampleFeaturedTitle, { color: theme.text }]} numberOfLines={2}>
-                        {sample.title}
-                      </Text>
-                      <Text style={[s.sampleFeaturedSummary, { color: theme.subtext }]} numberOfLines={2}>
-                        {sample.summary || sample.notes}
-                      </Text>
-                      <Text style={[s.sampleBestFor, { color: theme.subtext }]} numberOfLines={1}>
-                        {sample.durationMin} min · {sampleSecondaryMeta(sample)} · RPE {sample.rpe}
-                      </Text>
-
-                      <TouchableOpacity
-                        onPress={() =>
-                          router.push({
-                            pathname: "/train/create-workout",
-                            params: { sampleKey: sample.key, mode: "manual" },
-                          })
-                        }
-                        style={[s.samplePrimaryCta, { backgroundColor: theme.primaryBg }]}
-                        activeOpacity={0.9}
-                      >
-                        <Feather name="plus-circle" size={15} color={theme.primaryText} />
-                        <Text style={[s.samplePrimaryCtaText, { color: theme.primaryText }]}>Use sample</Text>
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
-              </ScrollView>
             </View>
+            {noPlanCompletedRows.length ? (
+              <View style={[s.section, { marginTop: -4 }]}>
+                <View style={s.sectionHead}>
+                  <Text style={[s.sectionSubtleInline, { color: theme.subtext }]}>
+                    {noPlanCompletedRows.length}
+                  </Text>
+                </View>
+                <View style={s.completedActivityList}>
+                  {noPlanCompletedRows.map((row, idx) => (
+                    <TouchableOpacity
+                      key={`no-plan-completed-training-${row.id || idx}`}
+                      activeOpacity={0.86}
+                      onPress={() => {
+                        if (row.kind === "activity") {
+                          openImportedActivityFromTrain(row.activity);
+                          return;
+                        }
+                        openPlannedCard(row.card, focusedDay ? focusedDay.dayIdx : 0);
+                      }}
+                      style={[
+                        row.kind === "activity" ? s.noPlanActivityLogCard : s.completedActivityRow,
+                        { backgroundColor: quietInsetSurface, borderColor: quietBorder },
+                      ]}
+                    >
+                      {row.kind === "activity" ? (
+                        <View style={{ gap: 10 }}>
+                          <View style={s.noPlanActivityFeedTop}>
+                            <View style={[s.noPlanActivityAvatar, { backgroundColor: theme.card2 }]}>
+                              <Text style={[s.noPlanActivityAvatarText, { color: theme.text }]}>
+                                {currentUserInitial}
+                              </Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={[s.noPlanActivityUserName, { color: theme.text }]} numberOfLines={1}>
+                                {currentUserLabel}
+                              </Text>
+                              <Text style={[s.noPlanActivityHeaderMeta, { color: theme.subtext }]} numberOfLines={1}>
+                                {[row.feedWhen, row.device].filter(Boolean).join(" · ")}
+                              </Text>
+                            </View>
+                          </View>
 
-            {/* Guided get started */}
-            <View style={s.section}>
-              <Text style={[s.sectionTitle, { color: theme.text }]}>Get started</Text>
-              <View style={[s.card, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}>
-                <Text style={[s.cardTitle, { color: theme.text }]}>One simple next step</Text>
-                <Text style={{ color: theme.subtext, marginTop: 6, fontSize: 13, lineHeight: 20 }}>
-                  {NO_PLAN_NOTE}
-                </Text>
+                          <View style={s.noPlanActivityTitleBlock}>
+                            <View style={s.noPlanActivityTypeLine}>
+                              <Feather name="activity" size={14} color={theme.primaryBg} />
+                              <Text style={[s.noPlanActivityTypeLineText, { color: theme.subtext }]} numberOfLines={1}>
+                                {[row.typeLabel, row.providerLabel].filter(Boolean).join(" · ")}
+                              </Text>
+                            </View>
+                            <Text style={[s.noPlanActivityFeedTitle, { color: theme.text }]} numberOfLines={2}>
+                              {row.title}
+                            </Text>
+                          </View>
 
-                <TouchableOpacity
-                  onPress={() => router.push("/train/create-home")}
-                  style={[s.primaryBtn, { backgroundColor: theme.primaryBg, marginTop: 14 }]}
-                  activeOpacity={0.9}
-                >
-                  <Feather name="sparkles" size={16} color={theme.primaryText} />
-                  <Text style={[s.primaryBtnText, { color: theme.primaryText }]}>Create my first plan</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => openQuickRecord(focusedDay ? focusedDay.dayIdx : 0)}
-                  style={[s.secondaryGhost, { borderColor: quietBorder, backgroundColor: quietInsetSurface, marginTop: 10 }]}
-                  activeOpacity={0.85}
-                >
-                  <Feather name="plus-circle" size={14} color={theme.text} />
-                  <Text style={{ color: theme.text, fontWeight: "700" }}>Quick log instead</Text>
-                </TouchableOpacity>
+                          {row.stats?.length ? (
+                            <View style={s.noPlanActivityStatsRow}>
+                              {row.stats.map(([label, value]) => (
+                                <View key={`${row.id}-${label}`} style={s.noPlanActivityStatColumn}>
+                                  <Text style={[s.noPlanActivityStatLabel, { color: theme.subtext }]}>
+                                    {label}
+                                  </Text>
+                                  <Text style={[s.noPlanActivityStatValue, { color: theme.text }]} numberOfLines={1}>
+                                    {value}
+                                  </Text>
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
+                        </View>
+                      ) : (
+                        <View style={s.completedActivityMainRow}>
+                          <View style={[s.completedActivityIcon, { borderColor: theme.border }]}>
+                            <Feather name={row.icon} size={15} color={theme.text} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text
+                              style={[s.completedActivityTitle, { color: theme.text }]}
+                              numberOfLines={1}
+                            >
+                              {row.title}
+                            </Text>
+                            <Text
+                              style={[s.completedActivityMeta, { color: theme.subtext }]}
+                              numberOfLines={1}
+                            >
+                              {row.meta || "Completed session"}
+                            </Text>
+                          </View>
+                          <Feather name="chevron-right" size={17} color={theme.subtext} />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
+            ) : (
+              <View style={[s.section, { marginTop: -4 }]}>
+                <View style={[s.restCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
+                  <Text style={{ color: theme.text, fontWeight: "700", fontSize: 15 }}>
+                    No activity for {focusedDayModel.label}
+                  </Text>
+                  <Text style={{ color: theme.subtext, marginTop: 4, fontSize: 12 }}>
+                    Quick log if you train today, or create a new plan when you are ready.
+                  </Text>
+                </View>
+              </View>
+            )}
+
+            {/* Recommended next step */}
+            <View style={s.section}>
+              <Text style={[s.sectionTitle, { color: theme.text }]}>Recommended next step</Text>
+              <Text style={[s.sampleIntro, { color: theme.subtext }]}>
+                One simple option you can use today.
+              </Text>
+              {recommendedSample ? (
+                <View style={[s.sampleFeaturedCard, s.sampleSingleCard, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}>
+                  <View style={s.sampleFeaturedTop}>
+                    <View style={[s.sampleTypePill, { borderColor: quietBorder, backgroundColor: quietSectionSurface }]}>
+                      <Feather name={sampleIconName(recommendedSample.type)} size={13} color={theme.text} />
+                      <Text style={[s.sampleTypeText, { color: theme.text }]}>{recommendedSample.type}</Text>
+                    </View>
+                    <Text style={[s.sampleRecoLabel, { color: theme.subtext }]}>Recommended</Text>
+                  </View>
+
+                  <Text style={[s.sampleFeaturedTitle, { color: theme.text }]} numberOfLines={2}>
+                    {recommendedSample.title}
+                  </Text>
+                  <Text style={[s.sampleFeaturedSummary, { color: theme.subtext }]} numberOfLines={2}>
+                    {recommendedSample.summary || recommendedSample.notes}
+                  </Text>
+                  <Text style={[s.sampleBestFor, { color: theme.subtext }]} numberOfLines={1}>
+                    {recommendedSample.durationMin} min · {sampleSecondaryMeta(recommendedSample)} · RPE {recommendedSample.rpe}
+                  </Text>
+
+                  <TouchableOpacity
+                    onPress={() =>
+                      router.push({
+                        pathname: "/train/create-workout",
+                        params: { sampleKey: recommendedSample.key, mode: "manual" },
+                      })
+                    }
+                    style={[s.samplePrimaryCta, { backgroundColor: theme.primaryBg }]}
+                    activeOpacity={0.9}
+                  >
+                    <Feather name="plus-circle" size={15} color={theme.primaryText} />
+                    <Text style={[s.samplePrimaryCtaText, { color: theme.primaryText }]}>Use sample</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
             </View>
           </>
         ) : (
@@ -4880,35 +5063,41 @@ export default function TrainIndex() {
           </View>
         )}
 
-        {/* Explore */}
+        {/* Explore actions */}
         <View style={s.section}>
           <View style={s.sectionHead}>
             <Text style={[s.sectionTitle, { color: theme.text }]}>Explore</Text>
-            <TouchableOpacity
-              onPress={() => setMoreOpen(true)}
-              style={[s.coachBrowseBtn, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
-              activeOpacity={0.85}
-            >
-              <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>More</Text>
-              <Feather name="chevron-right" size={13} color={theme.text} />
-            </TouchableOpacity>
+            {!showEmptyPlanState ? (
+              <TouchableOpacity
+                onPress={() => setMoreOpen(true)}
+                style={[s.coachBrowseBtn, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
+                activeOpacity={0.85}
+              >
+                <Text style={{ color: theme.text, fontWeight: "700", fontSize: 12 }}>More</Text>
+                <Feather name="chevron-right" size={13} color={theme.text} />
+              </TouchableOpacity>
+            ) : null}
           </View>
           <Text style={[s.sectionSubtle, { color: theme.subtext }]}>
-            Tools for changing your plan, creating a workout, or learning what to do next.
+            {showEmptyPlanState
+              ? "Useful places to go next."
+              : "Tools for changing your plan, creating a workout, or learning what to do next."}
           </Text>
 
           <View style={s.exploreActionGrid}>
-            <TouchableOpacity
-              onPress={() => router.push("/train/coach-plans")}
-              style={[s.exploreActionCard, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}
-              activeOpacity={0.88}
-            >
-              <View style={[s.exploreActionIcon, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
-                <Feather name="layers" size={16} color={theme.text} />
-              </View>
-              <Text style={[s.exploreActionTitle, { color: theme.text }]}>Coach plans</Text>
-              <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>Browse templates</Text>
-            </TouchableOpacity>
+            {!showEmptyPlanState ? (
+              <TouchableOpacity
+                onPress={() => router.push("/train/coach-plans")}
+                style={[s.exploreActionCard, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}
+                activeOpacity={0.88}
+              >
+                <View style={[s.exploreActionIcon, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
+                  <Feather name="layers" size={16} color={theme.text} />
+                </View>
+                <Text style={[s.exploreActionTitle, { color: theme.text }]}>Coach plans</Text>
+                <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>Browse templates</Text>
+              </TouchableOpacity>
+            ) : null}
 
             <TouchableOpacity
               onPress={() =>
@@ -4939,20 +5128,34 @@ export default function TrainIndex() {
               <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>Simple advice</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={() => openQuickRecord(focusedDay ? focusedDay.dayIdx : 0)}
-              style={[s.exploreActionCard, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}
-              activeOpacity={0.88}
-            >
-              <View style={[s.exploreActionIcon, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
-                <Feather name="plus-circle" size={16} color={theme.text} />
-              </View>
-              <Text style={[s.exploreActionTitle, { color: theme.text }]}>Quick log</Text>
-              <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>Record anything</Text>
-            </TouchableOpacity>
+            {showEmptyPlanState ? (
+              <TouchableOpacity
+                onPress={() => router.push("/train/previous-plans")}
+                style={[s.exploreActionCard, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}
+                activeOpacity={0.88}
+              >
+                <View style={[s.exploreActionIcon, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
+                  <Feather name="archive" size={16} color={theme.text} />
+                </View>
+                <Text style={[s.exploreActionTitle, { color: theme.text }]}>Previous plans</Text>
+                <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>Review history</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={() => openQuickRecord(focusedDay ? focusedDay.dayIdx : 0)}
+                style={[s.exploreActionCard, { backgroundColor: quietSectionSurface, borderColor: quietBorder }]}
+                activeOpacity={0.88}
+              >
+                <View style={[s.exploreActionIcon, { backgroundColor: quietInsetSurface, borderColor: quietBorder }]}>
+                  <Feather name="plus-circle" size={16} color={theme.text} />
+                </View>
+                <Text style={[s.exploreActionTitle, { color: theme.text }]}>Quick log</Text>
+                <Text style={[s.exploreActionMeta, { color: theme.subtext }]}>Record anything</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
-          {hasRunPlan && !hasStrengthPlan ? (
+          {!showEmptyPlanState && hasRunPlan && !hasStrengthPlan ? (
             <TouchableOpacity
               onPress={() => router.push("/train/create/create-strength")}
               style={[s.exploreAssistRow, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
@@ -4965,7 +5168,7 @@ export default function TrainIndex() {
               <Feather name="chevron-right" size={14} color={theme.subtext} />
             </TouchableOpacity>
           ) : null}
-          {hasStrengthPlan && !hasRunPlan ? (
+          {!showEmptyPlanState && hasStrengthPlan && !hasRunPlan ? (
             <TouchableOpacity
               onPress={() => router.push("/train/create/create-run")}
               style={[s.exploreAssistRow, { borderColor: quietBorder, backgroundColor: quietInsetSurface }]}
@@ -5374,7 +5577,7 @@ export default function TrainIndex() {
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: theme.text, fontSize: 17, fontWeight: "700" }}>Quick log</Text>
                   <Text style={{ color: theme.subtext, marginTop: 3, fontSize: 12, fontWeight: "500" }}>
-                    {weekGrid?.[recordDayIndex]?.dateLabel || "Session"}
+                    {displayWeekGrid?.[recordDayIndex]?.dateLabel || "Session"}
                   </Text>
                 </View>
 
@@ -5397,7 +5600,7 @@ export default function TrainIndex() {
                   >
                     <View style={s.quickLogHeroTop}>
                       <Text style={s.quickLogHeroEyebrow}>
-                        {(weekGrid?.[recordDayIndex]?.dateLabel || "Session") + " · Prefilled sample"}
+                        {(displayWeekGrid?.[recordDayIndex]?.dateLabel || "Session") + " · Prefilled sample"}
                       </Text>
 
                       <View
@@ -5806,6 +6009,22 @@ const s = StyleSheet.create({
   },
   heroDate: { fontSize: 12, fontWeight: "500" },
   heroSupport: { marginTop: 8, fontSize: 13, lineHeight: 19, fontWeight: "500" },
+  heroSourceRow: { flexDirection: "row", alignItems: "center", marginTop: 10 },
+  heroSourcePill: {
+    minHeight: 28,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  heroSourceText: {
+    fontSize: 12,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
   heroExtraSessionsWrap: {
     marginTop: 8,
     gap: 0,
@@ -6059,6 +6278,75 @@ const s = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     gap: 10,
+  },
+  noPlanActivityLogCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    padding: 11,
+  },
+  noPlanActivityFeedTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  noPlanActivityAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  noPlanActivityAvatarText: {
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  noPlanActivityUserName: {
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: "900",
+  },
+  noPlanActivityHeaderMeta: {
+    fontSize: 11,
+    marginTop: 2,
+    fontWeight: "500",
+  },
+  noPlanActivityTitleBlock: {
+    gap: 3,
+  },
+  noPlanActivityTypeLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  noPlanActivityTypeLineText: {
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: "700",
+  },
+  noPlanActivityFeedTitle: {
+    fontSize: 21,
+    lineHeight: 25,
+    fontWeight: "900",
+  },
+  noPlanActivityStatsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 0,
+    paddingTop: 0,
+  },
+  noPlanActivityStatColumn: {
+    flex: 1,
+    gap: 3,
+    paddingRight: 8,
+  },
+  noPlanActivityStatLabel: {
+    fontSize: 10,
+    lineHeight: 13,
+  },
+  noPlanActivityStatValue: {
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: "900",
   },
   completedActivityMainRow: {
     flexDirection: "row",
@@ -6527,6 +6815,10 @@ const s = StyleSheet.create({
     borderRadius: 16,
     padding: 12,
     gap: 8,
+  },
+  sampleSingleCard: {
+    width: "100%",
+    marginTop: 10,
   },
   sampleFeaturedTop: {
     flexDirection: "row",

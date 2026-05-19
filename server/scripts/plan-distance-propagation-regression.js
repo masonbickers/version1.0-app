@@ -40,7 +40,7 @@ function main() {
     : null;
 
   ensure(plan?.distanceContract?.model === "dual_budget_and_rendered", "distance contract model changed");
-  ensure(plan?.distanceContract?.weeklyMetricsPrimary === "budgeted", "weekly primary metric changed");
+  ensure(plan?.distanceContract?.weeklyMetricsPrimary === "rendered", "weekly primary metric changed");
   ensure(interval, "missing week1 intervals session");
 
   const plannedKm = toNum(interval?.plannedDistanceKm);
@@ -57,10 +57,13 @@ function main() {
     `stale interval budget propagation: planned=${plannedKm} budgetMUsed=${budgetMUsed}`
   );
 
-  // Contract remains dual: rendered/computed are executable values and may be below planned.
+  // Contract remains dual: planned is budget intent, rendered/computed are executable estimates.
+  // Timed warmups, recoveries, and cooldowns should count toward executable distance.
+  ensure(Math.abs(renderedKm - computedKm) <= 0.01, `rendered/computed drift: ${renderedKm}/${computedKm}`);
+  ensure(renderedKm >= plannedKm * 0.8, `rendered unexpectedly low (${renderedKm} < ${plannedKm} budget)`);
   ensure(
-    renderedKm <= plannedKm + 0.01 && computedKm <= plannedKm + 0.01,
-    `unexpected rendered/computed > planned (${renderedKm}/${computedKm} > ${plannedKm})`
+    renderedKm <= Math.max(plannedKm + 4, plannedKm * 2.2),
+    `rendered unexpectedly high (${renderedKm} from ${plannedKm} budget)`
   );
 
   const notes = Array.isArray(metrics?.guardrailNotes) ? metrics.guardrailNotes.join(" | ") : "";

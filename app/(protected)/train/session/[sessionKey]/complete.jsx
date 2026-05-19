@@ -35,6 +35,7 @@ import { useLiveActivity } from "../../../../../providers/LiveActivityProvider";
 import { useTheme } from "../../../../../providers/ThemeProvider";
 import { decodeSessionKey } from "../../../../../src/train/utils/sessionHelpers";
 import {
+  buildRunCompletionAnalysisForRecord,
   buildPlannedTrainSessionPayload,
   loadPlannedSessionRecord,
   stripNilValues,
@@ -1100,6 +1101,10 @@ export default function SessionCompleteScreen() {
       let sessionDate = getLocalDateOnly();
       const storedRunReview =
         status === "completed" && hasLiveDraft ? compactRunReviewForStorage(runReview) : null;
+      let plannedRecord = null;
+      try {
+        plannedRecord = await loadPlannedSessionRecord(uid, encodedKey);
+      } catch {}
 
       if (hasLiveDraft) {
         const payload = pendingSaveDraft?.payload || {};
@@ -1125,8 +1130,24 @@ export default function SessionCompleteScreen() {
           trainSessionPayload.analysis = deleteField();
           trainSessionPayload.runReview = deleteField();
         }
+
+        const completionAnalysis =
+          status === "completed" && !isStrengthDraft
+            ? buildRunCompletionAnalysisForRecord({
+                planDoc: plannedRecord?.planDoc,
+                plannedSession: plannedRecord?.session,
+                completedActivity: {
+                  ...trainSessionPayload,
+                  runReview: storedRunReview || runReview,
+                },
+              })
+            : null;
+        if (completionAnalysis) {
+          trainSessionPayload.completionAnalysis = completionAnalysis;
+        } else if (status !== "completed" && hasExistingTrainSession) {
+          trainSessionPayload.completionAnalysis = deleteField();
+        }
       } else {
-        const plannedRecord = await loadPlannedSessionRecord(uid, encodedKey);
         if (!plannedRecord?.planDoc || !plannedRecord?.session) {
           Alert.alert("Save failed", "Could not find the planned session to save.");
           return;
@@ -1212,6 +1233,19 @@ export default function SessionCompleteScreen() {
         } else if (status !== "completed" && existingLogSnap.exists()) {
           sessionLogPayload.analysis = deleteField();
           sessionLogPayload.runReview = deleteField();
+        }
+        if (status === "completed" && trainSessionPayload?.completionAnalysis) {
+          sessionLogPayload.completionAnalysis = trainSessionPayload.completionAnalysis;
+        } else if (status !== "completed" && existingLogSnap.exists()) {
+          sessionLogPayload.completionAnalysis = deleteField();
+        }
+      }
+
+      if (!hasLiveDraft) {
+        if (status === "completed" && trainSessionPayload?.completionAnalysis) {
+          sessionLogPayload.completionAnalysis = trainSessionPayload.completionAnalysis;
+        } else if (status !== "completed" && existingLogSnap.exists()) {
+          sessionLogPayload.completionAnalysis = deleteField();
         }
       }
 

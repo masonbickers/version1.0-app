@@ -140,9 +140,11 @@ export default function SettingsPage() {
   const [stravaSyncing, setStravaSyncing] = React.useState(false);
 
   const [garminConnecting, setGarminConnecting] = React.useState(false);
+  const [garminConnectingProfile, setGarminConnectingProfile] = React.useState("");
   const [garminConnected, setGarminConnected] = React.useState(false);
-  const [garminStatusChecking, setGarminStatusChecking] = React.useState(false);
-  const [garminDebugChecking, setGarminDebugChecking] = React.useState(false);
+  const [garminHealthConnected, setGarminHealthConnected] = React.useState(false);
+  const [garminActivityConnected, setGarminActivityConnected] = React.useState(false);
+  const [garminTrainingConnected, setGarminTrainingConnected] = React.useState(false);
   const [garminSyncing, setGarminSyncing] = React.useState(false);
 
   const handleClose = React.useCallback(() => {
@@ -160,7 +162,20 @@ export default function SettingsPage() {
       .then((v) => setStravaConnected(v === "1"))
       .catch(() => {});
     AsyncStorage.getItem("garmin_connected")
-      .then((v) => setGarminConnected(v === "1"))
+      .then((v) => {
+        const connected = v === "1";
+        setGarminConnected(connected);
+        if (connected) setGarminHealthConnected(true);
+      })
+      .catch(() => {});
+    AsyncStorage.getItem("garmin_health_connected")
+      .then((v) => setGarminHealthConnected(v === "1"))
+      .catch(() => {});
+    AsyncStorage.getItem("garmin_activity_connected")
+      .then((v) => setGarminActivityConnected(v === "1"))
+      .catch(() => {});
+    AsyncStorage.getItem("garmin_training_connected")
+      .then((v) => setGarminTrainingConnected(v === "1"))
       .catch(() => {});
 
     console.log("Settings loaded");
@@ -169,6 +184,14 @@ export default function SettingsPage() {
     console.log("STRAVA_RETURN_URL =", STRAVA_RETURN_URL);
     console.log("GARMIN_RETURN_URL =", GARMIN_RETURN_URL);
   }, []);
+
+  const setGarminProfileConnected = React.useCallback((profile, connected) => {
+    const next = Boolean(connected);
+    if (profile === "activity") setGarminActivityConnected(next);
+    else if (profile === "training") setGarminTrainingConnected(next);
+    else setGarminHealthConnected(next);
+    setGarminConnected(next || garminHealthConnected || garminActivityConnected || garminTrainingConnected);
+  }, [garminActivityConnected, garminHealthConnected, garminTrainingConnected]);
 
   const ThemeOption = ({ value, label }) => {
     const active = theme === value;
@@ -419,6 +442,7 @@ export default function SettingsPage() {
       }
 
       setGarminConnecting(true);
+      setGarminConnectingProfile(String(profile || "health").trim());
 
       const idToken = await user.getIdToken();
 
@@ -473,8 +497,17 @@ export default function SettingsPage() {
       const success = parsed?.queryParams?.success;
 
       if (success === "1" || success === 1) {
-        await AsyncStorage.multiSet([["garmin_connected", "1"]]);
-        setGarminConnected(true);
+        const profileStorageKey =
+          requestedProfile === "activity"
+            ? "garmin_activity_connected"
+            : requestedProfile === "training"
+              ? "garmin_training_connected"
+              : "garmin_health_connected";
+        await AsyncStorage.multiSet([
+          ["garmin_connected", "1"],
+          [profileStorageKey, "1"],
+        ]);
+        setGarminProfileConnected(requestedProfile, true);
         if (requestedProfile === "activity") {
           try {
             await triggerGarminInitialSync();
@@ -494,7 +527,7 @@ export default function SettingsPage() {
             "Garmin",
             requestedProfile === "training"
               ? "Garmin training connected. You can now send workouts to Garmin."
-              : "Garmin health connected. Save the Daily Health Stats permission, then request backfill."
+              : "Garmin health connected."
           );
         }
       } else {
@@ -514,6 +547,7 @@ export default function SettingsPage() {
       );
     } finally {
       setGarminConnecting(false);
+      setGarminConnectingProfile("");
     }
   };
 
@@ -528,8 +562,16 @@ export default function SettingsPage() {
           style: "destructive",
           onPress: async () => {
             try {
-              await AsyncStorage.multiRemove(["garmin_connected"]);
+              await AsyncStorage.multiRemove([
+                "garmin_connected",
+                "garmin_health_connected",
+                "garmin_activity_connected",
+                "garmin_training_connected",
+              ]);
               setGarminConnected(false);
+              setGarminHealthConnected(false);
+              setGarminActivityConnected(false);
+              setGarminTrainingConnected(false);
               Alert.alert("Garmin", "Garmin has been disconnected.");
             } catch (e) {
               console.error("Garmin disconnect error", e);
@@ -542,54 +584,6 @@ export default function SettingsPage() {
         },
       ]
     );
-  };
-
-  const handleCheckGarminActivitiesStatus = async () => {
-    try {
-      const user = auth.currentUser;
-
-      if (!user?.uid) {
-        Alert.alert("Garmin", "Please sign in again.");
-        return;
-      }
-
-      if (!API_BASE) {
-        Alert.alert(
-          "Garmin",
-          "API is not configured for this build. Set EXPO_PUBLIC_API_URL in EAS environment variables."
-        );
-        return;
-      }
-
-      setGarminStatusChecking(true);
-
-      const idToken = await user.getIdToken();
-
-      const res = await fetch(`${API_BASE}/garmin/activities/status`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${idToken}`,
-        },
-      });
-
-      const text = await res.text();
-      let json = {};
-      try {
-        json = text ? JSON.parse(text) : {};
-      } catch {
-        json = { raw: text };
-      }
-
-      Alert.alert(
-        "Garmin Activities Status",
-        JSON.stringify({ apiBase: API_BASE, status: res.status, ...json }, null, 2)
-      );
-    } catch (e) {
-      console.log("Garmin activities status error", e);
-      Alert.alert("Garmin", e?.message || "Could not check Garmin status.");
-    } finally {
-      setGarminStatusChecking(false);
-    }
   };
 
   const handleSyncGarminActivities = async () => {
@@ -667,57 +661,6 @@ export default function SettingsPage() {
       Alert.alert("Garmin", e?.message || "Could not sync Garmin activities.");
     } finally {
       setGarminSyncing(false);
-    }
-  };
-
-  const handleCheckGarminActivitiesDebug = async () => {
-    try {
-      const user = auth.currentUser;
-
-      if (!user?.uid) {
-        Alert.alert("Garmin", "Please sign in again.");
-        return;
-      }
-
-      if (!API_BASE) {
-        Alert.alert(
-          "Garmin",
-          "API is not configured for this build. Set EXPO_PUBLIC_API_URL in EAS environment variables."
-        );
-        return;
-      }
-
-      setGarminDebugChecking(true);
-
-      const idToken = await user.getIdToken();
-
-      const res = await fetch(`${API_BASE}/garmin/activities/debug`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${idToken}`,
-        },
-      });
-
-      const text = await res.text();
-      let json = {};
-      try {
-        json = text ? JSON.parse(text) : {};
-      } catch {
-        json = { raw: text };
-      }
-
-      console.log("Garmin debug response status =", res.status);
-      console.log("Garmin debug response json =", json);
-
-      Alert.alert(
-        "Garmin Webhook Debug",
-        JSON.stringify({ apiBase: API_BASE, status: res.status, ...json }, null, 2)
-      );
-    } catch (e) {
-      console.log("Garmin activities debug error", e);
-      Alert.alert("Garmin", e?.message || "Could not check Garmin debug data.");
-    } finally {
-      setGarminDebugChecking(false);
     }
   };
 
@@ -869,20 +812,16 @@ export default function SettingsPage() {
 
           <Row
             icon="watch"
-            label={
-              garminConnected
-                ? garminConnecting
-                  ? "Garmin (Connecting…)"
-                  : "Garmin Health (Connected)"
-                : "Connect Garmin Health"
-            }
+            label="Garmin Health"
             onPress={
-              garminConnected ? undefined : () => handleConnectGarmin("health")
+              garminConnecting || garminHealthConnected
+                ? undefined
+                : () => handleConnectGarmin("health")
             }
             right={
-              garminConnecting ? (
+              garminConnectingProfile === "health" ? (
                 <ActivityIndicator size="small" />
-              ) : garminConnected ? (
+              ) : garminHealthConnected ? (
                 <Feather name="check-circle" size={20} color="#22C55E" />
               ) : (
                 <Feather
@@ -901,16 +840,20 @@ export default function SettingsPage() {
 
           <Row
             icon="activity"
-            label="Connect Garmin Activities"
+            label="Garmin Activities"
             onPress={
-              garminConnecting ? undefined : () => handleConnectGarmin("activity")
+              garminConnecting || garminActivityConnected
+                ? undefined
+                : () => handleConnectGarmin("activity")
             }
             colors={colors}
             isDark={isDark}
             accentFill={accentFill}
             right={
-              garminConnecting ? (
+              garminConnectingProfile === "activity" ? (
                 <ActivityIndicator size="small" />
+              ) : garminActivityConnected ? (
+                <Feather name="check-circle" size={20} color="#22C55E" />
               ) : (
                 <Feather
                   name="chevron-right"
@@ -925,16 +868,20 @@ export default function SettingsPage() {
 
           <Row
             icon="send"
-            label="Connect Garmin Training"
+            label="Garmin Training"
             onPress={
-              garminConnecting ? undefined : () => handleConnectGarmin("training")
+              garminConnecting || garminTrainingConnected
+                ? undefined
+                : () => handleConnectGarmin("training")
             }
             colors={colors}
             isDark={isDark}
             accentFill={accentFill}
             right={
-              garminConnecting ? (
+              garminConnectingProfile === "training" ? (
                 <ActivityIndicator size="small" />
+              ) : garminTrainingConnected ? (
+                <Feather name="check-circle" size={20} color="#22C55E" />
               ) : (
                 <Feather
                   name="chevron-right"
@@ -947,66 +894,6 @@ export default function SettingsPage() {
 
           {garminConnected && (
             <>
-              <Divider colors={colors} />
-
-              <Row
-                icon="activity"
-                label={
-                  garminStatusChecking
-                    ? "Checking Garmin Activities…"
-                    : "Check Garmin Activities Status"
-                }
-                onPress={
-                  garminStatusChecking
-                    ? undefined
-                    : handleCheckGarminActivitiesStatus
-                }
-                colors={colors}
-                isDark={isDark}
-                accentFill={accentFill}
-                right={
-                  garminStatusChecking ? (
-                    <ActivityIndicator size="small" />
-                  ) : (
-                    <Feather
-                      name="chevron-right"
-                      size={18}
-                      color={colors.subtext}
-                    />
-                  )
-                }
-              />
-
-              <Divider colors={colors} />
-
-              <Row
-                icon="database"
-                label={
-                  garminDebugChecking
-                    ? "Checking Garmin Webhooks…"
-                    : "Check Garmin Webhook Debug"
-                }
-                onPress={
-                  garminDebugChecking
-                    ? undefined
-                    : handleCheckGarminActivitiesDebug
-                }
-                colors={colors}
-                isDark={isDark}
-                accentFill={accentFill}
-                right={
-                  garminDebugChecking ? (
-                    <ActivityIndicator size="small" />
-                  ) : (
-                    <Feather
-                      name="chevron-right"
-                      size={18}
-                      color={colors.subtext}
-                    />
-                  )
-                }
-              />
-
               <Divider colors={colors} />
 
               <Row

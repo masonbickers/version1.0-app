@@ -17,7 +17,7 @@ import {
 const HORIZONTAL_PADDING = 4; // must match blur paddingHorizontal below
 
 const TABS = [
-  { key: "Summary", icon: "grid", label: "Summary", path: "/(protected)/home" },
+  { key: "home", icon: "grid", label: "Home", path: "/(protected)/home" },
   { key: "train", icon: "activity", label: "Train", path: "/(protected)/train" },
   { key: "record", icon: "message-circle", label: "Chat", path: "/(protected)/chat" },
   { key: "nutrition", icon: "droplet", label: "Fuel", path: "/(protected)/nutrition" },

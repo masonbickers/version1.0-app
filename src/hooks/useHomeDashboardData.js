@@ -476,6 +476,9 @@ function buildInitialState() {
     greeting: buildGreeting(now),
     dateLabel: formatLongDate(now),
     statusLabel: "Loading",
+    activePlanName: null,
+    activePlanCount: 0,
+    primaryActivity: null,
     weekLabel: "This week",
     metrics: [
       { label: "Week total", value: "—" },
@@ -532,6 +535,9 @@ export function useHomeDashboardData(options = {}) {
         greeting: buildGreeting(now),
         dateLabel: formatLongDate(now),
         statusLabel: "Signed out",
+        activePlanName: null,
+        activePlanCount: 0,
+        primaryActivity: null,
       };
       HOME_DASHBOARD_CACHE.set(cacheKey, nextState);
       setState(nextState);
@@ -554,6 +560,9 @@ export function useHomeDashboardData(options = {}) {
           greeting: buildGreeting(now),
           dateLabel: formatLongDate(now),
           statusLabel: "No plan",
+          activePlanName: null,
+          activePlanCount: 0,
+          primaryActivity: null,
           loadError: "",
           timeline: [],
           calendarDays: [],
@@ -587,6 +596,11 @@ export function useHomeDashboardData(options = {}) {
       const resolvedCompanion =
         companion && primary && companion.id !== primary.id ? companion : null;
       const activePlanIds = [primary?.id, resolvedCompanion?.id].filter(Boolean);
+      const activePlanName = [primary, resolvedCompanion]
+        .filter(Boolean)
+        .map((item) => item?.name)
+        .filter(Boolean)
+        .join(" + ");
 
       let sessionLogMap = {};
       if (activePlanIds.length) {
@@ -774,16 +788,36 @@ export function useHomeDashboardData(options = {}) {
 
       const todayDay = calendarDays[todayDayIndex] || null;
       const todayCard = pickPriorityCard(todayDay?.cards || []).card;
+      const nextActionable =
+        todayCard ||
+        calendarDays
+          .slice(todayDayIndex)
+          .flatMap((day) =>
+            (day.cards || []).map((card) => ({
+              ...card,
+              __dayLabel: day.isToday ? "Today" : day.day,
+            }))
+          )
+          .find((card) => !isResolvedSessionStatus(card?.status)) ||
+        calendarDays
+          .flatMap((day) =>
+            (day.cards || []).map((card) => ({
+              ...card,
+              __dayLabel: day.day,
+            }))
+          )
+          .find((card) => !isResolvedSessionStatus(card?.status)) ||
+        null;
       const todayData = {
-        dayLabel: todayDay?.day || "Today",
-        key: todayCard?.key || null,
-        title: todayCard?.title || "Rest / optional movement",
+        dayLabel: nextActionable?.__dayLabel || todayDay?.day || "Today",
+        key: nextActionable?.key || null,
+        title: nextActionable?.title || "Rest / optional movement",
         subtitle:
-          todayCard?.meta ||
-          (todayCard ? "" : "No structured session planned"),
-        status: String(todayCard?.status || "").toLowerCase(),
-        savedTrainSessionId: todayCard?.savedTrainSessionId || null,
-        session: todayCard?.sess || null,
+          nextActionable?.meta ||
+          (nextActionable ? "" : "No structured session planned"),
+        status: String(nextActionable?.status || "").toLowerCase(),
+        savedTrainSessionId: nextActionable?.savedTrainSessionId || null,
+        session: nextActionable?.sess || null,
       };
 
       const sessionsPlanned = calendarDays.reduce(
@@ -822,6 +856,9 @@ export function useHomeDashboardData(options = {}) {
         greeting: buildGreeting(now),
         dateLabel: formatLongDate(now),
         statusLabel,
+        activePlanName: activePlanName || primary?.name || "Training Plan",
+        activePlanCount: activePlanIds.length,
+        primaryActivity: primary?.primaryActivity || primary?.kind || "Training",
         weekLabel: mergedWeek.title,
         metrics: [
           {
@@ -883,9 +920,11 @@ export function useHomeDashboardData(options = {}) {
 
   const actions = useMemo(
     () => [
+      { key: "readiness", label: "Readiness", path: "/journal/check-in" },
       { key: "calendar", label: "Calendar", path: "/home/calendar" },
       { key: "coach", label: "Coach", path: "/chat" },
-      { key: "fuel", label: "Fuel", path: "/nutrition/fuelmatch" },
+      { key: "fuel", label: "Fuel", path: "/nutrition" },
+      { key: "progress", label: "Progress", path: "/progress" },
     ],
     []
   );

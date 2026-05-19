@@ -31,6 +31,18 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function safePreview(value, maxChars = 2400) {
+  if (value == null) return "No data.";
+  let text = "";
+  try {
+    text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  } catch {
+    text = String(value);
+  }
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n… truncated ${text.length - maxChars} characters for app stability`;
+}
+
 async function safeJson(res) {
   const txt = await res.text();
   try {
@@ -335,7 +347,7 @@ export default function SummaryScreen() {
                   marginTop: 6,
                 }}
               >
-                {JSON.stringify(data, null, 2)}
+                {safePreview(data)}
               </Text>
             </>
           )}

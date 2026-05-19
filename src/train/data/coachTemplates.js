@@ -1533,6 +1533,621 @@ function buildMasonHybrid6WeekTemplate() {
   };
 }
 
+const MASON_HALF_2_PACES = {
+  easy: { label: "5:00-5:35/km", sec: 318 },
+  steady: { label: "4:35-4:50/km", sec: 282 },
+  marathon: { label: "4:10-4:18/km", sec: 254 },
+  threshold: { label: "4:00-4:08/km", sec: 244 },
+  half: { label: "4:02/km", sec: 242 },
+  tenK: { label: "3:48-3:55/km", sec: 232 },
+  fiveK: { label: "5K pace", sec: 228 },
+  vo2: { label: "3:35-3:45/km", sec: 220 },
+};
+
+function fixedPaceTarget(key) {
+  const pace = MASON_HALF_2_PACES[key] || null;
+  if (!pace) return null;
+  return {
+    paceSecPerKm: pace.sec,
+    paceLabel: pace.label,
+  };
+}
+
+function fixedTimeRunStep(name, minutes, paceKey, notes = "") {
+  return {
+    type: "RUN",
+    name,
+    duration: { type: "TIME", seconds: sec(minutes) },
+    target: fixedPaceTarget(paceKey),
+    notes,
+  };
+}
+
+function fixedDistanceRunStep(name, km, paceKey, notes = "") {
+  return {
+    type: "RUN",
+    name,
+    duration: { type: "DISTANCE", meters: Math.round(Number(km || 0) * 1000) },
+    target: fixedPaceTarget(paceKey),
+    notes,
+  };
+}
+
+function fixedRepeatBlock({
+  reps,
+  workName,
+  recoverName = "Jog recovery",
+  workKm,
+  workMin,
+  workSec,
+  recoverMin,
+  recoverSec,
+  recoverKm,
+  paceKey,
+  notes = "",
+}) {
+  const workDuration =
+    Number(workKm || 0) > 0
+      ? { type: "DISTANCE", meters: Math.round(Number(workKm) * 1000) }
+      : { type: "TIME", seconds: Math.round(Number(workSec || workMin * 60 || 60)) };
+  const recoverDuration =
+    Number(recoverKm || 0) > 0
+      ? { type: "DISTANCE", meters: Math.round(Number(recoverKm) * 1000) }
+      : { type: "TIME", seconds: Math.round(Number(recoverSec || recoverMin * 60 || 60)) };
+
+  return {
+    type: "REPEAT",
+    name: `${Math.max(1, Math.round(Number(reps || 1)))} x ${workName}`,
+    repeat: Math.max(1, Math.round(Number(reps || 1))),
+    steps: [
+      {
+        type: "RUN",
+        name: workName,
+        duration: workDuration,
+        target: fixedPaceTarget(paceKey),
+        notes,
+      },
+      {
+        type: "RUN",
+        name: recoverName,
+        duration: recoverDuration,
+        target: fixedPaceTarget("easy"),
+        notes: "Keep recovery relaxed and controlled.",
+      },
+    ],
+  };
+}
+
+function masonRunSession({ title, sessionType, distanceKm, durationMin, notes, steps }) {
+  return withSessionLabels(
+    {
+      title,
+      name: title,
+      type: "RUN",
+      sessionType,
+      targetDistanceKm: Number(distanceKm || 0),
+      plannedDistanceKm: Number(distanceKm || 0),
+      distanceKm: Number(distanceKm || 0),
+      targetDurationMin: Math.max(20, Math.round(Number(durationMin || Number(distanceKm || 0) * 5.4 || 45))),
+      notes,
+      steps: Array.isArray(steps) ? steps : [],
+    },
+    "run",
+    sessionType
+  );
+}
+
+function masonEasyRun(distanceKm, { title, strides = false, notes = "" } = {}) {
+  const steps = [
+    fixedDistanceRunStep(
+      "Easy aerobic",
+      distanceKm,
+      "easy",
+      notes || "Easy aerobic running. Stay relaxed and conversational."
+    ),
+  ];
+  if (strides) {
+    steps.push(
+      fixedRepeatBlock({
+        reps: 6,
+        workName: "20 sec stride",
+        workSec: 20,
+        recoverName: "Walk back",
+        recoverSec: 60,
+        paceKey: "fiveK",
+        notes: "Fast relaxed stride. Smooth mechanics, no sprinting.",
+      })
+    );
+  }
+  return masonRunSession({
+    title: title || `Easy Run ${Number(distanceKm).toFixed(1)} km`,
+    sessionType: "easy",
+    distanceKm,
+    notes: notes || `Easy run at ${MASON_HALF_2_PACES.easy.label}${strides ? " plus strides." : "."}`,
+    steps,
+  });
+}
+
+function masonStrengthBlocks(items) {
+  return [
+    {
+      kind: "main",
+      title: "Strength",
+      items: items.map((item) => strengthItem(item)),
+    },
+  ];
+}
+
+function masonStrengthSession(title, items, minutes = 55, notes = "") {
+  return withSessionLabels(
+    makeGymSession(title, minutes, notes, title, {
+      blocks: masonStrengthBlocks(items),
+      emphasis: title,
+    }),
+    "strength",
+    "gym"
+  );
+}
+
+function masonMobilitySession(title, minutes, notes) {
+  return withSessionLabels(
+    makeGymSession(title, minutes, notes, "Mobility and recovery", {
+      blocks: [
+        {
+          kind: "mobility",
+          title: "Mobility",
+          items: [
+            strengthItem({ title: "Easy mobility flow", sets: 1, reps: 1, timeSec: minutes * 60, rpe: 2 }),
+          ],
+        },
+      ],
+      emphasis: "Mobility",
+    }),
+    "strength",
+    "gym"
+  );
+}
+
+const MASON_UPPER_1_V2 = [
+  { title: "Bench Press", sets: 4, reps: 5, restSec: 150, rpe: 8 },
+  { title: "Weighted Pull-Ups", sets: 4, reps: 5, restSec: 150, rpe: 8 },
+  { title: "Incline DB Press", sets: 3, reps: 8, restSec: 90, rpe: 7.5 },
+  { title: "Chest Supported Row", sets: 3, reps: 8, restSec: 90, rpe: 7.5 },
+  { title: "DB Shoulder Press", sets: 3, reps: 8, restSec: 90, rpe: 7.5 },
+  { title: "Hanging Leg Raise", sets: 3, reps: 12, restSec: 60, rpe: 7 },
+];
+
+const MASON_UPPER_2_V2 = [
+  { title: "Pull-Ups", sets: 3, reps: 8, restSec: 90, rpe: 7.5 },
+  { title: "Incline DB Bench", sets: 3, reps: 10, restSec: 90, rpe: 7.5 },
+  { title: "Cable Row", sets: 3, reps: 10, restSec: 90, rpe: 7.5 },
+  { title: "Lateral Raise", sets: 3, reps: 12, restSec: 60, rpe: 7.5 },
+  { title: "Face Pull", sets: 3, reps: 12, restSec: 60, rpe: 7 },
+  { title: "EZ Curl", sets: 2, reps: 10, restSec: 60, rpe: 7 },
+  { title: "Rope Pushdown", sets: 2, reps: 10, restSec: 60, rpe: 7 },
+];
+
+const MASON_LOWER_V2 = [
+  { title: "Trap Bar Deadlift", sets: 3, reps: 5, restSec: 180, rpe: 8 },
+  { title: "Bulgarian Split Squat", sets: 2, reps: 6, restSec: 120, rpe: 7.5, cues: "Each leg" },
+  { title: "Romanian Deadlift", sets: 2, reps: 6, restSec: 120, rpe: 7.5 },
+  { title: "Standing Calf Raise", sets: 3, reps: 10, restSec: 60, rpe: 7 },
+  { title: "Copenhagen Plank", sets: 3, reps: 1, timeSec: 30, restSec: 45, rpe: 7 },
+];
+
+function deloadStrengthItems(items, factor = 0.7) {
+  return items.map((item) => ({
+    ...item,
+    sets: item.sets ? Math.max(2, Math.round(item.sets * factor)) : item.sets,
+    rpe: item.rpe ? Math.max(6, Number((item.rpe - 1).toFixed(1))) : item.rpe,
+  }));
+}
+
+function buildMasonHalfPlan2Template() {
+  const upper1 = (label = "Upper 1", items = MASON_UPPER_1_V2, minutes = 55) =>
+    masonStrengthSession(label, items, minutes, "Upper-body strength. Progress load only if reps stay clean.");
+  const upper2 = (items = MASON_UPPER_2_V2, minutes = 50) =>
+    masonStrengthSession("Upper 2", items, minutes, "Upper accessory strength. Keep fatigue controlled.");
+  const lower = (items = MASON_LOWER_V2, minutes = 55, note = "Lower-body strength. Leave reps in reserve.") =>
+    masonStrengthSession("Lower Strength", items, minutes, note);
+
+  const weeks = [
+    {
+      focus: "Start the block with rhythm: VO2 exposure, threshold control, and easy long-run durability.",
+      phaseLabel: "Build",
+      days: {
+        Mon: [masonEasyRun(8, { title: "Easy + Strides", strides: true }), upper1()],
+        Tue: [
+          masonRunSession({
+            title: "VO2 - 5 x 1 km",
+            sessionType: "intervals",
+            distanceKm: 13,
+            notes: "5 x 1 km at 3:45-3:50/km with 2 min jog recovery.",
+            steps: [
+              fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, drills, lunges, A-skips, high knees, then 4 strides."),
+              fixedRepeatBlock({ reps: 5, workName: "1 km rep", workKm: 1, recoverName: "Jog recovery", recoverMin: 2, paceKey: "tenK", notes: "Target 3:45-3:50/km." }),
+              fixedTimeRunStep("Cool down", 12, "easy", "Easy jog."),
+            ],
+          }),
+        ],
+        Wed: [lower()],
+        Thu: [masonEasyRun(8, { title: "Easy Run + Strides", strides: true })],
+        Fri: [
+          masonRunSession({
+            title: "Threshold - 3 x 8 min",
+            sessionType: "threshold",
+            distanceKm: 11,
+            notes: "3 x 8 min at threshold with 90 sec jog recovery.",
+            steps: [
+              fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, drills, and 4 strides."),
+              fixedRepeatBlock({ reps: 3, workName: "8 min threshold", workMin: 8, recoverName: "Jog recovery", recoverSec: 90, paceKey: "threshold" }),
+              fixedTimeRunStep("Cool down", 12, "easy", "Easy jog."),
+            ],
+          }),
+          upper2(),
+        ],
+        Sun: [masonRunSession({ title: "Long Run 15 km", sessionType: "long", distanceKm: 15, notes: "15 km easy at 5:00-5:25/km.", steps: [fixedDistanceRunStep("Long easy", 15, "easy", "Stay patient and aerobic.")] })],
+      },
+    },
+    {
+      focus: "Hill power plus a split threshold tempo, then a steady-finish long run.",
+      phaseLabel: "Build",
+      days: {
+        Mon: [masonEasyRun(8, { title: "Easy + Strides", strides: true }), upper1("Upper 1 - Load Increase")],
+        Tue: [
+          masonRunSession({
+            title: "Hills + 200s",
+            sessionType: "hills",
+            distanceKm: 11,
+            notes: "8 x 60 sec uphill hard, jog back recovery, then 4 x 200m relaxed fast.",
+            steps: [
+              fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, mobility, and 4 strides."),
+              fixedRepeatBlock({ reps: 8, workName: "60 sec uphill", workSec: 60, recoverName: "Jog back", recoverSec: 120, paceKey: "vo2", notes: "Hard uphill effort, strong form." }),
+              fixedRepeatBlock({ reps: 4, workName: "200m relaxed fast", workKm: 0.2, recoverName: "Walk/jog recovery", recoverSec: 90, paceKey: "fiveK", notes: "Fast relaxed mechanics." }),
+              fixedTimeRunStep("Cool down", 12, "easy", "Easy jog."),
+            ],
+          }),
+        ],
+        Wed: [lower([{ ...MASON_LOWER_V2[0], sets: 4 }, { ...MASON_LOWER_V2[1], sets: 3 }, { ...MASON_LOWER_V2[2], sets: 3 }, MASON_LOWER_V2[3], MASON_LOWER_V2[4]])],
+        Thu: [masonEasyRun(9, { title: "Easy Run 9 km" })],
+        Fri: [
+          masonRunSession({
+            title: "Tempo - 20 min + 10 min",
+            sessionType: "tempo",
+            distanceKm: 12,
+            notes: "20 min threshold, 10 min easy jog, 10 min threshold.",
+            steps: [
+              fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, drills, and 4 strides."),
+              fixedTimeRunStep("Threshold block", 20, "threshold", "Controlled threshold."),
+              fixedTimeRunStep("Easy jog", 10, "easy", "Reset and recover."),
+              fixedTimeRunStep("Threshold block", 10, "threshold", "Finish controlled."),
+              fixedTimeRunStep("Cool down", 10, "easy", "Easy jog."),
+            ],
+          }),
+          upper2(),
+        ],
+        Sun: [
+          masonRunSession({
+            title: "Long Run 16 km - Steady Finish",
+            sessionType: "long",
+            distanceKm: 16,
+            notes: "First 13 km easy, final 3 km steady.",
+            steps: [fixedDistanceRunStep("Easy", 13, "easy"), fixedDistanceRunStep("Steady finish", 3, "steady")],
+          }),
+        ],
+      },
+    },
+    {
+      focus: "Highest early quality load: 6 x 1 km and 4 x 10 min threshold.",
+      phaseLabel: "Build",
+      days: {
+        Mon: [masonEasyRun(8, { title: "Easy + Strides", strides: true }), upper1("Upper 1 - Slight Load Increase")],
+        Tue: [
+          masonRunSession({
+            title: "VO2 - 6 x 1 km",
+            sessionType: "intervals",
+            distanceKm: 14,
+            notes: "6 x 1 km at 3:45/km with 2 min jog recovery.",
+            steps: [
+              fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, mobility, and strides."),
+              fixedRepeatBlock({ reps: 6, workName: "1 km rep", workKm: 1, recoverName: "Jog recovery", recoverMin: 2, paceKey: "vo2", notes: "Target around 3:45/km." }),
+              fixedTimeRunStep("Cool down", 12, "easy", "Easy jog."),
+            ],
+          }),
+        ],
+        Wed: [lower([{ ...MASON_LOWER_V2[0], sets: 4, reps: 4 }, { ...MASON_LOWER_V2[1], sets: 3, reps: 5 }, { ...MASON_LOWER_V2[2], sets: 3, reps: 5 }, MASON_LOWER_V2[3], MASON_LOWER_V2[4]])],
+        Thu: [masonEasyRun(9, { title: "Easy Run 9 km" })],
+        Fri: [
+          masonRunSession({
+            title: "Threshold - 4 x 10 min",
+            sessionType: "threshold",
+            distanceKm: 13,
+            notes: "4 x 10 min at threshold with 90 sec jog recovery.",
+            steps: [
+              fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, drills, and strides."),
+              fixedRepeatBlock({ reps: 4, workName: "10 min threshold", workMin: 10, recoverName: "Jog recovery", recoverSec: 90, paceKey: "threshold" }),
+              fixedTimeRunStep("Cool down", 12, "easy", "Easy jog."),
+            ],
+          }),
+          upper2(),
+        ],
+        Sun: [masonRunSession({ title: "Long Run 17 km", sessionType: "long", distanceKm: 17, notes: "17 km easy.", steps: [fixedDistanceRunStep("Long easy", 17, "easy")] })],
+      },
+    },
+    {
+      focus: "Deload: reduce strength volume and keep running sharp but controlled.",
+      phaseLabel: "Deload",
+      isDeload: true,
+      days: {
+        Mon: [masonEasyRun(7, { title: "Easy Run 7 km" }), upper1("Upper 1 - Deload", deloadStrengthItems(MASON_UPPER_1_V2), 45)],
+        Tue: [
+          masonRunSession({
+            title: "Speed Maintenance - 10 x 400m",
+            sessionType: "intervals",
+            distanceKm: 10,
+            notes: "10 x 400m at 5K pace with 200m jog.",
+            steps: [
+              fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, mobility, and strides."),
+              fixedRepeatBlock({ reps: 10, workName: "400m rep", workKm: 0.4, recoverName: "200m jog", recoverKm: 0.2, paceKey: "fiveK" }),
+              fixedTimeRunStep("Cool down", 10, "easy", "Easy jog."),
+            ],
+          }),
+        ],
+        Wed: [lower(deloadStrengthItems(MASON_LOWER_V2, 0.65), 40, "Lower deload. Keep every set light and crisp.")],
+        Thu: [masonEasyRun(7, { title: "Easy Run 7 km" })],
+        Fri: [
+          masonRunSession({
+            title: "Tempo - 25 min Continuous",
+            sessionType: "tempo",
+            distanceKm: 9,
+            notes: "25 min continuous threshold, controlled.",
+            steps: [fixedTimeRunStep("Warm up", 15, "easy", "Easy jog and strides."), fixedTimeRunStep("Continuous threshold", 25, "threshold"), fixedTimeRunStep("Cool down", 10, "easy")],
+          }),
+          upper2(deloadStrengthItems(MASON_UPPER_2_V2), 40),
+        ],
+        Sun: [masonRunSession({ title: "Long Run 14 km", sessionType: "long", distanceKm: 14, notes: "14 km easy.", steps: [fixedDistanceRunStep("Long easy", 14, "easy")] })],
+      },
+    },
+    {
+      focus: "Race-specific lift: 1200s, 3 x 3 km at HM pace, and a marathon-pace long-run finish.",
+      phaseLabel: "Specific",
+      days: {
+        Mon: [masonEasyRun(8, { title: "Easy + Strides", strides: true }), upper1("Upper 1 - Heavy", [{ ...MASON_UPPER_1_V2[0], sets: 5, reps: 4 }, { ...MASON_UPPER_1_V2[1], sets: 5, reps: 4 }, ...MASON_UPPER_1_V2.slice(2)], 60)],
+        Tue: [
+          masonRunSession({
+            title: "VO2 - 5 x 1200m",
+            sessionType: "intervals",
+            distanceKm: 13,
+            notes: "5 x 1200m at 10K pace with 2 min jog.",
+            steps: [fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, drills, and strides."), fixedRepeatBlock({ reps: 5, workName: "1200m rep", workKm: 1.2, recoverName: "Jog recovery", recoverMin: 2, paceKey: "tenK" }), fixedTimeRunStep("Cool down", 12, "easy")],
+          }),
+        ],
+        Wed: [lower([{ ...MASON_LOWER_V2[0], sets: 5, reps: 3 }, { ...MASON_LOWER_V2[1], sets: 3, reps: 5 }, { ...MASON_LOWER_V2[2], sets: 3, reps: 5 }, MASON_LOWER_V2[3], MASON_LOWER_V2[4]])],
+        Thu: [masonEasyRun(9, { title: "Easy Run 9 km" })],
+        Fri: [
+          masonRunSession({
+            title: "HM Specific - 3 x 3 km",
+            sessionType: "racepace",
+            distanceKm: 14,
+            notes: "3 x 3 km at HM pace with 3 min jog recovery.",
+            steps: [fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, mobility, and strides."), fixedRepeatBlock({ reps: 3, workName: "3 km at HM pace", workKm: 3, recoverName: "Jog recovery", recoverMin: 3, paceKey: "half" }), fixedTimeRunStep("Cool down", 12, "easy")],
+          }),
+          upper2(MASON_UPPER_2_V2, 55),
+        ],
+        Sun: [
+          masonRunSession({
+            title: "Long Run 18 km - MP Finish",
+            sessionType: "long",
+            distanceKm: 18,
+            notes: "First 13 km easy, final 5 km marathon pace.",
+            steps: [fixedDistanceRunStep("Easy", 13, "easy"), fixedDistanceRunStep("Marathon pace finish", 5, "marathon")],
+          }),
+        ],
+      },
+    },
+    {
+      focus: "Peak aerobic strength: 40 min continuous threshold and longest easy run.",
+      phaseLabel: "Peak",
+      days: {
+        Mon: [masonEasyRun(9, { title: "Easy + Strides", strides: true }), upper1("Upper 1 - Maintain Heavy", MASON_UPPER_1_V2, 55)],
+        Tue: [
+          masonRunSession({
+            title: "Speed - 8 x 800m",
+            sessionType: "intervals",
+            distanceKm: 13,
+            notes: "8 x 800m at 3K-5K effort with 90 sec jog.",
+            steps: [fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, drills, and strides."), fixedRepeatBlock({ reps: 8, workName: "800m rep", workKm: 0.8, recoverName: "Jog recovery", recoverSec: 90, paceKey: "vo2" }), fixedTimeRunStep("Cool down", 12, "easy")],
+          }),
+        ],
+        Wed: [lower([{ ...MASON_LOWER_V2[0], sets: 4, reps: 3 }, { ...MASON_LOWER_V2[1], sets: 3, reps: 5 }, { ...MASON_LOWER_V2[2], sets: 2, reps: 5 }], 50)],
+        Thu: [masonEasyRun(9, { title: "Easy Run 9 km" })],
+        Fri: [
+          masonRunSession({
+            title: "Continuous Threshold - 40 min",
+            sessionType: "threshold",
+            distanceKm: 13,
+            notes: "40 min continuous threshold.",
+            steps: [fixedTimeRunStep("Warm up", 15, "easy", "Easy jog and strides."), fixedTimeRunStep("Continuous threshold", 40, "threshold"), fixedTimeRunStep("Cool down", 12, "easy")],
+          }),
+          upper2(MASON_UPPER_2_V2, 45),
+        ],
+        Sun: [masonRunSession({ title: "Long Run 20 km", sessionType: "long", distanceKm: 20, notes: "20 km easy.", steps: [fixedDistanceRunStep("Long easy", 20, "easy")] })],
+      },
+    },
+    {
+      focus: "Specific confidence: HM-pace 2 km reps, threshold plus relaxed speed, steady-finish long run.",
+      phaseLabel: "Specific",
+      days: {
+        Mon: [masonEasyRun(8, { title: "Easy + Strides", strides: true }), upper1("Upper 1 - Reduced Volume", deloadStrengthItems(MASON_UPPER_1_V2, 0.8), 45)],
+        Tue: [
+          masonRunSession({
+            title: "Race Specific - 4 x 2 km",
+            sessionType: "racepace",
+            distanceKm: 12,
+            notes: "4 x 2 km at HM pace with 2 min jog.",
+            steps: [fixedTimeRunStep("Warm up", 15, "easy", "Easy jog, mobility, and strides."), fixedRepeatBlock({ reps: 4, workName: "2 km at HM pace", workKm: 2, recoverName: "Jog recovery", recoverMin: 2, paceKey: "half" }), fixedTimeRunStep("Cool down", 12, "easy")],
+          }),
+        ],
+        Wed: [lower([{ ...MASON_LOWER_V2[0], sets: 3, reps: 3 }, { ...MASON_LOWER_V2[1], sets: 2, reps: 5 }, { ...MASON_LOWER_V2[2], sets: 2, reps: 5 }], 40, "Reduced lower strength. Keep legs fresh.")],
+        Thu: [masonEasyRun(8, { title: "Easy Run 8 km" })],
+        Fri: [
+          masonRunSession({
+            title: "Tempo + Speed",
+            sessionType: "tempo",
+            distanceKm: 11,
+            notes: "30 min threshold, then 6 x 30 sec fast relaxed.",
+            steps: [
+              fixedTimeRunStep("Warm up", 15, "easy", "Easy jog and strides."),
+              fixedTimeRunStep("Threshold block", 30, "threshold"),
+              fixedRepeatBlock({ reps: 6, workName: "30 sec fast relaxed", workSec: 30, recoverName: "Walk/jog recovery", recoverSec: 60, paceKey: "fiveK" }),
+              fixedTimeRunStep("Cool down", 10, "easy"),
+            ],
+          }),
+          upper2(deloadStrengthItems(MASON_UPPER_2_V2, 0.8), 40),
+        ],
+        Sun: [
+          masonRunSession({
+            title: "Long Run 18 km - Steady Finish",
+            sessionType: "long",
+            distanceKm: 18,
+            notes: "18 km with final 6 km steady.",
+            steps: [fixedDistanceRunStep("Easy", 12, "easy"), fixedDistanceRunStep("Steady finish", 6, "steady")],
+          }),
+        ],
+      },
+    },
+    {
+      focus: "Taper and race: keep sharpness, reduce lifting, arrive fresh for sub-1:25.",
+      phaseLabel: "Taper",
+      isTaper: true,
+      days: {
+        Mon: [masonEasyRun(6, { title: "Easy Run 6 km" }), upper1("Upper 1 - Taper", deloadStrengthItems(MASON_UPPER_1_V2, 0.45), 35)],
+        Tue: [
+          masonRunSession({
+            title: "Sharpening - 6 x 400m",
+            sessionType: "intervals",
+            distanceKm: 8,
+            notes: "6 x 400m at 5K pace with full recovery.",
+            steps: [fixedTimeRunStep("Warm up", 15, "easy", "Easy jog and strides."), fixedRepeatBlock({ reps: 6, workName: "400m rep", workKm: 0.4, recoverName: "Full recovery", recoverSec: 120, paceKey: "fiveK" }), fixedTimeRunStep("Cool down", 10, "easy")],
+          }),
+        ],
+        Wed: [masonMobilitySession("Light Mobility", 25, "Light mobility only. No fatigue.")],
+        Thu: [masonEasyRun(5, { title: "Easy Run 5 km + Strides", strides: true })],
+        Sat: [
+          masonRunSession({
+            title: "Shakeout",
+            sessionType: "easy",
+            distanceKm: 3.8,
+            durationMin: 20,
+            notes: "20 min easy plus 4 strides.",
+            steps: [
+              fixedTimeRunStep("Easy shakeout", 20, "easy", "Stay relaxed and finish fresh."),
+              fixedRepeatBlock({ reps: 4, workName: "20 sec stride", workSec: 20, recoverName: "Walk back", recoverSec: 60, paceKey: "fiveK" }),
+            ],
+          }),
+        ],
+        Sun: [
+          masonRunSession({
+            title: "Race - Half Marathon",
+            sessionType: "race",
+            distanceKm: 21.1,
+            durationMin: 85,
+            notes: "Goal 1:24:59. 0-5 km controlled, settle into rhythm, stay relaxed through 15 km, race hard final 5-6 km.",
+            steps: [fixedDistanceRunStep("Half marathon race", 21.1, "half", "Execute calmly early and commit late.")],
+          }),
+        ],
+      },
+    },
+  ].map((week, wi) => {
+    const weekNumber = wi + 1;
+    const days = DAYS.map((day) => ({
+      day,
+      sessions: (week.days[day] || []).map((session) => ({ ...session, day })),
+    }));
+    const weeklyKm = Number(
+      days
+        .flatMap((day) => day.sessions)
+        .reduce((sum, session) => sum + Number(session?.targetDistanceKm || 0), 0)
+        .toFixed(1)
+    );
+    const longRunKm = Number(
+      Math.max(
+        ...days
+          .flatMap((day) => day.sessions)
+          .filter((session) => String(session?.sessionType || "").toLowerCase() === "long")
+          .map((session) => Number(session?.targetDistanceKm || 0)),
+        0
+      ).toFixed(1)
+    );
+
+    return {
+      title: `Week ${weekNumber}`,
+      weekIndex0: wi,
+      weekNumber,
+      focus: week.focus,
+      phase: {
+        label: week.phaseLabel,
+        isDeload: !!week.isDeload,
+        isTaper: !!week.isTaper,
+      },
+      targets: {
+        weeklyKm,
+        longRunKm,
+        isDeload: !!week.isDeload,
+        isTaper: !!week.isTaper,
+      },
+      days,
+    };
+  });
+
+  const targets = weeks.map((week) => ({
+    weekNumber: week.weekNumber,
+    weeklyKm: Number(week?.targets?.weeklyKm || 0),
+    longRunKm: Number(week?.targets?.longRunKm || 0),
+    isDeload: !!week?.targets?.isDeload,
+    isTaper: !!week?.targets?.isTaper,
+  }));
+
+  const createdAt = Date.now() - TEMPLATE_CONFIGS.length * 1000 - 250;
+
+  return {
+    id: "coach_mason_half_plan_2_0",
+    name: "Mason half plan 2.0",
+    kind: "hybrid",
+    source: "coach-template-local",
+    isCoachPlan: true,
+    isPublished: true,
+    visibility: "public",
+    createdByRole: "coach",
+    coachName: "Mason Bickers",
+    primaryActivity: "Hybrid",
+    description:
+      "8-week sub-1:25 half marathon hybrid block for a strength-trained athlete, combining race-specific running with upper/lower strength work.",
+    goalType: "Sub-1:25 half marathon hybrid",
+    sessionsPerWeek: 8,
+    targets,
+    weeks,
+    meta: {
+      name: "Mason half plan 2.0",
+      coachName: "Mason Bickers",
+      primaryActivity: "Hybrid",
+      isCoachPlan: true,
+      published: true,
+      primaryFocus: "Sub-1:25 half marathon",
+      profile: "Advanced hybrid athlete",
+      quality: "user-coach-template",
+      periodisation: "3-week build + deload, 3-week specific build, taper and race",
+      coachSpecialty: "Hybrid running and strength integration",
+      sessionsPerWeek: 8,
+      planVersion: "2.0",
+      paceZones: MASON_HALF_2_PACES,
+      targetTime: "1:24:59",
+    },
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
 const TEMPLATE_CONFIGS = [
   {
     id: "coach_elena_foundation_10k_8w4",
@@ -1697,10 +2312,12 @@ const TEMPLATE_CONFIGS = [
 ];
 
 const MASON_HYBRID_6_WEEK_PLAN_1_1 = buildMasonHybrid6WeekTemplate();
+const MASON_HALF_PLAN_2_0 = buildMasonHalfPlan2Template();
 
 export const MASON_COACH_TEMPLATE_DOCS = [
   ...TEMPLATE_CONFIGS.map((cfg, idx) => build10k8w4Template(cfg, idx)),
   MASON_HYBRID_6_WEEK_PLAN_1_1,
+  MASON_HALF_PLAN_2_0,
 ];
 
 export const COACH_PLAN_PACE_PROFILES = [

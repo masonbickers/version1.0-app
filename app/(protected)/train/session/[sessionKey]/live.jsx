@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   SafeAreaView,
   ScrollView,
   Share,
@@ -30,7 +31,6 @@ import {
   Vibration,
   View,
 } from "react-native";
-import MapView, { Polyline } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { API_URL } from "../../../../../config/api";
@@ -44,6 +44,15 @@ import {
   shouldPauseStaleLiveActivity,
 } from "../../../../../src/train/utils/liveActivityHelpers";
 import { decodeSessionKey, isAuxStrengthStep } from "../../../../../src/train/utils/sessionHelpers";
+
+let MapView = View;
+let Polyline = () => null;
+
+if (Platform.OS !== "web") {
+  const RNMaps = require("react-native-maps");
+  MapView = RNMaps.default;
+  Polyline = RNMaps.Polyline;
+}
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                          */

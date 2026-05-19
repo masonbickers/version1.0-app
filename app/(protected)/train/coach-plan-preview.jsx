@@ -177,7 +177,10 @@ export default function CoachPlanPreviewPage() {
     [template, tenKPace, paceProfile, mileageScale]
   );
 
-  const weeks = Array.isArray(personalisedTemplate?.weeks) ? personalisedTemplate.weeks : [];
+  const weeks = useMemo(
+    () => (Array.isArray(personalisedTemplate?.weeks) ? personalisedTemplate.weeks : []),
+    [personalisedTemplate]
+  );
   const totalWeeks = weeks.length;
   const totalSessions = useMemo(() => {
     let total = 0;
@@ -206,6 +209,12 @@ export default function CoachPlanPreviewPage() {
     () => buildModelPaces(tenKPaceSec, paceProfile),
     [tenKPaceSec, paceProfile]
   );
+  const templateTargetTime = String(personalisedTemplate?.meta?.targetTime || "").trim();
+  const primaryMetricValue = templateTargetTime || modelPaces?.projected10k || "--:--";
+  const primaryMetricLabel = templateTargetTime ? "Target outcome" : "Projected 10K outcome";
+  const programBrief =
+    personalisedTemplate?.description ||
+    "This is a structured coach plan designed to improve performance, durability, and training consistency.";
 
   const addPersonalisedPlan = async () => {
     const uid = auth.currentUser?.uid;
@@ -368,16 +377,15 @@ export default function CoachPlanPreviewPage() {
         <View style={[sx.card, { borderColor: theme.border, backgroundColor: theme.card, marginTop: 10 }]}>
           <Text style={[sx.sectionTitle, { color: theme.text }]}>Program brief</Text>
           <Text style={[sx.briefBody, { color: theme.subtext }]}>
-            This is a structured 10K build designed to improve speed endurance, threshold control, and race-day
-            durability across an 8-week progression.
+            {programBrief}
           </Text>
 
           <View style={sx.briefGrid}>
             <View style={[sx.briefMetricCard, { borderColor: theme.border, backgroundColor: theme.card2 }]}>
               <Text style={[sx.briefMetricValue, { color: theme.text }]}>
-                {modelPaces?.projected10k || "--:--"}
+                {primaryMetricValue}
               </Text>
-              <Text style={[sx.briefMetricLabel, { color: theme.subtext }]}>Projected 10K outcome</Text>
+              <Text style={[sx.briefMetricLabel, { color: theme.subtext }]}>{primaryMetricLabel}</Text>
             </View>
 
             <View style={[sx.briefMetricCard, { borderColor: theme.border, backgroundColor: theme.card2 }]}>

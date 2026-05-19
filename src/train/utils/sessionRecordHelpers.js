@@ -10,6 +10,7 @@ import {
 } from "firebase/firestore";
 
 import { db } from "../../../firebaseConfig";
+import { analyseRunSessionCompletion } from "../../../server/lib/train/sessionCompletion/sessionCompletionAnalysis";
 import { activityMatchIdentity } from "./activitySessionMatch";
 import { decodeSessionKey } from "./sessionHelpers";
 import { refreshTrainingWidgetSnapshotForUser } from "../../widgets/trainingWidgetSnapshot";
@@ -322,6 +323,133 @@ function resolvePrimaryActivity(planDoc, session) {
   );
 }
 
+function resolvePaceModel(planDoc) {
+  const candidates = [
+    planDoc?.paceModel,
+    planDoc?.plan?.paceModel,
+    planDoc?.planData?.paceModel,
+    planDoc?.generatedPlan?.paceModel,
+    planDoc?.output?.paceModel,
+    planDoc?.result?.paceModel,
+  ];
+  return candidates.find((candidate) => candidate && typeof candidate === "object") || null;
+}
+
+function isRunLikeSession(session = {}) {
+  if (isStrengthLikeSession(session)) return false;
+  const raw = String(
+    session?.workout?.sport ||
+      session?.sessionType ||
+      session?.type ||
+      session?.workoutKind ||
+      session?.role ||
+      ""
+  ).toLowerCase();
+  if (/\b(run|running|easy|long|tempo|threshold|interval|race|strides|fartlek)\b/.test(raw)) {
+    return true;
+  }
+  const text = [
+    session?.title,
+    session?.name,
+    session?.structure,
+    session?.summary,
+    session?.description,
+    session?.notes,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return /\b(run|running|jog|easy|long|tempo|threshold|interval|race pace|strides|fartlek)\b/.test(text);
+}
+
+function minutesToSeconds(value) {
+  const n = toFiniteNumber(value);
+  return n != null && n > 0 ? n * 60 : null;
+}
+
+function kmFromMeters(value) {
+  const n = toFiniteNumber(value);
+  return n != null && n > 0 ? Number((n / 1000).toFixed(3)) : null;
+}
+
+function buildCompletedActivityForAnalysis(activity = {}) {
+  if (!activity || typeof activity !== "object") return null;
+  const live = activity.live && typeof activity.live === "object" ? activity.live : {};
+  const linked = activity.linkedActivity && typeof activity.linkedActivity === "object" ? activity.linkedActivity : {};
+  const runReviewActual = activity.runReview?.actual && typeof activity.runReview.actual === "object"
+    ? activity.runReview.actual
+    : {};
+
+  const distanceKm =
+    toFiniteNumber(activity.actualDistanceKm) ??
+    toFiniteNumber(activity.distanceKm) ??
+    toFiniteNumber(live.distanceKm) ??
+    toFiniteNumber(linked.distanceKm) ??
+    kmFromMeters(activity.distanceMeters) ??
+    kmFromMeters(linked.distanceMeters);
+  const durationSec =
+    toFiniteNumber(activity.actualDurationSec) ??
+    toFiniteNumber(activity.durationSec) ??
+    toFiniteNumber(live.durationSec) ??
+    toFiniteNumber(live.movingDurationSec) ??
+    minutesToSeconds(activity.actualDurationMin) ??
+    minutesToSeconds(activity.durationMin) ??
+    minutesToSeconds(linked.movingTimeMin) ??
+    minutesToSeconds(linked.elapsedTimeMin);
+
+  const qualityWorkSec =
+    toFiniteNumber(activity.qualityWorkSec) ??
+    toFiniteNumber(runReviewActual.qualityWorkSec) ??
+    (toFiniteNumber(runReviewActual.actualWorkDistanceKm) != null &&
+    toFiniteNumber(runReviewActual.avgWorkPaceSec) != null
+      ? toFiniteNumber(runReviewActual.actualWorkDistanceKm) * toFiniteNumber(runReviewActual.avgWorkPaceSec)
+      : null);
+
+  if (!(distanceKm > 0) && !(durationSec > 0)) return null;
+
+  return {
+    type: activity.type || activity.sessionType || linked.type || "running",
+    distanceKm,
+    actualDistanceKm: distanceKm,
+    movingTimeSec: durationSec,
+    durationSec,
+    avgPaceSecPerKm:
+      distanceKm > 0 && durationSec > 0
+        ? durationSec / distanceKm
+        : toFiniteNumber(activity.avgPaceSecPerKm) ?? toFiniteNumber(live.avgPaceSecPerKm),
+    avgHr:
+      toFiniteNumber(activity.avgHr) ??
+      toFiniteNumber(activity.averageHeartRate) ??
+      toFiniteNumber(activity.averageHeartrate) ??
+      toFiniteNumber(live.avgHr) ??
+      toFiniteNumber(live.avgHeartrate) ??
+      toFiniteNumber(live.averageHeartRate) ??
+      toFiniteNumber(linked.averageHeartrate),
+    maxHr:
+      toFiniteNumber(activity.maxHr) ??
+      toFiniteNumber(activity.maxHeartRate) ??
+      toFiniteNumber(live.maxHr) ??
+      toFiniteNumber(live.maxHeartrate) ??
+      toFiniteNumber(linked.maxHeartrate),
+    qualityWorkSec,
+  };
+}
+
+export function buildRunCompletionAnalysisForRecord({
+  planDoc,
+  plannedSession,
+  completedActivity,
+} = {}) {
+  if (!plannedSession || !isRunLikeSession(plannedSession)) return null;
+  const activity = buildCompletedActivityForAnalysis(completedActivity);
+  if (!activity) return null;
+  return analyseRunSessionCompletion({
+    plannedSession,
+    completedActivity: activity,
+    paceModel: resolvePaceModel(planDoc),
+  });
+}
+
 function resolveTargetDurationMin(session) {
   const direct =
     toFiniteNumber(session?.targetDurationMin) ??
@@ -411,6 +539,32 @@ function toISODate(input) {
 }
 
 function resolvePlanStart(planDoc, sessionLogMap = {}) {
+  const explicitStart =
+    parseDateLike(planDoc?.startDate) ||
+    parseDateLike(planDoc?.plan?.startDate) ||
+    parseDateLike(planDoc?.meta?.startDate) ||
+    parseDateLike(planDoc?.athleteProfile?.goal?.startDate) ||
+    parseDateLike(planDoc?.goal?.startDate);
+  if (explicitStart) return startOfISOWeek(explicitStart);
+
+  const weeksForTarget = Array.isArray(planDoc?.weeks) ? planDoc.weeks.length : 0;
+  const requestedWeeks = Number(
+    planDoc?.planLengthWeeks ||
+      planDoc?.plan?.goal?.planLengthWeeks ||
+      planDoc?.athleteProfile?.goal?.planLengthWeeks ||
+      planDoc?.goal?.planLengthWeeks ||
+      weeksForTarget
+  );
+  const explicitTargetDate =
+    parseDateLike(planDoc?.targetDate) ||
+    parseDateLike(planDoc?.eventDate) ||
+    parseDateLike(planDoc?.plan?.goal?.targetDate) ||
+    parseDateLike(planDoc?.athleteProfile?.goal?.targetDate) ||
+    parseDateLike(planDoc?.goal?.targetDate);
+  if (explicitTargetDate && Number.isFinite(requestedWeeks) && requestedWeeks > 0) {
+    return startOfISOWeek(addDays(explicitTargetDate, -((Math.round(requestedWeeks) - 1) * 7)));
+  }
+
   const planId = String(planDoc?.id || "").trim();
   const anchors = new Map();
 
@@ -452,8 +606,6 @@ function resolvePlanStart(planDoc, sessionLogMap = {}) {
   }
 
   const fallback =
-    parseDateLike(planDoc?.startDate) ||
-    parseDateLike(planDoc?.plan?.startDate) ||
     parseDateLike(planDoc?.createdAt) ||
     new Date();
   return startOfISOWeek(fallback);
@@ -839,6 +991,22 @@ export function buildPlannedTrainSessionPayload({
     payload.linkedActivity = linkedActivity;
   }
 
+  const completionAnalysis =
+    status === "completed"
+      ? buildRunCompletionAnalysisForRecord({
+          planDoc,
+          plannedSession: session,
+          completedActivity: {
+            ...payload,
+            ...overrides,
+            ...(linkedActivity ? { linkedActivity } : {}),
+          },
+        })
+      : null;
+  if (completionAnalysis) {
+    payload.completionAnalysis = completionAnalysis;
+  }
+
   return {
     ...payload,
     ...overrides,
@@ -940,6 +1108,7 @@ export async function linkExternalActivityToPlannedSession({
       source: "linked_activity",
       notes: trimmedNotes || null,
       linkedActivity,
+      ...(plannedPayload.completionAnalysis ? { completionAnalysis: plannedPayload.completionAnalysis } : {}),
       lastTrainSessionId: trainSessionRef.id,
       updatedAt: serverTimestamp(),
       statusAt: serverTimestamp(),
@@ -950,6 +1119,29 @@ export async function linkExternalActivityToPlannedSession({
     },
     { merge: true }
   );
+
+  const activitySource = String(linkedActivity?.source || linkedActivity?.collection || "").trim();
+  const activityDocId = String(
+    linkedActivity?.sourceDocId ||
+      linkedActivity?.id ||
+      linkedActivity?.activityId ||
+      linkedActivity?.reference ||
+      ""
+  ).trim();
+  if (activitySource && activityDocId) {
+    batch.set(
+      doc(db, "users", uid, activitySource, activityDocId),
+      {
+        linkedSessionKey: encodedKey,
+        linkedTrainSessionId: trainSessionRef.id,
+        linkStatus: "linked",
+        ...(plannedPayload.completionAnalysis ? { completionAnalysis: plannedPayload.completionAnalysis } : {}),
+        linkedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
 
   await batch.commit();
   await refreshTrainingWidgetSnapshotForUser({
@@ -962,6 +1154,7 @@ export async function linkExternalActivityToPlannedSession({
   return {
     trainSessionId: trainSessionRef.id,
     sessionLogRef,
+    completionAnalysis: plannedPayload.completionAnalysis || null,
   };
 }
 
@@ -985,6 +1178,22 @@ export async function attachExternalActivityToTrainSession({
 
   const existingSession = trainSessionSnap.data() || {};
   const trimmedNotes = String(notes || "").trim();
+  const encodedKey = String(existingSession?.sessionKey || "").trim();
+  let completionAnalysis = null;
+  if (encodedKey) {
+    try {
+      const plannedRecord = await loadPlannedSessionRecord(uid, encodedKey);
+      completionAnalysis = buildRunCompletionAnalysisForRecord({
+        planDoc: plannedRecord?.planDoc,
+        plannedSession: plannedRecord?.session,
+        completedActivity: {
+          ...existingSession,
+          ...payloadOverrides,
+          linkedActivity,
+        },
+      });
+    } catch {}
+  }
 
   const batch = writeBatch(db);
   batch.set(
@@ -992,6 +1201,7 @@ export async function attachExternalActivityToTrainSession({
     {
       linkedActivity,
       status: "completed",
+      ...(completionAnalysis ? { completionAnalysis } : {}),
       completedAt: serverTimestamp(),
       skippedAt: deleteField(),
       updatedAt: serverTimestamp(),
@@ -1001,7 +1211,6 @@ export async function attachExternalActivityToTrainSession({
     { merge: true }
   );
 
-  const encodedKey = String(existingSession?.sessionKey || "").trim();
   if (encodedKey) {
     const { planId, weekIndex, dayIndex, sessionIndex } = decodeSessionKey(encodedKey);
     const sessionLogRef = doc(db, "users", uid, "sessionLogs", encodedKey);
@@ -1021,6 +1230,7 @@ export async function attachExternalActivityToTrainSession({
         date: existingSession?.date || null,
         linkedActivity,
         status: "completed",
+        ...(completionAnalysis ? { completionAnalysis } : {}),
         lastTrainSessionId: trainSessionRef.id,
         updatedAt: serverTimestamp(),
         statusAt: serverTimestamp(),
@@ -1028,6 +1238,29 @@ export async function attachExternalActivityToTrainSession({
         skippedAt: deleteField(),
         ...(trimmedNotes ? { notes: trimmedNotes } : {}),
         ...sessionLogOverrides,
+      },
+      { merge: true }
+    );
+  }
+
+  const activitySource = String(linkedActivity?.source || linkedActivity?.collection || "").trim();
+  const activityDocId = String(
+    linkedActivity?.sourceDocId ||
+      linkedActivity?.id ||
+      linkedActivity?.activityId ||
+      linkedActivity?.reference ||
+      ""
+  ).trim();
+  if (activitySource && activityDocId) {
+    batch.set(
+      doc(db, "users", uid, activitySource, activityDocId),
+      {
+        linkedSessionKey: encodedKey || existingSession?.sessionKey || null,
+        linkedTrainSessionId: trainSessionRef.id,
+        linkStatus: "linked",
+        ...(completionAnalysis ? { completionAnalysis } : {}),
+        linkedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
       },
       { merge: true }
     );
@@ -1044,5 +1277,6 @@ export async function attachExternalActivityToTrainSession({
   return {
     trainSessionId: trainSessionRef.id,
     sessionKey: encodedKey || null,
+    completionAnalysis,
   };
 }

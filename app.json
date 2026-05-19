@@ -69,6 +69,8 @@
           "photosPermission": "Allow Be to choose photos for nutrition logging and your profile."
         }
       ],
+      "expo-image",
+      "expo-web-browser",
       [
         "./plugins/withTodayRunWidget",
         {

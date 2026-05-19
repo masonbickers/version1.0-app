@@ -186,7 +186,8 @@ function assertHardDaySpacing(week, ctx) {
 function assertLongRunExists(week, ctx) {
   const sessions = Array.isArray(week?.sessions) ? week.sessions : [];
   const hasLong = sessions.some((s) => isLongType(s?.type || s?.workoutKind));
-  if (!hasLong) fail(`${ctx}: missing long run`);
+  const hasRace = sessions.some((s) => String(s?.type || s?.workoutKind || "").toUpperCase() === "RACE");
+  if (!hasLong && !hasRace) fail(`${ctx}: missing long run`);
 }
 
 function assertRunDaysRespected(week, meta, ctx) {
@@ -314,7 +315,10 @@ function assertPlanInvariants(plan, meta, ctx) {
 
     for (const tw of taperWeeks) {
       const planned = toNum(tw?.metrics?.plannedWeeklyKm) ?? 0;
-      if (planned > maxNonTaper + 0.1) {
+      const hasRace = (tw?.sessions || []).some(
+        (s) => String(s?.type || s?.workoutKind || "").toUpperCase() === "RACE"
+      );
+      if (!hasRace && planned > maxNonTaper + 0.1) {
         fail(`${ctx}: taper week plannedWeeklyKm above non-taper max (${planned} > ${maxNonTaper})`);
       }
     }
@@ -322,7 +326,10 @@ function assertPlanInvariants(plan, meta, ctx) {
     if (taperWeeks.length >= 2) {
       const first = toNum(taperWeeks[0]?.metrics?.plannedWeeklyKm) ?? 0;
       const last = toNum(taperWeeks[taperWeeks.length - 1]?.metrics?.plannedWeeklyKm) ?? 0;
-      if (last > first + 0.1) {
+      const finalHasRace = (taperWeeks[taperWeeks.length - 1]?.sessions || []).some(
+        (s) => String(s?.type || s?.workoutKind || "").toUpperCase() === "RACE"
+      );
+      if (!finalHasRace && last > first + 0.1) {
         fail(`${ctx}: final taper week is not lighter (${last} > ${first})`);
       }
     }

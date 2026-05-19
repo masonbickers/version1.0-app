@@ -2,7 +2,7 @@
 import { Feather } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -75,10 +75,26 @@ const DAYS_PER_WEEK_OPTIONS = [2, 3, 4, 5, 6, 7];
 const PLAN_LENGTH_OPTIONS = [6, 8, 10, 12, 16, 20];
 const GOAL_TIME_HOUR_OPTIONS = Array.from({ length: 7 }, (_, i) => i);
 const GOAL_TIME_MIN_SEC_OPTIONS = Array.from({ length: 60 }, (_, i) => i);
+const TIME_WHEEL_ITEM_HEIGHT = 46;
+const TIME_WHEEL_VISIBLE_ITEMS = 5;
 
 const PRIMARY = "#E6FF3B";
 const SILVER_LIGHT = "#F3F4F6";
 const SILVER_MEDIUM = "#E1E3E8";
+const RUN_PLAN_VERSION = "run-plan-v1";
+const RULES_ENGINE_VERSION = "rules-engine-v1";
+const TEMPLATE_VERSION = "gold-template-v1";
+const RAW_DEBUG_PLAN_FIELDS = new Set([
+  "debug",
+  "paceTrace",
+  "validationTrace",
+  "missedSessionRepairTrace",
+  "readinessAdjustmentTrace",
+  "strengthAdjustmentTrace",
+  "weeklyRecalculationTrace",
+  "workoutSelectionTrace",
+  "decisionTrace",
+]);
 
 const STEPS = [
   "Goal",
@@ -88,6 +104,7 @@ const STEPS = [
   "Birthday",
   "Gender",
   "Weekly volume",
+  "Longest run",
   "Runs per week",
   "Available days",
   "Long run day",
@@ -178,6 +195,48 @@ function pickStockTemplateId({ distance, weeks, runs }) {
   return nearest?.id || null;
 }
 
+function getLowFrequencyGoalWarning(distance, sessionsPerWeek) {
+  const distanceKey = String(distance || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, " ");
+  const runs = Math.round(Number(sessionsPerWeek) || 0);
+  if (!runs) return null;
+
+  const isHalf = distanceKey.includes("half");
+  const isMarathon = distanceKey.includes("marathon") && !isHalf;
+  const isUltra = distanceKey.includes("ultra");
+
+  if (isHalf && runs === 1) {
+    return {
+      code: "LOW_FREQUENCY_FOR_GOAL",
+      severity: "warning",
+      recommendedSessionsPerWeek: 3,
+      message: "A half marathon plan is ambitious with 1 run per week. Add more run days or choose a shorter goal.",
+    };
+  }
+
+  if (isMarathon && runs <= 2) {
+    return {
+      code: "LOW_FREQUENCY_FOR_GOAL",
+      severity: "warning",
+      recommendedSessionsPerWeek: 3,
+      message: "A marathon plan is ambitious with fewer than 3 runs per week. Add more run days or choose a shorter goal.",
+    };
+  }
+
+  if (isUltra && runs < 4) {
+    return {
+      code: "LOW_FREQUENCY_FOR_GOAL",
+      severity: "warning",
+      recommendedSessionsPerWeek: 4,
+      message: "An ultra plan is ambitious with fewer than 4 runs per week. Add more run days or choose a shorter goal.",
+    };
+  }
+
+  return null;
+}
+
 /* ------------------------------------------------------------------ */
 /* HELPERS                                                            */
 /* ------------------------------------------------------------------ */
@@ -245,6 +304,11 @@ function goalDistanceToKm(distanceLabel) {
   if (raw === "10k") return 10;
   if (raw.includes("half")) return 21.0975;
   if (raw.includes("marathon")) return 42.195;
+  const kmMatch = raw.match(/^(\d+(?:\.\d+)?)\s*k(?:m)?$/);
+  if (kmMatch) {
+    const km = Number(kmMatch[1]);
+    return Number.isFinite(km) && km > 0 ? km : null;
+  }
   return null;
 }
 
@@ -263,6 +327,14 @@ function formatGoalTimeString(totalSeconds) {
     return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatPacePerKm(totalSeconds) {
+  const sec = Math.round(Number(totalSeconds));
+  if (!Number.isFinite(sec) || sec <= 0) return "";
+  const minutes = Math.floor(sec / 60);
+  const seconds = sec % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}/km`;
 }
 
 function derivePaceTargetsFromGoalTime({ goalDistance, goalTargetTimeSec, difficulty }) {
@@ -314,6 +386,22 @@ function uniqueInOrder(arr) {
     out.push(x);
   }
   return out;
+}
+
+function cleanFirestoreValue(value, { inArray = false } = {}) {
+  if (value === undefined) return inArray ? null : undefined;
+  if (value === null) return null;
+  if (Array.isArray(value)) {
+    return value.map((item) => cleanFirestoreValue(item, { inArray: true }));
+  }
+  if (Object.prototype.toString.call(value) === "[object Object]") {
+    return Object.entries(value).reduce((acc, [key, child]) => {
+      const cleaned = cleanFirestoreValue(child);
+      if (cleaned !== undefined) acc[key] = cleaned;
+      return acc;
+    }, {});
+  }
+  return value;
 }
 
 function ageFromDate(birthDate) {
@@ -424,9 +512,14 @@ function normaliseSessionForUI(s) {
       : null;
 
   const distanceKm = km != null && Number.isFinite(km) ? Math.round(km * 10) / 10 : undefined;
+  const displaySteps = Array.isArray(s?.workoutSteps)
+    ? s.workoutSteps
+    : Array.isArray(s?.workout?.workoutSteps)
+    ? s.workout.workoutSteps
+    : [];
   const rootSteps = Array.isArray(s?.steps) ? s.steps : [];
   const workoutSteps = Array.isArray(s?.workout?.steps) ? s.workout.steps : [];
-  const steps = rootSteps.length ? rootSteps : workoutSteps;
+  const steps = displaySteps.length ? displaySteps : rootSteps.length ? rootSteps : workoutSteps;
 
   const workout = {
     ...(s?.workout || {}),
@@ -448,7 +541,7 @@ function normaliseSessionForUI(s) {
     type: sourceType || (isRunLike ? "RUN" : isStrengthLike ? "STRENGTH" : "TRAINING"),
     sessionType: isRunLike ? "run" : isStrengthLike ? "gym" : (s?.sessionType || "training"),
     notes: s?.notes || "",
-    day: s?.day || "Mon",
+    day: s?.day || undefined,
     steps,
     workout,
     targetDurationMin:
@@ -529,9 +622,19 @@ function normaliseGeneratedPlanForApp(generatedPlan) {
         : [];
 
     const sessions = (sessionsRaw.length ? sessionsRaw : derivedFromDays).map(normaliseSessionForUI);
+    const hasPreservedTemplateSessions = sessions.some((s) =>
+      Boolean(
+        s?.preserveTemplateStructure ||
+          s?.meta?.preserveTemplateStructure ||
+          s?.workout?.preserveTemplateStructure ||
+          s?.workout?.meta?.preserveTemplateStructure
+      )
+    );
 
     const days =
-      Array.isArray(w?.days) && w.days.length
+      hasPreservedTemplateSessions
+        ? weekToDays({ ...w, sessions })
+        : Array.isArray(w?.days) && w.days.length
         ? w.days.map((d) => ({
             ...d,
             day: d?.day,
@@ -558,6 +661,44 @@ function normaliseGeneratedPlanForApp(generatedPlan) {
     ...restPlan,
     name: restPlan?.name || "Run plan",
     weeks,
+  };
+}
+
+function stripRawDebugFields(value) {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(stripRawDebugFields);
+
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (RAW_DEBUG_PLAN_FIELDS.has(key)) continue;
+    out[key] = stripRawDebugFields(child);
+  }
+  return out;
+}
+
+function buildGeneratedPlanVersionFields(generatedPlan, athleteProfile) {
+  const generatedAt =
+    typeof generatedPlan?.generatedAt === "string" && generatedPlan.generatedAt.trim()
+      ? generatedPlan.generatedAt
+      : new Date().toISOString();
+
+  return {
+    planSource: generatedPlan?.planSource || "rules_engine",
+    templateId: generatedPlan?.templateId || null,
+    templateVersion: generatedPlan?.templateVersion || (generatedPlan?.templateId ? TEMPLATE_VERSION : null),
+    planVersion: generatedPlan?.planVersion || RUN_PLAN_VERSION,
+    rulesEngineVersion: generatedPlan?.rulesEngineVersion || RULES_ENGINE_VERSION,
+    generatedAt,
+    inputProfileSnapshot: generatedPlan?.inputProfileSnapshot || athleteProfile || null,
+    generatorFeatures: generatedPlan?.generatorFeatures || null,
+    validationSummary: generatedPlan?.validationSummary || null,
+    goalRealism: generatedPlan?.goalRealism || null,
+    paceModel: generatedPlan?.paceModel || null,
+    planExplanation: generatedPlan?.planExplanation || null,
+    weeklyRecalculation: generatedPlan?.weeklyRecalculation || null,
+    readinessAdjustment: generatedPlan?.readinessAdjustment || null,
+    strengthAdjustment: generatedPlan?.strengthAdjustment || null,
+    missedSessionRepair: generatedPlan?.missedSessionRepair || null,
   };
 }
 
@@ -647,6 +788,84 @@ function Divider({ theme }) {
   );
 }
 
+function TimeWheelColumn({ values, selectedValue, onChange, suffix, theme }) {
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    const index = Math.max(0, values.findIndex((value) => value === selectedValue));
+    scrollRef.current?.scrollTo({ y: index * TIME_WHEEL_ITEM_HEIGHT, animated: false });
+  }, [selectedValue, values]);
+
+  const settleSelection = (event) => {
+    const y = event?.nativeEvent?.contentOffset?.y || 0;
+    const rawIndex = Math.round(y / TIME_WHEEL_ITEM_HEIGHT);
+    const index = Math.max(0, Math.min(values.length - 1, rawIndex));
+    const nextValue = values[index];
+    if (nextValue !== selectedValue) onChange(nextValue);
+    scrollRef.current?.scrollTo({ y: index * TIME_WHEEL_ITEM_HEIGHT, animated: true });
+  };
+
+  return (
+    <View
+      style={[
+        styles.timeWheelColumn,
+        { height: TIME_WHEEL_ITEM_HEIGHT * TIME_WHEEL_VISIBLE_ITEMS },
+      ]}
+    >
+      <View
+        pointerEvents="none"
+        style={[
+          styles.timeWheelHighlight,
+          {
+            top: TIME_WHEEL_ITEM_HEIGHT * 2,
+            height: TIME_WHEEL_ITEM_HEIGHT,
+            backgroundColor: theme.isDark ? "#242424" : "#E5E7EB",
+          },
+        ]}
+      />
+      <ScrollView
+        ref={scrollRef}
+        showsVerticalScrollIndicator={false}
+        snapToInterval={TIME_WHEEL_ITEM_HEIGHT}
+        decelerationRate="fast"
+        nestedScrollEnabled
+        onMomentumScrollEnd={settleSelection}
+        onScrollEndDrag={settleSelection}
+        contentContainerStyle={{
+          paddingVertical: TIME_WHEEL_ITEM_HEIGHT * 2,
+        }}
+      >
+        {values.map((value) => {
+          const active = value === selectedValue;
+          const distance = Math.abs(value - selectedValue);
+          return (
+            <TouchableOpacity
+              key={`${suffix}-${value}`}
+              activeOpacity={0.85}
+              onPress={() => onChange(value)}
+              style={styles.timeWheelItem}
+            >
+              <Text
+                style={[
+                  styles.timeWheelText,
+                  {
+                    color: active ? theme.text : theme.subtext,
+                    opacity: active ? 1 : distance === 1 ? 0.48 : 0.22,
+                    fontWeight: active ? "900" : "800",
+                  },
+                ]}
+              >
+                {value}
+                {suffix}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
 function OptionRow({
   title,
   subtitle,
@@ -731,15 +950,15 @@ export default function CreateRunPlan() {
   const [planLengthWeeks, setPlanLengthWeeks] = useState(12);
 
   const [goalTimeEnabled, setGoalTimeEnabled] = useState(false);
-  const [goalTimeHours, setGoalTimeHours] = useState(0);
-  const [goalTimeMinutes, setGoalTimeMinutes] = useState(50);
-  const [goalTimeSeconds, setGoalTimeSeconds] = useState(0);
+  const [goalTimeInput, setGoalTimeInput] = useState("50:00");
 
   const [experienceLevel, setExperienceLevel] = useState("Some experience");
   const [birthDate, setBirthDate] = useState(null);
   const [showBirthDatePicker, setShowBirthDatePicker] = useState(false);
   const [gender, setGender] = useState(null);
   const [currentWeeklyDistance, setCurrentWeeklyDistance] = useState("");
+  const [currentLongestRunDistance, setCurrentLongestRunDistance] = useState("");
+  const [showPaceDetails, setShowPaceDetails] = useState(false);
   const [thresholdPacePerKm, setThresholdPacePerKm] = useState("");
   const [fiveKTime, setFiveKTime] = useState("");
   const [tenKTime, setTenKTime] = useState("");
@@ -778,8 +997,32 @@ export default function CreateRunPlan() {
   const effectiveStartDate = formatDateYYYYMMDD(planStartDate);
   const effectiveTargetDate = raceDate ? formatDateYYYYMMDD(raceDate) : null;
   const hasTargetDate = !!raceDate;
-  const goalTargetTimeSec = goalTimeEnabled ? goalTimeHours * 3600 + goalTimeMinutes * 60 + goalTimeSeconds : 0;
+  const goalTargetTimeSec = goalTimeEnabled ? parseDurationToSeconds(goalTimeInput) || 0 : 0;
   const goalTargetTimeValue = goalTimeEnabled ? formatGoalTimeString(goalTargetTimeSec) : "";
+  const goalTimeParts = useMemo(() => {
+    const total = Math.max(0, goalTargetTimeSec || parseDurationToSeconds(goalTimeInput) || 0);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+    return { hours, minutes, seconds };
+  }, [goalTargetTimeSec, goalTimeInput]);
+
+  const goalAveragePace = useMemo(() => {
+    const km = goalDistanceToKm(normalisedGoalDistance);
+    if (!Number.isFinite(km) || km <= 0 || !goalTargetTimeSec) return "";
+    return formatPacePerKm(goalTargetTimeSec / km);
+  }, [normalisedGoalDistance, goalTargetTimeSec]);
+
+  const setGoalTimePart = (part, value) => {
+    const next = {
+      hours: goalTimeParts.hours,
+      minutes: goalTimeParts.minutes,
+      seconds: goalTimeParts.seconds,
+      [part]: value,
+    };
+    const total = next.hours * 3600 + next.minutes * 60 + next.seconds;
+    setGoalTimeInput(formatGoalTimeString(total));
+  };
   const timelineDatesValid =
     !hasTargetDate ||
     !raceDate ||
@@ -800,6 +1043,12 @@ export default function CreateRunPlan() {
     weeklyDistanceInput.length > 0 &&
     Number.isFinite(weeklyDistanceValue) &&
     (weeklyDistanceValue > 0 || (allowsZeroWeeklyDistance && weeklyDistanceValue >= 0));
+  const longestRunInput = String(currentLongestRunDistance || "").trim();
+  const longestRunValue = Number(longestRunInput);
+  const hasValidLongestRunDistance =
+    longestRunInput.length > 0 &&
+    Number.isFinite(longestRunValue) &&
+    (longestRunValue > 0 || (allowsZeroWeeklyDistance && longestRunValue >= 0));
 
   const birthAgeYears = useMemo(() => ageFromDate(birthDate), [birthDate]);
 
@@ -846,7 +1095,6 @@ export default function CreateRunPlan() {
     const hasEnoughAvailableDays = orderedRunDays.length >= clampInt(daysPerWeek, 2, 7);
     const longDayOk = orderedRunDays.includes(longRunDay);
     const goalOk = Boolean(goalType && normalisedGoalDistance && experienceLevel && daysPerWeek);
-    const raceNameOk = goalType !== "race" || String(targetEventName || "").trim().length > 0;
     const lengthOk = !hasTargetDate ? !!planLengthWeeks : true;
     const goalTimeOk = !goalTimeEnabled || goalTargetTimeSec > 0;
     const difficultyOk = Boolean(difficulty);
@@ -854,8 +1102,8 @@ export default function CreateRunPlan() {
 
     return Boolean(
       goalOk &&
-        raceNameOk &&
         hasValidWeeklyDistance &&
+        hasValidLongestRunDistance &&
         hasEnoughAvailableDays &&
         longDayOk &&
         birthdayOk &&
@@ -871,8 +1119,8 @@ export default function CreateRunPlan() {
     daysPerWeek,
     orderedRunDays,
     longRunDay,
-    targetEventName,
     hasValidWeeklyDistance,
+    hasValidLongestRunDistance,
     birthAgeYears,
     hasTargetDate,
     planLengthWeeks,
@@ -881,6 +1129,11 @@ export default function CreateRunPlan() {
     goalTargetTimeSec,
     difficulty,
   ]);
+
+  const lowFrequencyGoalWarning = useMemo(
+    () => getLowFrequencyGoalWarning(normalisedGoalDistance, daysPerWeek),
+    [normalisedGoalDistance, daysPerWeek]
+  );
 
   useEffect(() => {
     const selectedRaceNameRaw = params?.selectedRaceName;
@@ -930,8 +1183,7 @@ export default function CreateRunPlan() {
         const needsLength = !hasTargetDate;
         const lengthOk = needsLength ? !!planLengthWeeks : true;
         const distanceOk = Boolean(normalisedGoalDistance);
-        const raceNameOk = goalType !== "race" || String(targetEventName || "").trim().length > 0;
-        return Boolean(lengthOk && timelineDatesValid && distanceOk && raceNameOk);
+        return Boolean(lengthOk && timelineDatesValid && distanceOk);
       }
       case 2:
         return !goalTimeEnabled || (Number.isFinite(goalTargetTimeSec) && goalTargetTimeSec > 0);
@@ -944,12 +1196,14 @@ export default function CreateRunPlan() {
       case 6:
         return hasValidWeeklyDistance;
       case 7:
-        return Boolean(daysPerWeek);
+        return hasValidLongestRunDistance;
       case 8:
-        return orderedRunDays.length >= clampInt(daysPerWeek, 2, 7);
+        return Boolean(daysPerWeek);
       case 9:
-        return orderedRunDays.includes(longRunDay);
+        return orderedRunDays.length >= clampInt(daysPerWeek, 2, 7);
       case 10:
+        return orderedRunDays.includes(longRunDay);
+      case 11:
         return Boolean(difficulty);
       default:
         return true;
@@ -991,8 +1245,24 @@ export default function CreateRunPlan() {
     }
   };
 
-  async function generateRunPlanOnServer(athleteProfile) {
-    const path = "/generate-run?allowDefaults=1";
+  const confirmLowFrequencyGoal = async (warning) => {
+    if (!warning?.message) return true;
+    return await new Promise((resolve) => {
+      Alert.alert(
+        "Check run frequency",
+        warning.message,
+        [
+          { text: "Go back", style: "cancel", onPress: () => resolve(false) },
+          { text: "Continue anyway", onPress: () => resolve(true) },
+        ]
+      );
+    });
+  };
+
+  async function generateRunPlanOnServer(athleteProfile, options = {}) {
+    const query = new URLSearchParams({ allowDefaults: "1" });
+    if (options.allowGoalRisk) query.set("allowGoalRisk", "1");
+    const path = `/generate-run?${query.toString()}`;
     const baseApiUrl = String(API_URL || "").replace(/\/$/, "");
     const authHeaders = await getJsonAuthHeaders();
 
@@ -1079,6 +1349,9 @@ export default function CreateRunPlan() {
 
     const okToReplace = await confirmReplaceActivePlan(uid);
     if (!okToReplace) return;
+
+    const okWithFrequency = await confirmLowFrequencyGoal(lowFrequencyGoalWarning);
+    if (!okWithFrequency) return;
 
     if (!timelineDatesValid) {
       Alert.alert("Invalid timeline", "Your plan start date must be on or before your race date.");
@@ -1169,14 +1442,7 @@ export default function CreateRunPlan() {
       goalType === "return" ? 4 : goalType === "start" ? 6 : goalType === "general" ? 8 : 0;
     const weeklyKmRaw = hasValidWeeklyDistance ? weeklyDistanceValue : 0;
     const weeklyKmNum = Math.round(Math.max(weeklyKmRaw, weeklyBaselineKm) * 10) / 10;
-    const longestRunFloorKm =
-      goalType === "return" ? 1.5 : goalType === "start" ? 2 : goalType === "general" ? 2.5 : 3;
-    const longestRunEstimatedKm = Math.round(
-      Math.min(
-        Math.max(longestRunFloorKm, weeklyKmNum * 0.35),
-        Math.max(longestRunFloorKm, weeklyKmNum * 0.5)
-      ) * 10
-    ) / 10;
+    const longestRunKmNum = Math.round(Math.max(0, longestRunValue || 0) * 10) / 10;
 
     const athleteProfile = {
       goal: {
@@ -1200,7 +1466,7 @@ export default function CreateRunPlan() {
       },
       current: {
         weeklyKm: weeklyKmNum,
-        longestRunKm: longestRunEstimatedKm,
+        longestRunKm: longestRunKmNum,
         experience: experienceLevel,
         age: birthAgeYears,
         recentTimes: {
@@ -1279,11 +1545,18 @@ export default function CreateRunPlan() {
 
     setLoading(true);
     try {
-      const generatedPlanRaw = await generateRunPlanOnServer(athleteProfile);
+      const generatedPlanRaw = await generateRunPlanOnServer(athleteProfile, {
+        allowGoalRisk: Boolean(lowFrequencyGoalWarning),
+      });
       const generatedPlan = normaliseGeneratedPlanForApp(generatedPlanRaw);
+      const planVersionFields = buildGeneratedPlanVersionFields(generatedPlan, athleteProfile);
+      const planForSave = stripRawDebugFields({
+        ...generatedPlan,
+        ...planVersionFields,
+      });
 
-      const weeksCount = generatedPlan?.weeks?.length || 0;
-      const week0 = generatedPlan?.weeks?.[0];
+      const weeksCount = planForSave?.weeks?.length || 0;
+      const week0 = planForSave?.weeks?.[0];
 
       const week0Sessions =
         (week0?.sessions?.length || 0) +
@@ -1292,8 +1565,18 @@ export default function CreateRunPlan() {
           : 0);
 
       if (!weeksCount || !week0Sessions) {
-        console.log("[create-run] EMPTY PLAN RETURNED", { weeksCount, week0Sessions, generatedPlan });
+        console.log("[create-run] EMPTY PLAN RETURNED", { weeksCount, week0Sessions, generatedPlan: planForSave });
         throw new Error("Your plan generator returned an empty schedule. The plan was not saved.");
+      }
+
+      const professionalReview = planForSave?.professionalReview || planForSave?.meta?.professionalReview || null;
+      if (professionalReview?.status === "not_approved") {
+        const firstIssue = Array.isArray(professionalReview.issues) ? professionalReview.issues[0] : null;
+        throw new Error(
+          firstIssue?.recommendation ||
+            firstIssue?.message ||
+            "This plan failed professional training guardrails. Adjust the goal, weekly volume, or run frequency and try again."
+        );
       }
 
       const metaName = targetEventName
@@ -1304,23 +1587,43 @@ export default function CreateRunPlan() {
         kind: "run",
         source: "generate-run",
         status: "generated",
+        startDate: effectiveStartDate,
+        weekStartDate: effectiveStartDate,
+        targetDate: targetEventDate,
+        eventDate: targetEventDate,
+        planLengthWeeks: Number(computedWeeks) || Number(planLengthWeeks) || 12,
+        ...planVersionFields,
         updatedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
         meta: {
-          name: generatedPlan?.name || metaName,
+          name: planForSave?.name || metaName,
           primaryActivity: "Run",
           planMetricPreference: "time",
+          startDate: effectiveStartDate,
+          targetDate: targetEventDate,
           templateId: pickedTemplateId || null,
+          planSource: planVersionFields.planSource,
+          generatedTemplateId: planVersionFields.templateId,
+          planVersion: planVersionFields.planVersion,
+          rulesEngineVersion: planVersionFields.rulesEngineVersion,
+          templateVersion: planVersionFields.templateVersion,
+          generatedAt: planVersionFields.generatedAt,
+          generatorFeatures: planVersionFields.generatorFeatures,
+          qualityWarnings: planForSave?.qualityWarnings || (lowFrequencyGoalWarning ? [lowFrequencyGoalWarning] : []),
+          professionalReview,
         },
         athleteProfile,
-        plan: generatedPlan,
+        plan: planForSave,
+        qualityWarnings: planForSave?.qualityWarnings || (lowFrequencyGoalWarning ? [lowFrequencyGoalWarning] : []),
+        professionalReview,
         debug: { weeks: weeksCount, week0Sessions },
       });
 
-      const planRef = await addDoc(collection(db, "users", uid, "plans"), planDoc);
+      const planDocForSave = cleanFirestoreValue(planDoc);
+      const planRef = await addDoc(collection(db, "users", uid, "plans"), planDocForSave);
       await publishTrainingWidgetSnapshotFromPlan({
         userId: uid,
-        planDoc: { id: planRef.id, ...planDoc },
+        planDoc: { id: planRef.id, ...planDocForSave },
         reason: "plan_saved",
       }).catch((error) => {
         console.warn("[widgets] plan save snapshot failed:", error?.message || error);
@@ -1328,9 +1631,9 @@ export default function CreateRunPlan() {
 
       Alert.alert(
         "Plan created",
-        "Your run plan has been saved and is now visible on the Train page."
+        "Your run plan has been saved with coach notes and safety guidance."
       );
-      router.replace("/train");
+      router.replace({ pathname: "/train/view-plan", params: { planId: planRef.id } });
     } catch (e) {
       console.log("[create-run] generate/save error:", e);
       Alert.alert("Error", e?.message || "Something went wrong generating or saving your plan.");
@@ -1338,6 +1641,37 @@ export default function CreateRunPlan() {
       setLoading(false);
     }
   };
+
+  const isLastStep = step === STEPS.length - 1;
+  const stepReady = isStepValid(step);
+
+  const stepFeedback = useMemo(() => {
+    if (stepReady) {
+      if (isLastStep) return canSubmit ? "Ready to generate your plan." : "Finish the required details to generate.";
+      return "One question per page for a fast setup.";
+    }
+
+    switch (step) {
+      case 1:
+        return hasTargetDate && !timelineDatesValid
+          ? "Race date must be after the plan start date."
+          : "Choose a distance and plan length.";
+      case 2:
+        return "Enter a valid goal time or skip this step.";
+      case 4:
+        return "Select your birth date. You must be 18 or older.";
+      case 6:
+        return "Add your current weekly running distance.";
+      case 7:
+        return "Add your longest recent run distance.";
+      case 9:
+        return `Select at least ${daysPerWeek} available day${daysPerWeek === 1 ? "" : "s"}.`;
+      case 10:
+        return "Choose a long-run day from your available days.";
+      default:
+        return "Complete this question to continue.";
+    }
+  }, [canSubmit, daysPerWeek, hasTargetDate, isLastStep, step, stepReady, timelineDatesValid]);
 
   const summaryText = useMemo(() => {
     const goalLabel = GOAL_TYPE_OPTIONS.find((g) => g.key === goalType)?.title || "Goal";
@@ -1461,11 +1795,14 @@ export default function CreateRunPlan() {
             ]}
             selectionColor={theme.primaryBg}
             cursorColor={theme.primaryBg}
-            placeholder="Race name"
+            placeholder="Race name (optional)"
             placeholderTextColor={theme.subtext}
             value={targetEventName}
             onChangeText={setTargetEventName}
           />
+          <Text style={[styles.helperText, { color: theme.subtext, textAlign: "left", marginTop: 0 }]}>
+            Leave this blank if you want a general {normalisedGoalDistance || "race-distance"} plan.
+          </Text>
         </View>
       ) : null}
 
@@ -1558,61 +1895,48 @@ export default function CreateRunPlan() {
 
       {goalTimeEnabled ? (
         <View style={{ marginTop: 10, gap: 10 }}>
-          <Text style={[styles.label, { color: theme.subtext }]}>Goal time selector</Text>
+          <View style={[styles.timeSelectorCard, { borderColor: theme.border }]}>
+            <View style={styles.timeSelectorHeader}>
+              <Text style={[styles.timeSelectorSentence, { color: theme.subtext }]}>
+                I want to run a{" "}
+                <Text style={{ color: theme.accent }}>{normalisedGoalDistance || "race"}</Text>
+                {" "}in <Text style={{ color: theme.text }}>{goalTargetTimeValue || "00:00"}</Text>
+              </Text>
+              {goalAveragePace ? (
+                <View style={[styles.timePacePill, { borderColor: theme.border, backgroundColor: theme.isDark ? "#242424" : "#E5E7EB" }]}>
+                  <Feather name="activity" size={13} color={theme.accent} />
+                  <Text style={{ color: theme.text, fontSize: 12, fontWeight: "900" }}>
+                    {goalAveragePace}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
 
-          <View style={{ gap: 6 }}>
-            <Text style={[styles.miniLabel, { color: theme.subtext }]}>Hours</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-              {GOAL_TIME_HOUR_OPTIONS.map((h) => (
-                <Chip
-                  key={`h-${h}`}
-                  label={String(h).padStart(2, "0")}
-                  theme={theme}
-                  compact
-                  active={goalTimeHours === h}
-                  onPress={() => setGoalTimeHours(h)}
-                />
-              ))}
-            </ScrollView>
-          </View>
-
-          <View style={{ gap: 6 }}>
-            <Text style={[styles.miniLabel, { color: theme.subtext }]}>Minutes</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-              {GOAL_TIME_MIN_SEC_OPTIONS.map((m) => (
-                <Chip
-                  key={`m-${m}`}
-                  label={String(m).padStart(2, "0")}
-                  theme={theme}
-                  compact
-                  active={goalTimeMinutes === m}
-                  onPress={() => setGoalTimeMinutes(m)}
-                />
-              ))}
-            </ScrollView>
-          </View>
-
-          <View style={{ gap: 6 }}>
-            <Text style={[styles.miniLabel, { color: theme.subtext }]}>Seconds</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-              {GOAL_TIME_MIN_SEC_OPTIONS.map((s) => (
-                <Chip
-                  key={`s-${s}`}
-                  label={String(s).padStart(2, "0")}
-                  theme={theme}
-                  compact
-                  active={goalTimeSeconds === s}
-                  onPress={() => setGoalTimeSeconds(s)}
-                />
-              ))}
-            </ScrollView>
-          </View>
-
-          <View style={[styles.inlineInfo, { borderColor: theme.border, backgroundColor: theme.cardSoft }]}>
-            <Feather name="target" size={14} color={theme.text} />
-            <Text style={{ color: theme.text, fontSize: 12, fontWeight: "800" }}>
-              Goal time: {goalTargetTimeValue || "00:00"}
-            </Text>
+            <View style={styles.timePickerColumns}>
+              <TimeWheelColumn
+                values={GOAL_TIME_HOUR_OPTIONS}
+                selectedValue={goalTimeParts.hours}
+                onChange={(value) => setGoalTimePart("hours", value)}
+                suffix="h"
+                theme={theme}
+              />
+              <Text style={[styles.timeSeparator, { color: theme.subtext }]}>:</Text>
+              <TimeWheelColumn
+                values={GOAL_TIME_MIN_SEC_OPTIONS}
+                selectedValue={goalTimeParts.minutes}
+                onChange={(value) => setGoalTimePart("minutes", value)}
+                suffix="m"
+                theme={theme}
+              />
+              <Text style={[styles.timeSeparator, { color: theme.subtext }]}>:</Text>
+              <TimeWheelColumn
+                values={GOAL_TIME_MIN_SEC_OPTIONS}
+                selectedValue={goalTimeParts.seconds}
+                onChange={(value) => setGoalTimePart("seconds", value)}
+                suffix="s"
+                theme={theme}
+              />
+            </View>
           </View>
         </View>
       ) : null}
@@ -1707,6 +2031,8 @@ export default function CreateRunPlan() {
       <SectionHeader title="Question 7" subtitle="How many km do you currently run per week?" theme={theme} />
 
       <TextInput
+        testID="create-run-weekly-distance-input"
+        accessibilityLabel="Current weekly running distance"
         style={[
           styles.input,
           { borderColor: theme.border, backgroundColor: theme.cardSoft, color: theme.text },
@@ -1721,7 +2047,7 @@ export default function CreateRunPlan() {
       />
 
       <View style={[styles.chipRow, { marginTop: 10 }]}>
-        {[10, 20, 30, 40, 50].map((km) => (
+        {[5, 10, 20, 30, 40, 50].map((km) => (
           <Chip
             key={km}
             label={`${km} km`}
@@ -1733,61 +2059,115 @@ export default function CreateRunPlan() {
         ))}
       </View>
 
-      <Divider theme={theme} />
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={() => setShowPaceDetails((prev) => !prev)}
+        style={[styles.secondaryAction, { borderColor: theme.border, backgroundColor: theme.cardSoft }]}
+      >
+        <Feather name={showPaceDetails ? "chevron-up" : "plus-circle"} size={15} color={theme.text} />
+        <Text style={{ color: theme.text, fontWeight: "800" }}>
+          {showPaceDetails ? "Hide pace details" : "Add pace details"}
+        </Text>
+      </TouchableOpacity>
 
-      <Text style={[styles.label, { color: theme.subtext }]}>Pace anchor (optional, improves pace targets)</Text>
+      {showPaceDetails ? (
+        <>
+          <Divider theme={theme} />
+
+          <Text style={[styles.label, { color: theme.subtext }]}>Pace anchor (optional)</Text>
+          <TextInput
+            style={[
+              styles.input,
+              { borderColor: theme.border, backgroundColor: theme.cardSoft, color: theme.text },
+            ]}
+            selectionColor={theme.primaryBg}
+            cursorColor={theme.primaryBg}
+            placeholder="Threshold pace /km (e.g. 4:45)"
+            placeholderTextColor={theme.subtext}
+            value={thresholdPacePerKm}
+            onChangeText={setThresholdPacePerKm}
+          />
+
+          <View style={{ marginTop: 8, gap: 8 }}>
+            <TextInput
+              style={[
+                styles.input,
+                { borderColor: theme.border, backgroundColor: theme.cardSoft, color: theme.text },
+              ]}
+              selectionColor={theme.primaryBg}
+              cursorColor={theme.primaryBg}
+              placeholder="Recent 5K time (e.g. 24:30)"
+              placeholderTextColor={theme.subtext}
+              value={fiveKTime}
+              onChangeText={setFiveKTime}
+            />
+            <TextInput
+              style={[
+                styles.input,
+                { borderColor: theme.border, backgroundColor: theme.cardSoft, color: theme.text },
+              ]}
+              selectionColor={theme.primaryBg}
+              cursorColor={theme.primaryBg}
+              placeholder="Recent 10K time (e.g. 52:10)"
+              placeholderTextColor={theme.subtext}
+              value={tenKTime}
+              onChangeText={setTenKTime}
+            />
+          </View>
+
+          <Text style={[styles.helperText, { color: theme.subtext }]}>
+            Optional. These help tighten pace zones if you already know them.
+          </Text>
+        </>
+      ) : null}
+    </View>
+  );
+
+  const renderLongestRunStep = () => (
+    <View style={styles.card}>
+      <SectionHeader title="Question 8" subtitle="What is your longest run in the last 4 weeks?" theme={theme} />
+      <Text style={[styles.stepIntro, { color: theme.subtext }]}>
+        This anchors the long-run progression so the plan does not jump too far too soon.
+      </Text>
+
       <TextInput
+        testID="create-run-longest-run-input"
+        accessibilityLabel="Longest recent run distance"
         style={[
           styles.input,
           { borderColor: theme.border, backgroundColor: theme.cardSoft, color: theme.text },
         ]}
         selectionColor={theme.primaryBg}
         cursorColor={theme.primaryBg}
-        placeholder="Threshold pace /km (e.g. 4:45)"
+        placeholder="e.g. 9"
         placeholderTextColor={theme.subtext}
-        value={thresholdPacePerKm}
-        onChangeText={setThresholdPacePerKm}
+        keyboardType="numeric"
+        value={currentLongestRunDistance}
+        onChangeText={setCurrentLongestRunDistance}
       />
-      <Text style={[styles.helperText, { color: theme.subtext }]}>
-        If known, enter your threshold pace as mm:ss per km.
-      </Text>
 
-      <View style={{ marginTop: 8, gap: 8 }}>
-        <TextInput
-          style={[
-            styles.input,
-            { borderColor: theme.border, backgroundColor: theme.cardSoft, color: theme.text },
-          ]}
-          selectionColor={theme.primaryBg}
-          cursorColor={theme.primaryBg}
-          placeholder="Recent 5K time (e.g. 24:30)"
-          placeholderTextColor={theme.subtext}
-          value={fiveKTime}
-          onChangeText={setFiveKTime}
-        />
-        <TextInput
-          style={[
-            styles.input,
-            { borderColor: theme.border, backgroundColor: theme.cardSoft, color: theme.text },
-          ]}
-          selectionColor={theme.primaryBg}
-          cursorColor={theme.primaryBg}
-          placeholder="Recent 10K time (e.g. 52:10)"
-          placeholderTextColor={theme.subtext}
-          value={tenKTime}
-          onChangeText={setTenKTime}
-        />
+      <View style={[styles.chipRow, { marginTop: 10 }]}>
+        {[0, 3, 5, 8, 12, 16, 20, 25].map((km) => (
+          <Chip
+            key={km}
+            label={`${km} km`}
+            theme={theme}
+            compact
+            active={String(currentLongestRunDistance) === String(km)}
+            onPress={() => setCurrentLongestRunDistance(String(km))}
+          />
+        ))}
       </View>
 
       <Text style={[styles.helperText, { color: theme.subtext }]}>
-        5K/10K times are optional and help generate better pace zones.
+        Use your longest comfortable run from recent training, not your all-time best.
       </Text>
     </View>
   );
 
   const renderRunsPerWeekStep = () => (
     <View style={styles.card}>
-      <SectionHeader title="Question 8" subtitle="How many days per week would you like to run?" theme={theme} />
+      <SectionHeader title="Question 9" subtitle="How many days per week would you like to run?" theme={theme} />
       <View style={{ gap: 8 }}>
         {DAYS_PER_WEEK_OPTIONS.map((x) => (
           <OptionRow
@@ -1807,12 +2187,21 @@ export default function CreateRunPlan() {
           Suggested days: {orderedRunDays.join(" · ")}
         </Text>
       </View>
+
+      {lowFrequencyGoalWarning ? (
+        <View style={[styles.inlineWarn, { borderColor: theme.danger, backgroundColor: theme.warnBg }]}>
+          <Feather name="alert-triangle" size={14} color={theme.danger} />
+          <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "700", flex: 1 }}>
+            {lowFrequencyGoalWarning.message}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 
   const renderAvailableDaysStep = () => (
     <View style={styles.card}>
-      <SectionHeader title="Question 9" subtitle="Which days are you free to run?" theme={theme} />
+      <SectionHeader title="Question 10" subtitle="Which days are you free to run?" theme={theme} />
       <Text style={[styles.stepIntro, { color: theme.subtext }]}>
         Select every day available to you. Choose at least {daysPerWeek} day{daysPerWeek === 1 ? "" : "s"}.
       </Text>
@@ -1852,7 +2241,7 @@ export default function CreateRunPlan() {
 
   const renderLongRunDayStep = () => (
     <View style={styles.card}>
-      <SectionHeader title="Question 10" subtitle="Which day should be your long run?" theme={theme} />
+      <SectionHeader title="Question 11" subtitle="Which day should be your long run?" theme={theme} />
       <View style={styles.chipRow}>
         {orderedRunDays.map((d) => (
           <Chip
@@ -1870,7 +2259,7 @@ export default function CreateRunPlan() {
 
   const renderDifficultyStep = () => (
     <View style={styles.card}>
-      <SectionHeader title="Question 11" subtitle="How hard should this block feel?" theme={theme} />
+      <SectionHeader title="Question 12" subtitle="How hard should this block feel?" theme={theme} />
       <View style={{ gap: 8 }}>
         {DIFFICULTY_OPTIONS.map((opt) => (
           <OptionRow
@@ -1883,11 +2272,18 @@ export default function CreateRunPlan() {
           />
         ))}
       </View>
+
+      {lowFrequencyGoalWarning ? (
+        <View style={[styles.inlineWarn, { borderColor: theme.danger, backgroundColor: theme.warnBg }]}>
+          <Feather name="alert-triangle" size={14} color={theme.danger} />
+          <Text style={{ color: theme.danger, fontSize: 12, fontWeight: "700", flex: 1 }}>
+            {lowFrequencyGoalWarning.message}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 
-  const isLastStep = step === STEPS.length - 1;
-  const stepReady = isStepValid(step);
   const nextDisabled = loading || (!stepReady && !isLastStep);
   const generateDisabled = loading || (isLastStep && !canSubmit);
 
@@ -1950,10 +2346,11 @@ export default function CreateRunPlan() {
               {step === 4 && renderBirthdayStep()}
               {step === 5 && renderGenderStep()}
               {step === 6 && renderWeeklyDistanceStep()}
-              {step === 7 && renderRunsPerWeekStep()}
-              {step === 8 && renderAvailableDaysStep()}
-              {step === 9 && renderLongRunDayStep()}
-              {step === 10 && renderDifficultyStep()}
+              {step === 7 && renderLongestRunStep()}
+              {step === 8 && renderRunsPerWeekStep()}
+              {step === 9 && renderAvailableDaysStep()}
+              {step === 10 && renderLongRunDayStep()}
+              {step === 11 && renderDifficultyStep()}
             </View>
           </View>
         </ScrollView>
@@ -2006,11 +2403,7 @@ export default function CreateRunPlan() {
 
             <View style={{ marginTop: 8, flexDirection: "row", justifyContent: "space-between" }}>
               <Text style={{ color: theme.subtext, fontSize: 11 }}>
-                {isLastStep
-                  ? canSubmit
-                    ? "Ready to generate your plan."
-                    : "Finish this question to continue."
-                  : "One question per page for a fast setup."}
+                {stepFeedback}
               </Text>
             </View>
           </View>
@@ -2202,6 +2595,94 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
+  timeSelectorCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 18,
+    paddingVertical: 16,
+    paddingHorizontal: 0,
+    gap: 18,
+  },
+
+  timeSelectorHeader: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+
+  timeSelectorSentence: {
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+
+  timePacePill: {
+    minHeight: 30,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+
+  timePickerColumns: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 10,
+  },
+
+  timeWheelColumn: {
+    flex: 1,
+    maxWidth: 116,
+    overflow: "hidden",
+  },
+
+  timeWheelHighlight: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    borderRadius: 12,
+  },
+
+  timeWheelItem: {
+    height: TIME_WHEEL_ITEM_HEIGHT,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  timeWheelText: {
+    fontSize: 24,
+    lineHeight: 30,
+    textAlign: "center",
+  },
+
+  timeSeparator: {
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: "900",
+  },
+
+  timePickerRow: {
+    gap: 6,
+  },
+
+  timePickerLabel: {
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+
+  timePickerScroll: {
+    gap: 8,
+    paddingRight: 8,
+  },
+
   input: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 14,
@@ -2303,6 +2784,18 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 999,
+  },
+
+  secondaryAction: {
+    marginTop: 10,
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
   },
 
   primaryBtn: {

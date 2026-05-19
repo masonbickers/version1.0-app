@@ -2,7 +2,7 @@
 import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   SafeAreaView,
   ScrollView,
@@ -11,16 +11,19 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { collection, getDocs, limit, orderBy, query } from "firebase/firestore";
 
-import { auth } from "../../../firebaseConfig";
+import { db } from "../../../firebaseConfig";
+import { useAuth } from "../../../providers/AuthProvider";
 import { useTheme } from "../../../providers/ThemeProvider";
 import AccountSheet from "../../../components/AccountSheet";
+import { useHomeDashboardData } from "../../../src/hooks/useHomeDashboardData";
 
 const PRIMARY = "#E6FF3B";
 
 /* ---------------- THEME ---------------- */
 function useScreenTheme() {
-  const { colors } = useTheme();
+  useTheme();
 
   return {
     bg: "#000000", // ✅ page stays pure black
@@ -105,6 +108,125 @@ const clamp = (v, g) => {
   return Math.max(0, Math.min(1, p));
 };
 
+function toMillis(value) {
+  if (!value) return 0;
+  if (typeof value === "number") return value;
+  if (typeof value?.toMillis === "function") return value.toMillis();
+  if (typeof value?.seconds === "number") return value.seconds * 1000;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatUpdatedAt(value) {
+  const ms = toMillis(value);
+  if (!ms) return "";
+  return new Date(ms).toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+}
+
+function pickNumber(...values) {
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return null;
+}
+
+function formatSleep(value) {
+  const minutes =
+    value > 24
+      ? value
+      : value > 0
+        ? value * 60
+        : 0;
+  if (!minutes) return null;
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  return mins ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+function metricValue(metrics, label, fallback = "—") {
+  const match = (Array.isArray(metrics) ? metrics : []).find(
+    (item) => String(item?.label || "").toLowerCase() === label.toLowerCase()
+  );
+  return match?.value || fallback;
+}
+
+function extractGarminHealthSummary(doc) {
+  const payload = doc?.payload || doc?.data || doc?.summary || doc || {};
+  const source = payload?.summary || payload?.dailySummary || payload?.wellnessSummary || payload;
+
+  const sleepMinutes = pickNumber(
+    source.sleepDurationMinutes,
+    source.totalSleepMinutes,
+    source.sleepingSeconds ? source.sleepingSeconds / 60 : null,
+    source.durationInSeconds ? source.durationInSeconds / 60 : null,
+    source.sleepHours
+  );
+  const steps = pickNumber(source.steps, source.totalSteps, source.stepCount);
+  const restingHr = pickNumber(source.restingHeartRate, source.restingHr, source.rhr);
+  const avgStress = pickNumber(source.averageStressLevel, source.avgStressLevel, source.stressLevel, source.stress);
+  const bodyBattery = pickNumber(
+    source.bodyBatteryMostRecentValue,
+    source.bodyBattery,
+    source.bodyBatteryHigh,
+    source.bodyBatteryChargedValue
+  );
+  const hrv = pickNumber(source.hrv, source.hrvMs, source.lastNightAvg);
+  const activeCalories = pickNumber(source.activeKilocalories, source.activeCalories, source.calories);
+
+  const metrics = [
+    sleepMinutes ? { icon: "moon", label: "Sleep", value: formatSleep(sleepMinutes) } : null,
+    restingHr ? { icon: "heart", label: "RHR", value: `${Math.round(restingHr)} bpm` } : null,
+    hrv ? { icon: "activity", label: "HRV", value: `${Math.round(hrv)} ms` } : null,
+    bodyBattery ? { icon: "battery", label: "Battery", value: `${Math.round(bodyBattery)}` } : null,
+    avgStress ? { icon: "zap", label: "Stress", value: `${Math.round(avgStress)}` } : null,
+    steps ? { icon: "map", label: "Steps", value: `${Math.round(steps).toLocaleString()}` } : null,
+    activeCalories ? { icon: "trending-up", label: "Active", value: `${Math.round(activeCalories)} Cal` } : null,
+  ].filter(Boolean);
+
+  if (!metrics.length) return null;
+
+  let guidance = "Use this alongside how you feel before changing today’s training.";
+  if ((sleepMinutes && sleepMinutes < 390) || (avgStress && avgStress >= 70)) {
+    guidance = "Recovery looks pressured. Keep intensity controlled unless you feel unusually good.";
+  } else if ((sleepMinutes && sleepMinutes >= 420) || (bodyBattery && bodyBattery >= 70)) {
+    guidance = "Recovery looks usable. Train as planned if soreness and energy feel normal.";
+  }
+
+  return {
+    dateLabel: formatUpdatedAt(doc?.updatedAt || doc?.fetchedAt || doc?.createdAt || doc?.fetchedAtMs || doc?.updatedAtMs),
+    metrics,
+    guidance,
+  };
+}
+
+async function fetchGarminHealthDocs(uid) {
+  const ref = collection(db, "users", uid, "garmin_health");
+  const querySpecs = [
+    query(ref, orderBy("updatedAt", "desc"), limit(12)),
+    query(ref, orderBy("fetchedAt", "desc"), limit(12)),
+    query(ref, orderBy("fetchedAtMs", "desc"), limit(12)),
+  ];
+  const batches = await Promise.all(
+    querySpecs.map((spec) => getDocs(spec).catch(() => null))
+  );
+  const byId = new Map();
+  batches.forEach((snap) => {
+    snap?.docs?.forEach((item) => {
+      byId.set(item.id, { id: item.id, ...(item.data() || {}) });
+    });
+  });
+  return Array.from(byId.values()).sort(
+    (a, b) =>
+      toMillis(b.updatedAt || b.fetchedAt || b.createdAt || b.fetchedAtMs || b.updatedAtMs) -
+      toMillis(a.updatedAt || a.fetchedAt || a.createdAt || a.fetchedAtMs || a.updatedAtMs)
+  );
+}
+
 function Card({ theme, children, style }) {
   return (
     <LinearGradient
@@ -160,14 +282,125 @@ function ProgressRow({ title, metric, icon, theme }) {
   );
 }
 
+function GarminHealthCard({ summary, theme }) {
+  if (!summary) return null;
+
+  return (
+    <Card theme={theme}>
+      <View style={styles.cardTopRow}>
+        <View style={styles.sectionTitleRow}>
+          <Feather name="watch" size={15} color={theme.primaryBg} />
+          <Text style={styles.cardTitle}>Garmin readiness</Text>
+        </View>
+        {!!summary.dateLabel && (
+          <Text style={{ color: theme.subtext, fontSize: 12, fontWeight: "800" }}>
+            {summary.dateLabel}
+          </Text>
+        )}
+      </View>
+
+      <View style={styles.garminMetricGrid}>
+        {summary.metrics.slice(0, 6).map((metric) => (
+          <View key={`${metric.label}-${metric.value}`} style={styles.garminMetric}>
+            <Feather name={metric.icon} size={14} color={theme.primaryBg} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.statLabel, { color: theme.subtext }]}>{metric.label}</Text>
+              <Text style={[styles.statValue, { color: theme.text }]}>{metric.value}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      <Text style={[styles.garminGuidance, { color: theme.text }]}>
+        {summary.guidance}
+      </Text>
+    </Card>
+  );
+}
+
 /* ---------------- SCREEN ---------------- */
 export default function SummaryIndex() {
   const theme = useScreenTheme();
   const router = useRouter();
+  const { user } = useAuth();
   const [accountOpen, setAccountOpen] = useState(false);
+  const [garminHealthSummary, setGarminHealthSummary] = useState(null);
+  const {
+    loading: dashboardLoading,
+    hasPlan,
+    activePlanName,
+    activePlanCount,
+    primaryActivity,
+    weekLabel,
+    metrics,
+    todayHero,
+    statusLabel,
+  } = useHomeDashboardData();
 
-  const user = auth.currentUser;
   const name = useMemo(() => user?.displayName || mockSummary.name || "You", [user]);
+  const trainingSummary = useMemo(() => {
+    const weekTotal = metricValue(metrics, "Week total");
+    const sessions = metricValue(metrics, "Sessions");
+    const weight = metricValue(metrics, "Weight");
+
+    return {
+      currentPlan: hasPlan
+        ? activePlanName || `${primaryActivity || "Training"} plan`
+        : dashboardLoading
+          ? "Loading active plan"
+          : "No active plan yet",
+      currentWeekLabel: hasPlan ? weekLabel || "This week" : "This week",
+      sessions,
+      weeklyDistance: weekTotal,
+      weeklyMinutes: "—",
+      weight,
+      nextSession: hasPlan
+        ? todayHero?.title || "Open plan"
+        : "Create a plan to see today's session",
+      nextSessionDay: hasPlan
+        ? todayHero?.eyebrow || statusLabel || "Today"
+        : "Not set",
+      planCountLabel:
+        activePlanCount > 1 ? `${activePlanCount} active plans` : "Active plan",
+    };
+  }, [
+    activePlanCount,
+    activePlanName,
+    dashboardLoading,
+    hasPlan,
+    metrics,
+    primaryActivity,
+    statusLabel,
+    todayHero?.eyebrow,
+    todayHero?.title,
+    weekLabel,
+  ]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadGarminHealthSummary() {
+      if (!user?.uid) {
+        setGarminHealthSummary(null);
+        return;
+      }
+
+      try {
+        const docs = await fetchGarminHealthDocs(user.uid);
+        const nextSummary = docs.map(extractGarminHealthSummary).find(Boolean) || null;
+        if (active) setGarminHealthSummary(nextSummary);
+      } catch (error) {
+        console.log("[summary] load Garmin health failed:", error);
+        if (active) setGarminHealthSummary(null);
+      }
+    }
+
+    loadGarminHealthSummary();
+
+    return () => {
+      active = false;
+    };
+  }, [user?.uid]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.bg }}>
@@ -208,24 +441,27 @@ export default function SummaryIndex() {
           <View style={styles.innerPillRow}>
             <StatPill
               icon="activity"
-              value={`${mockSummary.training.workoutsThisWeek}`}
-              label="Workouts"
+              value={hasPlan ? trainingSummary.sessions : `${mockSummary.training.workoutsThisWeek}`}
+              label="Sessions"
               theme={theme}
             />
             <StatPill
               icon="clock"
-              value={`${mockSummary.training.weeklyMinutes}`}
+              value={hasPlan ? trainingSummary.weeklyMinutes : `${mockSummary.training.weeklyMinutes}`}
               label="Minutes"
               theme={theme}
             />
             <StatPill
               icon="map"
-              value={`${mockSummary.training.weeklyDistanceKm.toFixed(1)} km`}
+              value={hasPlan ? trainingSummary.weeklyDistance : `${mockSummary.training.weeklyDistanceKm.toFixed(1)} km`}
               label="Distance"
               theme={theme}
             />
           </View>
         </Card>
+
+        {/* GARMIN READINESS */}
+        <GarminHealthCard summary={garminHealthSummary} theme={theme} />
 
         {/* TRAINING BLOCK */}
         <Card theme={theme}>
@@ -244,18 +480,32 @@ export default function SummaryIndex() {
             </TouchableOpacity>
           </View>
 
-          <Text style={[styles.big, { color: theme.text }]}>{mockSummary.training.currentPlan}</Text>
+          <Text style={[styles.big, { color: theme.text }]}>{trainingSummary.currentPlan}</Text>
           <Text style={{ color: theme.subtext, marginTop: 4 }}>
-            Week {mockSummary.training.currentWeek} of {mockSummary.training.totalWeeks}
+            {dashboardLoading
+              ? "Checking your plan status"
+              : hasPlan
+                ? `${trainingSummary.currentWeekLabel} · ${trainingSummary.planCountLabel}`
+                : "Start a plan to unlock this block"}
           </Text>
 
           {/* ✅ Same Homex pill row here too */}
           <View style={[styles.innerPillRow, { marginTop: 12 }]}>
-            <StatPill icon="activity" value={`${mockSummary.training.workoutsThisWeek}`} label="Workouts" theme={theme} />
-            <StatPill icon="clock" value={`${mockSummary.training.weeklyMinutes}`} label="Minutes" theme={theme} />
+            <StatPill
+              icon="activity"
+              value={hasPlan ? trainingSummary.sessions : `${mockSummary.training.workoutsThisWeek}`}
+              label="Sessions"
+              theme={theme}
+            />
+            <StatPill
+              icon="clock"
+              value={hasPlan ? trainingSummary.weeklyMinutes : `${mockSummary.training.weeklyMinutes}`}
+              label="Minutes"
+              theme={theme}
+            />
             <StatPill
               icon="map"
-              value={`${mockSummary.training.weeklyDistanceKm.toFixed(1)} km`}
+              value={hasPlan ? trainingSummary.weeklyDistance : `${mockSummary.training.weeklyDistanceKm.toFixed(1)} km`}
               label="Distance"
               theme={theme}
             />
@@ -264,18 +514,18 @@ export default function SummaryIndex() {
           <View style={{ marginTop: 12 }}>
             <Text style={[styles.miniHeading, { color: theme.subtext }]}>Next session</Text>
             <Text style={{ color: theme.text, fontWeight: "800", marginTop: 4 }}>
-              {mockSummary.training.nextSessionDay} · {mockSummary.training.nextSession}
+              {trainingSummary.nextSessionDay} · {trainingSummary.nextSession}
             </Text>
           </View>
 
           <TouchableOpacity
-            onPress={() => router.push("/chat")}
+            onPress={() => router.push(hasPlan ? "/chat" : "/train/create-home")}
             style={[styles.primaryBtn, { backgroundColor: theme.primaryBg }]}
             activeOpacity={0.92}
           >
-            <Feather name="message-circle" size={18} color={theme.primaryText} />
+            <Feather name={hasPlan ? "message-circle" : "plus"} size={18} color={theme.primaryText} />
             <Text style={{ fontWeight: "900", color: theme.primaryText }}>
-              Ask coach about this week
+              {hasPlan ? "Ask coach about this week" : "Create a plan"}
             </Text>
           </TouchableOpacity>
         </Card>
@@ -422,6 +672,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  sectionTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
 
   smallPill: {
     flexDirection: "row",
@@ -502,6 +757,29 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: 11,
     marginTop: 1,
+  },
+
+  garminMetricGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  garminMetric: {
+    width: "48%",
+    minHeight: 58,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    padding: 10,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(0,0,0,0.32)",
+  },
+  garminGuidance: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "800",
   },
 
   trendChip: {

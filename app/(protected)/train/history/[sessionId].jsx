@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { auth, db } from "../../../../firebaseConfig";
 import { useTheme } from "../../../../providers/ThemeProvider";
+import { loadPlannedSessionRecord } from "../../../../src/train/utils/sessionRecordHelpers";
 
 const PRIMARY = "#E6FF3B";
 const SILVER_LIGHT = "#F3F4F6";
@@ -126,6 +127,24 @@ function formatStatus(session) {
   return "Saved";
 }
 
+function formatCompletionAnalysisStatus(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "Analysed";
+  return raw
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function completionAnalysisTone(status) {
+  const raw = String(status || "").toLowerCase();
+  if (raw === "completed") return "accent";
+  if (raw === "partial" || raw === "mismatched") return "neutral";
+  if (raw === "missed" || raw === "overdone") return "danger";
+  return "neutral";
+}
+
 function formatCount(value, suffix = "") {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -152,6 +171,16 @@ function formatRpeLabel(value, prefix = "RPE") {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return `${prefix} ${Number.isInteger(n) ? n : n.toFixed(1)}`;
+}
+
+function parsePositiveNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function parsePositiveInt(value) {
+  const n = parsePositiveNumber(value);
+  return n != null ? Math.round(n) : null;
 }
 
 function formatSignedDelta(value, options = {}) {
@@ -270,10 +299,13 @@ function buildDescriptionInsights(description, { isStrengthSession = false } = {
   };
 }
 
-function getStrengthSnapshot(session) {
-  const entries = Array.isArray(session?.strengthLog?.entries)
+function getStrengthSnapshot(session, structureSession = null) {
+  const loggedEntries = Array.isArray(session?.strengthLog?.entries)
     ? session.strengthLog.entries
     : [];
+  const entries = loggedEntries.length
+    ? loggedEntries
+    : buildPlannedStrengthEntries(structureSession || session);
   const loggableEntries = entries.filter((entry) => entry?.isLoggable !== false);
   const loggedExercisesRaw = Number(session?.strengthLog?.loggedExercises);
 
@@ -314,6 +346,78 @@ function getStrengthSnapshot(session) {
     totalReps: totalReps || 0,
     totalVolumeKg: totalVolumeKg ? Number(totalVolumeKg.toFixed(1)) : 0,
   };
+}
+
+function strengthPrescriptionFromItem(item) {
+  return {
+    sets: parsePositiveInt(item?.sets ?? item?.targetSets ?? item?.prescribedSets),
+    reps: parsePositiveInt(item?.reps ?? item?.targetReps ?? item?.prescribedReps),
+    loadKg: parsePositiveNumber(item?.loadKg ?? item?.weightKg ?? item?.prescribedLoadKg),
+    restSec: parsePositiveNumber(item?.restSec ?? item?.restSeconds ?? item?.prescribedRestSec),
+    rpe: parsePositiveNumber(item?.rpe ?? item?.targetRpe ?? item?.prescribedRpe),
+  };
+}
+
+function buildPlannedStrengthEntries(structureSession) {
+  const out = [];
+  const seen = new Set();
+  const addEntry = ({ item, title, blockTitle, id }) => {
+    const cleanedTitle = String(title || item?.title || item?.name || "Exercise").trim();
+    if (!cleanedTitle) return;
+    const cleanedBlock = String(blockTitle || item?.blockTitle || "Main block").trim() || "Main block";
+    const dedupeKey = `${cleanedBlock.toLowerCase()}::${cleanedTitle.toLowerCase()}`;
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    out.push({
+      id: id || item?.id || `planned-${out.length}`,
+      title: cleanedTitle,
+      blockTitle: cleanedBlock,
+      isLoggable: true,
+      prescribed: strengthPrescriptionFromItem(item || {}),
+      performed: {},
+    });
+  };
+
+  const blocks = Array.isArray(structureSession?.blocks) ? structureSession.blocks : [];
+  blocks.forEach((block, blockIdx) => {
+    const blockTitle = String(block?.title || block?.name || block?.kind || `Block ${blockIdx + 1}`).trim();
+    const items = Array.isArray(block?.items)
+      ? block.items
+      : Array.isArray(block?.exercises)
+      ? block.exercises
+      : [];
+
+    if (!items.length && blockTitle) {
+      addEntry({ item: block, title: blockTitle, blockTitle, id: `block-${blockIdx}` });
+      return;
+    }
+
+    items.forEach((item, itemIdx) => {
+      addEntry({
+        item,
+        title: item?.title || item?.name || blockTitle,
+        blockTitle,
+        id: item?.id || `block-${blockIdx}-${itemIdx}`,
+      });
+    });
+  });
+
+  const steps = Array.isArray(structureSession?.steps)
+    ? structureSession.steps
+    : Array.isArray(structureSession?.segments)
+    ? structureSession.segments
+    : [];
+
+  steps.forEach((step, idx) => {
+    addEntry({
+      item: step,
+      title: step?.title || step?.name || step?.type,
+      blockTitle: step?.label || step?.stationName || step?.blockTitle || "Main block",
+      id: step?.id || `step-${idx}`,
+    });
+  });
+
+  return out;
 }
 
 function StatCard({ label, value, theme }) {
@@ -445,6 +549,7 @@ export default function TrainHistoryDetail() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [session, setSession] = useState(null);
+  const [plannedSessionRecord, setPlannedSessionRecord] = useState(null);
   const [error, setError] = useState("");
   const [infoOpen, setInfoOpen] = useState(false);
   const stickyHeaderTop = Math.max(insets.top, 12) + 6;
@@ -475,12 +580,14 @@ export default function TrainHistoryDetail() {
       if (!uid) {
         setError("Not signed in.");
         setSession(null);
+        setPlannedSessionRecord(null);
         return;
       }
 
       if (!sessionId) {
         setError("Invalid session ID.");
         setSession(null);
+        setPlannedSessionRecord(null);
         return;
       }
 
@@ -491,14 +598,26 @@ export default function TrainHistoryDetail() {
       if (!snap.exists()) {
         setError("Session not found.");
         setSession(null);
+        setPlannedSessionRecord(null);
         return;
       }
 
+      const sessionData = { id: snap.id, ...snap.data() };
+      let plannedRecord = null;
+      const sessionKey = String(sessionData?.sessionKey || "").trim();
+      if (sessionKey) {
+        try {
+          plannedRecord = await loadPlannedSessionRecord(uid, sessionKey);
+        } catch {}
+      }
+
       setError("");
-      setSession({ id: snap.id, ...snap.data() });
+      setSession(sessionData);
+      setPlannedSessionRecord(plannedRecord);
     } catch (e) {
       setError(e?.message || "Could not load session.");
       setSession(null);
+      setPlannedSessionRecord(null);
     }
   }, [sessionId]);
 
@@ -517,13 +636,18 @@ export default function TrainHistoryDetail() {
   }, [loadSession]);
 
   const analysis = session?.analysis;
-  const descriptionText = useMemo(() => getSessionDescriptionText(session), [session]);
+  const plannedSession = plannedSessionRecord?.session || null;
+  const descriptionText = useMemo(
+    () => getSessionDescriptionText(session) || getSessionDescriptionText(plannedSession),
+    [plannedSession, session]
+  );
   const type = useMemo(() => sessionTypeLabel(session), [session]);
   const status = useMemo(() => formatStatus(session), [session]);
   const isStrengthSession = useMemo(() => {
     if (type === "Strength") return true;
+    if (Array.isArray(session?.blocks) || Array.isArray(plannedSession?.blocks)) return true;
     return Array.isArray(session?.strengthLog?.entries) && session.strengthLog.entries.length > 0;
-  }, [session?.strengthLog?.entries, type]);
+  }, [plannedSession?.blocks, session?.blocks, session?.strengthLog?.entries, type]);
   const descriptionInsights = useMemo(
     () => buildDescriptionInsights(descriptionText, { isStrengthSession }),
     [descriptionText, isStrengthSession]
@@ -582,9 +706,18 @@ export default function TrainHistoryDetail() {
     };
   }, [session]);
 
+  const structureSession = useMemo(() => {
+    const hasSavedStructure =
+      Array.isArray(session?.blocks) ||
+      Array.isArray(session?.segments) ||
+      Array.isArray(session?.steps) ||
+      session?.workout;
+    return hasSavedStructure ? session : plannedSession || session;
+  }, [plannedSession, session]);
+
   const strengthSnapshot = useMemo(
-    () => (isStrengthSession ? getStrengthSnapshot(session) : null),
-    [isStrengthSession, session]
+    () => (isStrengthSession ? getStrengthSnapshot(session, structureSession) : null),
+    [isStrengthSession, session, structureSession]
   );
 
   const topStats = useMemo(() => {
@@ -844,8 +977,11 @@ export default function TrainHistoryDetail() {
   }, [session]);
 
   const segments = useMemo(() => {
-    return Array.isArray(session?.segments) ? session.segments : [];
-  }, [session]);
+    const source = structureSession || session;
+    if (Array.isArray(source?.segments)) return source.segments;
+    if (Array.isArray(source?.steps)) return source.steps;
+    return [];
+  }, [session, structureSession]);
 
   const strengthSections = useMemo(() => {
     if (!isStrengthSession) return [];
@@ -853,10 +989,13 @@ export default function TrainHistoryDetail() {
     const entries = Array.isArray(session?.strengthLog?.entries)
       ? session.strengthLog.entries
       : [];
+    const sourceEntries = entries.length
+      ? entries
+      : buildPlannedStrengthEntries(structureSession || plannedSession || session);
     const out = [];
     const byKey = new Map();
 
-    entries.forEach((entry) => {
+    sourceEntries.forEach((entry) => {
       const blockTitle = String(entry?.blockTitle || "Main block").trim() || "Main block";
       const key = blockTitle.toLowerCase();
       let section = byKey.get(key);
@@ -869,17 +1008,32 @@ export default function TrainHistoryDetail() {
     });
 
     return out;
-  }, [isStrengthSession, session?.strengthLog?.entries]);
+  }, [isStrengthSession, plannedSession, session, structureSession]);
+
+  const hasLoggedStrengthEntries = useMemo(() => {
+    return Array.isArray(session?.strengthLog?.entries) && session.strengthLog.entries.length > 0;
+  }, [session?.strengthLog?.entries]);
 
   const linkedActivity = useMemo(() => {
     const linked = session?.linkedActivity;
     if (!linked || typeof linked !== "object") return null;
     const provider = String(linked.provider || "").trim() || "External";
     const reference = String(linked.reference || "").trim();
+    const id = String(linked.id || "").trim();
+    const activityId = String(linked.activityId || "").trim();
+    const source = String(linked.source || "").trim();
+    const collection = String(linked.collection || "").trim();
     const title = String(linked.title || "").trim();
+    const detailId = reference || id || activityId;
     return {
       provider,
       reference,
+      id,
+      activityId,
+      detailId,
+      source,
+      collection,
+      activitySource: source || collection,
       title,
       startDateLocal: linked.startDateLocal || linked.startDate || null,
       deviceName: linked.deviceName || null,
@@ -888,11 +1042,24 @@ export default function TrainHistoryDetail() {
       averageHeartrate: linked.averageHeartrate ?? null,
       maxHeartrate: linked.maxHeartrate ?? null,
       openable:
-        provider.toLowerCase() === "strava" &&
-        reference &&
+        Boolean(detailId) &&
         !Number.isNaN(new Date(String(linked.startDateLocal || linked.startDate || "")).getTime()),
     };
   }, [session?.linkedActivity]);
+  const completionAnalysis = useMemo(() => {
+    const value = session?.completionAnalysis;
+    return value && typeof value === "object" ? value : null;
+  }, [session?.completionAnalysis]);
+  const completionAnalysisLines = useMemo(() => {
+    if (!completionAnalysis) return [];
+    return [
+      ...(Array.isArray(completionAnalysis.notes) ? completionAnalysis.notes : []),
+      ...(Array.isArray(completionAnalysis.recommendations) ? completionAnalysis.recommendations : []),
+    ]
+      .map((line) => String(line || "").trim())
+      .filter(Boolean)
+      .slice(0, 3);
+  }, [completionAnalysis]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.bg }}>
@@ -1001,6 +1168,79 @@ export default function TrainHistoryDetail() {
               </View>
             )}
 
+            {completionAnalysis && !isStrengthSession && (
+              <View style={st.sectionSpace}>
+                <Text style={[st.sectionTitle, { color: theme.text }]}>
+                  Completion analysis
+                </Text>
+
+                <View
+                  style={[
+                    st.detailCard,
+                    { backgroundColor: theme.card, borderColor: theme.border },
+                  ]}
+                >
+                  <View style={st.rowBetween}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[st.noteLabel, { color: theme.subtext }]}>
+                        Planned match
+                      </Text>
+                      <Text style={[st.inlineSectionTitle, { color: theme.text }]}>
+                        {formatCompletionAnalysisStatus(completionAnalysis.status)}
+                      </Text>
+                    </View>
+
+                    <InfoChip
+                      label={
+                        Number.isFinite(Number(completionAnalysis.completionScore))
+                          ? `${Math.round(Number(completionAnalysis.completionScore))}%`
+                          : "Score"
+                      }
+                      theme={theme}
+                      tone={completionAnalysisTone(completionAnalysis.status)}
+                    />
+                  </View>
+
+                  <View style={st.detailPillRow}>
+                    {completionAnalysis.volumeMatch?.status ? (
+                      <View style={[st.detailPill, { backgroundColor: theme.muted }]}>
+                        <Text style={[st.detailPillText, { color: theme.text }]}>
+                          Volume {formatCompletionAnalysisStatus(completionAnalysis.volumeMatch.status)}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {completionAnalysis.durationMatch?.status ? (
+                      <View style={[st.detailPill, { backgroundColor: theme.muted }]}>
+                        <Text style={[st.detailPillText, { color: theme.text }]}>
+                          Duration {formatCompletionAnalysisStatus(completionAnalysis.durationMatch.status)}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {completionAnalysis.intensityMatch?.status ? (
+                      <View style={[st.detailPill, { backgroundColor: theme.muted }]}>
+                        <Text style={[st.detailPillText, { color: theme.text }]}>
+                          Intensity {formatCompletionAnalysisStatus(completionAnalysis.intensityMatch.status)}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+
+                  {completionAnalysisLines.length ? (
+                    <View style={st.feedbackBlock}>
+                      {completionAnalysisLines.map((line, idx) => (
+                        <Text
+                          key={`completion-analysis-${idx}`}
+                          style={[st.bulletText, { color: theme.text }]}
+                        >
+                          • {line}
+                        </Text>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+            )}
+
             {descriptionInsights && (
               <View style={st.sectionSpace}>
                 <Text style={[st.sectionTitle, { color: theme.text }]}>
@@ -1039,7 +1279,7 @@ export default function TrainHistoryDetail() {
             {isStrengthSession && strengthSections.length > 0 && (
               <View style={st.sectionSpace}>
                 <Text style={[st.sectionTitle, { color: theme.text }]}>
-                  Completed exercises
+                  {hasLoggedStrengthEntries ? "Completed exercises" : "Session details"}
                 </Text>
 
                 {strengthSections.map((section, sectionIdx) => (
@@ -1595,12 +1835,23 @@ export default function TrainHistoryDetail() {
                 )}
 
                 <View style={st.cardActionRow}>
-                  {linkedActivity?.provider?.toLowerCase() === "strava" &&
-                  linkedActivity.reference ? (
+                  {linkedActivity?.detailId ? (
                     <TouchableOpacity
                       onPress={() => {
                         setInfoOpen(false);
-                        router.push(`/history/${linkedActivity.reference}`);
+                        const params = {
+                          id: linkedActivity.detailId,
+                          provider: linkedActivity.provider,
+                          from: "train-history",
+                          sessionId: String(session.id),
+                        };
+                        if (linkedActivity.activitySource) {
+                          params.source = linkedActivity.activitySource;
+                        }
+                        router.push({
+                          pathname: "/history/[id]",
+                          params,
+                        });
                       }}
                       style={[
                         st.inlineActionBtn,
@@ -1610,7 +1861,7 @@ export default function TrainHistoryDetail() {
                     >
                       <Feather name="arrow-up-right" size={14} color={theme.text} />
                       <Text style={[st.inlineActionText, { color: theme.text }]}>
-                        Open Strava
+                        View raw {linkedActivity.provider} activity
                       </Text>
                     </TouchableOpacity>
                   ) : null}

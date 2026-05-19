@@ -37,6 +37,18 @@ function fmtDateTime(msOrIso) {
   }
 }
 
+function safePreview(value, maxChars = 2400) {
+  if (value == null) return "No data.";
+  let text = "";
+  try {
+    text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  } catch {
+    text = String(value);
+  }
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n… truncated ${text.length - maxChars} characters for app stability`;
+}
+
 function yyyyMmDd(d = new Date()) {
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -294,7 +306,7 @@ export default function GarminScreen() {
             padding: 12,
           }}>
             <Text style={{ color: UI.muted, fontFamily: "Menlo", fontSize: 12, lineHeight: 18 }}>
-              {JSON.stringify(
+              {safePreview(
                 integration
                   ? {
                       ...integration,
@@ -302,9 +314,7 @@ export default function GarminScreen() {
                       accessToken: maskToken(integration.accessToken),
                       refreshToken: maskToken(integration.refreshToken),
                     }
-                  : null,
-                null,
-                2
+                  : null
               )}
             </Text>
           </View>
@@ -344,7 +354,7 @@ export default function GarminScreen() {
                     fetchedAt: {fmtDateTime(h.fetchedAtMs || h.fetchedAt || h.createdAtMs)}
                   </Text>
                   <Text style={{ color: UI.muted, fontFamily: "Menlo", fontSize: 12, lineHeight: 18 }}>
-                    {JSON.stringify(h.payload ?? h, null, 2)}
+                    {safePreview(h.payload ?? h)}
                   </Text>
                 </View>
               ))}

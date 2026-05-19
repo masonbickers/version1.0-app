@@ -20,7 +20,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import {
-  Timestamp,
   addDoc,
   collection,
   limit,
@@ -49,6 +48,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { API_URL } from "../../../config/api";
 import { auth, db } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
+import { buildMealLogPayload } from "../../../src/lib/nutrition/dataModel";
 
 /* ---------------- config ---------------- */
 
@@ -128,23 +128,6 @@ function startOfDayISO(inputISO) {
   }
   d.setHours(0, 0, 0, 0);
   return d.toISOString();
-}
-
-/** ✅ build a Firestore Timestamp on selected day, with current time-of-day */
-function timestampOnSelectedDay(selectedDayISO) {
-  const base = new Date(String(selectedDayISO));
-  if (Number.isNaN(base.getTime())) {
-    const fallback = new Date();
-    return Timestamp.fromDate(fallback);
-  }
-  const now = new Date();
-  base.setHours(
-    now.getHours(),
-    now.getMinutes(),
-    now.getSeconds(),
-    now.getMilliseconds()
-  );
-  return Timestamp.fromDate(base);
 }
 
 /** ✅ pretty label for the selected day */
@@ -624,8 +607,6 @@ export default function AddFoodPage() {
       const u = auth.currentUser;
       if (!u) return;
 
-      const dateTs = timestampOnSelectedDay(selectedDateISO);
-
       // global row may need macro fill
       let finalRow = row;
 
@@ -644,24 +625,25 @@ export default function AddFoodPage() {
         }
       }
 
-      await addDoc(collection(db, "users", u.uid, "meals"), {
-        title: finalRow.title || "Food",
-        mealType: chosenMealType || "Unspecified",
-
-        calories: Number(finalRow.calories || 0),
-        protein: Number(finalRow.macros?.protein || 0),
-        carbs: Number(finalRow.macros?.carbs || 0),
-        fat: Number(finalRow.macros?.fat || 0),
-
-        servingText: finalRow.servingText || "",
-        notes:
-          finalRow?._raw?.notes ||
-          (finalRow.brand ? `Brand: ${finalRow.brand}` : ""),
-        source: finalRow.source || "quick",
-
-        date: dateTs, // 🔑 MUST exist + MUST be Timestamp on selected day
-        createdAt: serverTimestamp(),
-      });
+      await addDoc(
+        collection(db, "users", u.uid, "meals"),
+        buildMealLogPayload({
+          title: finalRow.title || "Food",
+          mealType: chosenMealType || "Unspecified",
+          calories: finalRow.calories,
+          protein: finalRow.macros?.protein,
+          carbs: finalRow.macros?.carbs,
+          fat: finalRow.macros?.fat,
+          servingText: finalRow.servingText || "",
+          notes:
+            finalRow?._raw?.notes ||
+            (finalRow.brand ? `Brand: ${finalRow.brand}` : ""),
+          source: finalRow.source || "quick",
+          brand: finalRow.brand || "",
+          dateISO: selectedDateISO,
+          createdAt: serverTimestamp(),
+        })
+      );
     },
     [selectedDateISO, fetchGlobalDetailsIfNeeded]
   );

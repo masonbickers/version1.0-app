@@ -263,6 +263,41 @@ function collectHardFailures(plan, ctx) {
   return failures;
 }
 
+function goalNeedsHigherFrequency(distance, sessionsPerWeek) {
+  const d = String(distance || "").toLowerCase();
+  if (d.includes("ultra")) return sessionsPerWeek < 4;
+  if (d.includes("marathon") && !d.includes("half")) return sessionsPerWeek < 3;
+  if (d.includes("half")) return sessionsPerWeek < 2;
+  if (d.includes("10k") || d.includes("5k")) return sessionsPerWeek < 2;
+  return false;
+}
+
+function collectProfessionalReviewFailures(plan, ctx, meta = {}) {
+  const failures = [];
+  const review = plan?.professionalReview;
+
+  if (!review || typeof review !== "object") {
+    return [`${ctx}: missing professionalReview`];
+  }
+
+  const status = String(review?.status || "");
+  const expectedNotApproved = goalNeedsHigherFrequency(
+    meta?.distance,
+    Number(meta?.sessionsPerWeek)
+  );
+
+  if (expectedNotApproved && status !== "not_approved") {
+    failures.push(`${ctx}: expected not_approved for low-frequency ${meta.distance} (${meta.sessionsPerWeek}x)`);
+  }
+
+  if (!expectedNotApproved && status === "not_approved") {
+    const first = Array.isArray(review.issues) ? review.issues[0] : null;
+    failures.push(`${ctx}: unexpectedly not_approved${first?.code ? ` (${first.code})` : ""}`);
+  }
+
+  return failures;
+}
+
 function scorePlan(plan) {
   const weeks = Array.isArray(plan?.weeks) ? plan.weeks : [];
   let trainingQuality = 100;
@@ -349,12 +384,26 @@ function scorePlan(plan) {
   return { trainingQuality, fidelity, notes };
 }
 
-function runScenario({ name, athleteProfile }) {
+function runScenario({ name, meta = {}, athleteProfile }) {
   const plan = applyRunPlanRules(null, athleteProfile);
-  const hardFailures = collectHardFailures(plan, name);
+  const professionalStatus = String(plan?.professionalReview?.status || "");
+  const expectedNotApproved = goalNeedsHigherFrequency(
+    meta?.distance,
+    Number(meta?.sessionsPerWeek)
+  );
+  const hardFailures = [
+    ...collectHardFailures(plan, name),
+    ...collectProfessionalReviewFailures(plan, name, {
+      distance: athleteProfile?.goal?.distance,
+      sessionsPerWeek: athleteProfile?.availability?.sessionsPerWeek,
+    }),
+  ];
   const score = scorePlan(plan);
   return {
     name,
+    meta,
+    professionalStatus,
+    expectedNotApproved,
     hardFailures,
     trainingQuality: score.trainingQuality,
     fidelity: score.fidelity,
@@ -368,10 +417,20 @@ function main() {
 
   const hardFailing = results.filter((r) => r.hardFailures.length > 0);
   const passCount = results.length - hardFailing.length;
-  const avgTq = round1(results.reduce((a, r) => a + r.trainingQuality, 0) / Math.max(1, results.length));
-  const avgFid = round1(results.reduce((a, r) => a + r.fidelity, 0) / Math.max(1, results.length));
+  const notApprovedLowFrequency = results.filter(
+    (r) => r.expectedNotApproved && r.professionalStatus === "not_approved"
+  );
+  const approvedOrAllowed = results.filter(
+    (r) => !(r.expectedNotApproved && r.professionalStatus === "not_approved")
+  );
+  const avgTq = round1(
+    approvedOrAllowed.reduce((a, r) => a + r.trainingQuality, 0) / Math.max(1, approvedOrAllowed.length)
+  );
+  const avgFid = round1(
+    approvedOrAllowed.reduce((a, r) => a + r.fidelity, 0) / Math.max(1, approvedOrAllowed.length)
+  );
 
-  const ranked = results
+  const ranked = approvedOrAllowed
     .slice()
     .sort((a, b) => (a.trainingQuality + a.fidelity) - (b.trainingQuality + b.fidelity))
     .slice(0, 6);
@@ -380,11 +439,18 @@ function main() {
   console.log(` - scenarios: ${results.length}`);
   console.log(` - hard-pass: ${passCount}`);
   console.log(` - hard-fail: ${hardFailing.length}`);
-  console.log(` - avg trainingQuality: ${avgTq}`);
-  console.log(` - avg fidelity: ${avgFid}`);
-  console.log(" - lowest combined scores:");
+  console.log(` - not-approved low-frequency: ${notApprovedLowFrequency.length}`);
+  console.log(` - avg trainingQuality (approved/allowed): ${avgTq}`);
+  console.log(` - avg fidelity (approved/allowed): ${avgFid}`);
+  console.log(" - lowest approved/allowed combined scores:");
   for (const r of ranked) {
     console.log(`   * ${r.name}: TQ=${r.trainingQuality}, FID=${r.fidelity}`);
+  }
+  if (notApprovedLowFrequency.length) {
+    console.log(" - not-approved low-frequency examples:");
+    for (const r of notApprovedLowFrequency.slice(0, 6)) {
+      console.log(`   * ${r.name}: status=${r.professionalStatus}, TQ=${r.trainingQuality}, FID=${r.fidelity}`);
+    }
   }
 
   if (hardFailing.length) {

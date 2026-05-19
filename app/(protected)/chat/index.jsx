@@ -1674,6 +1674,10 @@ export default function CoachChatPage() {
         exactSchedule,
         currentWeekSchedule,
         todaySchedule,
+        todaySession: Array.isArray(todaySchedule) && todaySchedule.length
+          ? todaySchedule.find((item) => String(item?.status || "").toLowerCase() !== "completed") ||
+            todaySchedule[0]
+          : null,
         weekDateAnchor: {
           model: "week_0_is_current_iso_week",
           currentWeekStartIso: toISODate(startOfISOWeek(new Date())),
@@ -1686,11 +1690,13 @@ export default function CoachChatPage() {
       nutrition: nutritionSummary
         ? {
             ...nutritionSummary,
+            bodyweightTrend: weightSummary,
             recentMeals: Array.isArray(nutritionSummary.recentMeals)
               ? nutritionSummary.recentMeals.slice(0, 10)
               : [],
           }
         : null,
+      weight: weightSummary || null,
       clock: clockContext,
     };
   }, [

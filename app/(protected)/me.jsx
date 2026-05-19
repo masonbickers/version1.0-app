@@ -39,6 +39,7 @@ const DARK_PAGE_COLORS = {
   orangeSoft: "rgba(230,255,59,0.18)",
   panelGlow: "rgba(230,255,59,0.08)",
   primaryText: "#111111",
+  isDark: true,
 };
 
 function makePageColors(appColors, isDark) {
@@ -57,7 +58,13 @@ function makePageColors(appColors, isDark) {
     orangeSoft: "rgba(230,255,59,0.34)",
     panelGlow: "rgba(63,79,0,0.06)",
     primaryText: appColors.sapOnPrimary || "#111111",
+    isDark: false,
   };
+}
+
+function useScreenTheme() {
+  const { colors, isDark } = useTheme();
+  return useMemo(() => makePageColors(colors, isDark), [colors, isDark]);
 }
 
 function withHexAlpha(color, alpha) {
@@ -120,7 +127,6 @@ export default function MePage() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { width } = useWindowDimensions();
-  const { colors: appColors, isDark } = useTheme();
   const [activeTab, setActiveTab] = useState("overview");
   const [activityEditTarget, setActivityEditTarget] = useState(null);
   const [promptedActivityIds, setPromptedActivityIds] = useState(() => new Set());
@@ -148,15 +154,15 @@ export default function MePage() {
     [garminWorkoutSyncs, recentActivities]
   );
   const chartWidth = Math.max(260, Math.min(width - 68, 420));
-  const c = useMemo(() => makePageColors(appColors, isDark), [appColors, isDark]);
+  const c = useScreenTheme();
   const s = useMemo(() => makeStyles(c), [c]);
   const topFadeStart = useMemo(() => {
-    const accent = appColors?.accentBg || appColors?.sapPrimary || "#E6FF3B";
-    const alpha = isDark ? "33" : "55";
+    const accent = c.orange || "#E6FF3B";
+    const alpha = c.isDark ? "33" : "55";
     const resolved = withHexAlpha(accent, alpha);
     if (resolved !== accent) return resolved;
-    return isDark ? "rgba(230,255,59,0.2)" : "rgba(230,255,59,0.3)";
-  }, [appColors, isDark]);
+    return c.isDark ? "rgba(230,255,59,0.2)" : "rgba(230,255,59,0.3)";
+  }, [c]);
 
   useEffect(() => {
     if (loading || activityEditTarget) return;

@@ -85,6 +85,7 @@ export default function JournalCheckInPage() {
   const [mood, setMood] = useState(null); // 1–5
   const [stress, setStress] = useState(null); // 1–5
   const [energy, setEnergy] = useState(null); // 1–5
+  const [motivation, setMotivation] = useState(null); // 1-5
 
   // optional – numeric
   const [soreness, setSoreness] = useState(null); // 1–5
@@ -167,6 +168,9 @@ export default function JournalCheckInPage() {
           setEnergy(
             typeof data.energy === "number" ? data.energy : null
           );
+          setMotivation(
+            typeof data.motivation === "number" ? data.motivation : null
+          );
 
           setSoreness(
             typeof data.sorenessScore === "number"
@@ -246,6 +250,8 @@ export default function JournalCheckInPage() {
           mood: typeof mood === "number" ? mood : null,
           stress: typeof stress === "number" ? stress : null,
           energy: typeof energy === "number" ? energy : null,
+          motivation:
+            typeof motivation === "number" ? motivation : null,
           // optional numeric
           sorenessScore:
             typeof soreness === "number" ? soreness : null,
@@ -256,6 +262,7 @@ export default function JournalCheckInPage() {
           travel,
           illness,
           painInjury,
+          injuryFlag: painInjury,
           workStress,
           lifeStress,
           // training
@@ -281,6 +288,8 @@ export default function JournalCheckInPage() {
           mood: typeof mood === "number" ? mood : null,
           stress: typeof stress === "number" ? stress : null,
           energy: typeof energy === "number" ? energy : null,
+          motivation:
+            typeof motivation === "number" ? motivation : null,
           sorenessScore:
             typeof soreness === "number" ? soreness : null,
           alcohol,
@@ -289,6 +298,7 @@ export default function JournalCheckInPage() {
           travel,
           illness,
           painInjury,
+          injuryFlag: painInjury,
           workStress,
           lifeStress,
           trainedToday,
@@ -480,6 +490,7 @@ export default function JournalCheckInPage() {
                 renderScaleRow("Energy", energy, setEnergy, 5)}
               {isCoreOn("stress") &&
                 renderScaleRow("Stress", stress, setStress, 5)}
+              {renderScaleRow("Motivation", motivation, setMotivation, 5)}
 
               {/* soreness (optional numeric) */}
               {isOptOn("soreness") &&

@@ -23,6 +23,18 @@ function addDaysISO(date, delta) {
   return d.toISOString().slice(0, 10);
 }
 
+function safePreview(value, maxChars = 2400) {
+  if (value == null) return "No data loaded.";
+  let text = "";
+  try {
+    text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  } catch {
+    text = String(value);
+  }
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n… truncated ${text.length - maxChars} characters for app stability`;
+}
+
 async function authHeaders() {
   const token = await auth.currentUser?.getIdToken?.();
   if (!token) throw new Error("Please sign in again.");
@@ -147,12 +159,12 @@ export default function GarminHealthPage() {
 
         <View style={s.card}>
           <Text style={s.cardTitle}>Meta</Text>
-          <Text style={s.mono}>{JSON.stringify(meta, null, 2)}</Text>
+          <Text style={s.mono}>{safePreview(meta)}</Text>
         </View>
 
         <View style={s.card}>
           <Text style={s.cardTitle}>Raw Garmin Payload</Text>
-          <Text style={s.mono}>{JSON.stringify(data, null, 2)}</Text>
+          <Text style={s.mono}>{safePreview(data)}</Text>
         </View>
       </ScrollView>
     </SafeAreaView>

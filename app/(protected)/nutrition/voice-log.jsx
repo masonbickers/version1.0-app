@@ -21,7 +21,7 @@
 import { Feather } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import { Timestamp, addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -41,6 +41,7 @@ import {
 import { API_URL } from "../../../config/api";
 import { auth, db } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
+import { buildMealLogPayload } from "../../../src/lib/nutrition/dataModel";
 
 /* ---------------- helpers ---------------- */
 
@@ -55,14 +56,6 @@ function startOfDayISO(inputISO) {
   }
   d.setHours(0, 0, 0, 0);
   return d.toISOString();
-}
-
-function timestampOnSelectedDay(selectedDayISO) {
-  const base = new Date(String(selectedDayISO));
-  if (Number.isNaN(base.getTime())) return Timestamp.fromDate(new Date());
-  const now = new Date();
-  base.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
-  return Timestamp.fromDate(base);
 }
 
 function fmt(n) {
@@ -337,24 +330,18 @@ export default function VoiceLogPage() {
 
       try {
         setBusy(true);
-        const dateTs = timestampOnSelectedDay(selectedDateISO);
-
-        await addDoc(collection(db, "users", u.uid, "meals"), {
-          title: candidate.title || "Food",
-          mealType: mealTypeFinal || "Unspecified",
-          calories: Number(candidate.calories || 0),
-          protein: Number(candidate.protein || 0),
-          carbs: Number(candidate.carbs || 0),
-          fat: Number(candidate.fat || 0),
-          fibre: Number(candidate.fibre || 0),
-          sugar: Number(candidate.sugar || 0),
-          sodium: Number(candidate.sodium || 0),
-          notes: candidate.notes || `Voice log: ${candidate.spokenText || ""}`,
-          source: "voice",
-          spokenText: candidate.spokenText || "",
-          date: dateTs,
-          createdAt: serverTimestamp(),
-        });
+        await addDoc(
+          collection(db, "users", u.uid, "meals"),
+          buildMealLogPayload({
+            ...candidate,
+            mealType: mealTypeFinal || "Unspecified",
+            notes: candidate.notes || `Voice log: ${candidate.spokenText || ""}`,
+            source: "voice",
+            spokenText: candidate.spokenText || "",
+            dateISO: selectedDateISO,
+            createdAt: serverTimestamp(),
+          })
+        );
 
         setMealPromptOpen(false);
         setChosenMeal(mealTypeFinal);

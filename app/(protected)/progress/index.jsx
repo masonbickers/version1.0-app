@@ -130,6 +130,8 @@ export default function ProgressPage() {
 
   const [rows, setRows] = useState([]);
   const [recent, setRecent] = useState([]);
+  const [plans, setPlans] = useState([]);
+  const [error, setError] = useState("");
 
   const days = useMemo(() => RANGES.find((r) => r.key === range)?.days || 28, [range]);
 
@@ -145,6 +147,7 @@ export default function ProgressPage() {
     setLoading(true);
 
     try {
+      setError("");
       const ref = collection(db, "activities");
 
       // Primary query: uid
@@ -170,13 +173,41 @@ export default function ProgressPage() {
         snap = await getDocs(qy2);
       }
 
-      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const activityItems = snap.docs.map((d) => ({ id: d.id, source: "activity", ...d.data() }));
+
+      let trainItems = [];
+      try {
+        const trainSnap = await getDocs(
+          query(
+            collection(db, "users", uid, "trainSessions"),
+            orderBy("completedAt", "desc"),
+            limit(300)
+          )
+        );
+        trainItems = trainSnap.docs.map((d) => ({ id: d.id, source: "trainSession", ...d.data() }));
+      } catch {}
+
+      try {
+        const planSnap = await getDocs(
+          query(collection(db, "users", uid, "plans"), orderBy("updatedAt", "desc"), limit(5))
+        );
+        setPlans(planSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      } catch {
+        setPlans([]);
+      }
+
+      const items = [...activityItems, ...trainItems].sort((a, b) => {
+        const da = toDateSafe(a.completedAt) || toDateSafe(a.createdAt) || toDateSafe(a.startTime) || new Date(0);
+        const dbb = toDateSafe(b.completedAt) || toDateSafe(b.createdAt) || toDateSafe(b.startTime) || new Date(0);
+        return dbb.getTime() - da.getTime();
+      });
       setRows(items);
 
       // Recent list (last 12)
       setRecent(items.slice(0, 12));
     } catch (e) {
       console.log("[progress] load error", e);
+      setError("Could not load progress data. Showing an empty state for now.");
       setRows([]);
       setRecent([]);
     } finally {
@@ -244,6 +275,77 @@ export default function ProgressPage() {
     };
   }, [daily]);
 
+  const consistency = useMemo(() => {
+    const last7 = daily.slice(-7);
+    const active = last7.filter((d) => d.total > 0).length;
+    return {
+      active,
+      target: 7,
+      label: `${active}/7 days`,
+      percent: Math.round((active / 7) * 100),
+    };
+  }, [daily]);
+
+  const runningBenchmarks = useMemo(() => {
+    const runs = rows.filter((row) => safeType(row) === "run");
+    const totalKm = runs.reduce((sum, row) => sum + getDistanceKm(row), 0);
+    const longest = runs.reduce((best, row) => Math.max(best, getDistanceKm(row)), 0);
+    const fastest = runs.reduce((best, row) => {
+      const km = getDistanceKm(row);
+      const min = getDurationMin(row);
+      if (!km || !min) return best;
+      const pace = min / km;
+      return best == null || pace < best ? pace : best;
+    }, null);
+    return {
+      totalKm,
+      longest,
+      fastestPace: fastest ? `${Math.floor(fastest)}:${String(Math.round((fastest % 1) * 60)).padStart(2, "0")}/km` : "—",
+    };
+  }, [rows]);
+
+  const strengthBenchmarks = useMemo(() => {
+    let maxLoad = 0;
+    let completedSets = 0;
+    rows.forEach((row) => {
+      const entries = Array.isArray(row?.strength?.entries)
+        ? row.strength.entries
+        : Array.isArray(row?.entries)
+          ? row.entries
+          : [];
+      entries.forEach((entry) => {
+        const sets = Array.isArray(entry?.sets) ? entry.sets : Array.isArray(entry?.performed?.sets) ? entry.performed.sets : [];
+        sets.forEach((set) => {
+          const load = Number(set?.weightKg ?? set?.loadKg ?? set?.weight);
+          if (Number.isFinite(load)) maxLoad = Math.max(maxLoad, load);
+          if (set?.completed) completedSets += 1;
+        });
+      });
+    });
+    return {
+      maxLoad,
+      completedSets,
+    };
+  }, [rows]);
+
+  const goalProgress = useMemo(() => {
+    const active = plans[0] || null;
+    const weeks = Array.isArray(active?.weeks || active?.plan?.weeks)
+      ? active?.weeks || active?.plan?.weeks
+      : [];
+    const completed = rows.filter((row) => String(row?.status || "").toLowerCase() === "completed" || row?.completedAt).length;
+    const planned = weeks.reduce((sum, week) => {
+      const days = Array.isArray(week?.days) ? week.days : [];
+      return sum + days.reduce((inner, day) => inner + (Array.isArray(day?.sessions) ? day.sessions.length : 0), 0);
+    }, 0);
+    return {
+      name: active?.name || active?.meta?.name || active?.plan?.name || "No active plan",
+      completed,
+      planned,
+      percent: planned ? Math.min(100, Math.round((completed / planned) * 100)) : 0,
+    };
+  }, [plans, rows]);
+
   const maxRunKm = useMemo(() => {
     let m = 0;
     for (const d of daily) m = Math.max(m, d.runKm);
@@ -309,6 +411,7 @@ export default function ProgressPage() {
       ) : (
         <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
           {/* KPI cards */}
+          {!!error ? <Text style={s.errorText}>{error}</Text> : null}
           <View style={s.kpiGrid}>
             <KPI
               label="Run distance"
@@ -319,6 +422,18 @@ export default function ProgressPage() {
             <KPI label="Strength sessions" value={`${totals.strength}`} icon="zap" s={s} />
             <KPI label="Total sessions" value={`${totals.total}`} icon="activity" s={s} />
             <KPI label="Active days" value={`${totals.activeDays}`} icon="calendar" s={s} />
+          </View>
+
+          <View style={s.card}>
+            <View style={s.cardHead}>
+              <Text style={s.cardTitle}>Draft 1 progress</Text>
+              <Text style={s.cardSub}>PRs, consistency, benchmarks, goals</Text>
+            </View>
+            <MetricLine label="Weekly consistency" value={`${consistency.label} (${consistency.percent}%)`} s={s} />
+            <MetricLine label="Running benchmark" value={`${runningBenchmarks.longest.toFixed(1)} km longest · ${runningBenchmarks.fastestPace}`} s={s} />
+            <MetricLine label="Strength benchmark" value={strengthBenchmarks.maxLoad ? `${strengthBenchmarks.maxLoad} kg best logged load` : "Log sets to unlock"} s={s} />
+            <MetricLine label="PR snapshot" value={`${runningBenchmarks.totalKm.toFixed(1)} km total · ${strengthBenchmarks.completedSets} sets`} s={s} />
+            <MetricLine label="Goal progress" value={`${goalProgress.name} · ${goalProgress.percent}%`} s={s} last />
           </View>
 
           {/* Trend */}
@@ -425,6 +540,15 @@ function KPI({ label, value, icon, s }) {
       <Text style={s.kpiLabel} numberOfLines={1}>
         {label}
       </Text>
+    </View>
+  );
+}
+
+function MetricLine({ label, value, s, last = false }) {
+  return (
+    <View style={[s.metricLine, last && { borderBottomWidth: 0 }]}>
+      <Text style={s.metricLineLabel}>{label}</Text>
+      <Text style={s.metricLineValue}>{value}</Text>
     </View>
   );
 }
@@ -593,6 +717,7 @@ function makeStyles(colors, isDark, accentBg, accentText, cardBg) {
     h1: { fontSize: 18, fontWeight: "900", color: colors.text },
     subtext: { marginTop: 6, color: colors.subtext },
     loadingText: { marginTop: 8, color: colors.subtext },
+    errorText: { color: colors.subtext, fontSize: 13, lineHeight: 19 },
 
     kpiGrid: {
       flexDirection: "row",
@@ -606,6 +731,24 @@ function makeStyles(colors, isDark, accentBg, accentText, cardBg) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
       padding: 12,
+    },
+    metricLine: {
+      paddingVertical: 11,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+      gap: 4,
+    },
+    metricLineLabel: {
+      color: colors.subtext,
+      fontSize: 12,
+      fontWeight: "800",
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+    },
+    metricLineValue: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: "900",
     },
     kpiIcon: {
       width: 34,

@@ -23,7 +23,6 @@ import {
   getDoc,
   getDocs,
   limit,
-  onSnapshot,
   orderBy,
   query,
   where,
@@ -31,6 +30,7 @@ import {
 
 import { auth, db } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
+import PlanIntelligenceCards from "../../../src/components/train/PlanIntelligenceCards";
 import { refreshTrainingWidgetSnapshotForUser } from "../../../src/widgets/trainingWidgetSnapshot";
 
 /* ------------------------------------------------------------
@@ -41,10 +41,6 @@ const PRIMARY = "#E6FF3B";
 const SILVER_LIGHT = "#F3F4F6";
 const SILVER_MEDIUM = "#E1E3E8";
 const DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-function buildSessionKey(planId, weekIndex, dayIndex, sessionIndex) {
-  return `${planId}_${weekIndex}_${dayIndex}_${sessionIndex}`;
-}
 
 /* ------------------------------------------------------------
    Generic helpers
@@ -80,20 +76,6 @@ function titleCaseWords(value) {
     .filter(Boolean)
     .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
     .join(" ");
-}
-
-function uniqStrings(list) {
-  const out = [];
-  const seen = new Set();
-  for (const value of Array.isArray(list) ? list : []) {
-    const s = String(value || "").trim();
-    if (!s) continue;
-    const key = s.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(s);
-  }
-  return out;
 }
 
 function normaliseDayLabel(day, fallback = null) {
@@ -142,20 +124,23 @@ function getDocSortMs(docData) {
   );
 }
 
-function resolveSessionLogStatus(log) {
-  if (!log || typeof log !== "object") return "";
-  const raw = String(log?.status || "").trim().toLowerCase();
-  if (raw === "completed" || raw === "skipped") return raw;
-  if (log?.skippedAt) return "skipped";
-  if (log?.completedAt || log?.lastTrainSessionId) return "completed";
-  return "";
-}
-
 function makeDocKey(docData) {
   if (Array.isArray(docData?.__path) && docData.__path.length) {
     return docData.__path.join("/");
   }
   return String(docData?.id || Math.random());
+}
+
+function planSourcePriority(docData, type) {
+  if (type !== "run") return 0;
+
+  const source = String(docData?.source || docData?.plan?.source || "").toLowerCase();
+  const rootRulesApplied = docData?.rulesApplied || docData?.plan?.rulesApplied;
+  const hasReview = docData?.professionalReview || docData?.plan?.professionalReview;
+
+  if (source.includes("generate-run") || rootRulesApplied || hasReview) return 3;
+  if (source.includes("stock-template")) return 1;
+  return 2;
 }
 
 /* ------------------------------------------------------------
@@ -428,7 +413,11 @@ function stepDistanceKm(step) {
 }
 
 function estimateDistanceKmFromSessionSteps(session) {
-  const steps = Array.isArray(session?.steps)
+  const steps = Array.isArray(session?.workoutSteps)
+    ? session.workoutSteps
+    : Array.isArray(session?.workout?.workoutSteps)
+    ? session.workout.workoutSteps
+    : Array.isArray(session?.steps)
     ? session.steps
     : Array.isArray(session?.workout?.steps)
     ? session.workout.steps
@@ -453,7 +442,15 @@ function isWarmCooldownRunStep(step) {
 
 function safeKm(session) {
   const km =
-    typeof session?.distanceKm === "number"
+    typeof session?.renderedDistanceKm === "number"
+      ? session.renderedDistanceKm
+      : typeof session?.executableDistanceKm === "number"
+      ? session.executableDistanceKm
+      : typeof session?.renderedComputedTotalKm === "number"
+      ? session.renderedComputedTotalKm
+      : typeof session?.workout?.renderedEstimatedDistanceMeters === "number"
+      ? session.workout.renderedEstimatedDistanceMeters / 1000
+      : typeof session?.distanceKm === "number"
       ? session.distanceKm
       : typeof session?.distance === "number"
       ? session.distance
@@ -494,7 +491,14 @@ function normaliseRunSessionForView(raw, dayFallback) {
 
   const type = raw?.type || raw?.sessionType || "EASY";
 
-  const steps = Array.isArray(raw?.steps)
+  const displaySteps = Array.isArray(raw?.workoutSteps)
+    ? raw.workoutSteps
+    : Array.isArray(raw?.workout?.workoutSteps)
+    ? raw.workout.workoutSteps
+    : [];
+  const steps = displaySteps.length
+    ? displaySteps
+    : Array.isArray(raw?.steps)
     ? raw.steps
     : Array.isArray(raw?.workout?.steps)
     ? raw.workout.steps
@@ -574,6 +578,27 @@ function deriveRunDaysFromSessions(sessions) {
   }));
 }
 
+function countSessionsInDays(days) {
+  return (Array.isArray(days) ? days : []).reduce(
+    (sum, d) => sum + (Array.isArray(d?.sessions) ? d.sessions.length : 0),
+    0
+  );
+}
+
+function hasCollapsedRunDayDistribution(days, expectedRunDays) {
+  const total = countSessionsInDays(days);
+  if (total <= 1) return false;
+
+  const populated = (Array.isArray(days) ? days : []).filter(
+    (d) => Array.isArray(d?.sessions) && d.sessions.length
+  );
+  const expectedCount = Array.isArray(expectedRunDays) && expectedRunDays.length
+    ? expectedRunDays.length
+    : 0;
+
+  return expectedCount >= 2 && populated.length <= 1;
+}
+
 function normaliseRunWeek(week, fallbackWeekNumber, runDays, longRunDay) {
   const weekNumber =
     typeof week?.weekNumber === "number"
@@ -584,6 +609,10 @@ function normaliseRunWeek(week, fallbackWeekNumber, runDays, longRunDay) {
 
   const sessionsRaw = Array.isArray(week?.sessions) ? week.sessions : [];
   const daysRaw = Array.isArray(week?.days) ? week.days : [];
+  const configuredRunDays =
+    Array.isArray(runDays) && runDays.length
+      ? runDays.map((d) => normaliseDayLabel(d)).filter((d) => DAY_ORDER.includes(d))
+      : [];
 
   const hasMeaningfulDays =
     daysRaw.length > 0 &&
@@ -594,12 +623,35 @@ function normaliseRunWeek(week, fallbackWeekNumber, runDays, longRunDay) {
     sessionsRaw.every((s) => !normaliseDayLabel(s?.day, null)) &&
     sessionsRaw.some((s) => String(s?.slot || "").length > 0);
 
-  const daysBase = hasMeaningfulDays
+  const hasCollapsedDays =
+    hasMeaningfulDays &&
+    sessionsRaw.length > 1 &&
+    hasCollapsedRunDayDistribution(daysRaw, configuredRunDays);
+  const hasPreservedTemplateSessions = sessionsRaw.some((s) =>
+    Boolean(
+      s?.preserveTemplateStructure ||
+        s?.meta?.preserveTemplateStructure ||
+        s?.workout?.preserveTemplateStructure ||
+        s?.workout?.meta?.preserveTemplateStructure
+    )
+  );
+
+  const daysBase = hasPreservedTemplateSessions
+    ? deriveRunDaysFromSessions(sessionsRaw)
+    : hasCollapsedDays && hasSlotsWithoutDay
+    ? mapStockSessionsToDays(sessionsRaw, runDays, longRunDay)
+    : hasCollapsedDays
+    ? deriveRunDaysFromSessions(sessionsRaw)
+    : hasMeaningfulDays
     ? daysRaw.map((d) => ({
         ...d,
-        day: normaliseDayLabel(d?.day, "Mon"),
+        day:
+          normaliseDayLabel(d?.day, null) ||
+          normaliseDayLabel(d?.label, null) ||
+          normaliseDayLabel(d?.weekday, null) ||
+          normaliseDayLabel(d?.dayLabel, "Mon"),
         sessions: Array.isArray(d?.sessions)
-          ? d.sessions.map((s) => normaliseRunSessionForView(s, d?.day))
+          ? d.sessions.map((s) => normaliseRunSessionForView(s, d?.day || d?.label || d?.weekday || d?.dayLabel))
           : [],
       }))
     : hasSlotsWithoutDay
@@ -927,14 +979,46 @@ function normaliseHybridWeek(week, fallbackWeekNumber) {
    Compatibility layer
 ------------------------------------------------------------ */
 
+const PLAN_VERSION_FIELDS = [
+  "planSource",
+  "templateId",
+  "templateVersion",
+  "planVersion",
+  "rulesEngineVersion",
+  "generatedAt",
+  "inputProfileSnapshot",
+  "generatorFeatures",
+  "validationSummary",
+  "goalRealism",
+  "paceModel",
+  "planExplanation",
+  "weeklyRecalculation",
+  "readinessAdjustment",
+  "strengthAdjustment",
+  "missedSessionRepair",
+];
+
+function withReloadedPlanVersionFields(plan, planDoc) {
+  if (!plan || typeof plan !== "object") return plan;
+
+  const out = { ...plan };
+  for (const field of PLAN_VERSION_FIELDS) {
+    if (out[field] == null && planDoc?.[field] != null) {
+      out[field] = planDoc[field];
+    }
+  }
+  return out;
+}
+
 function normalisePlanDoc(planDoc) {
   if (!planDoc) return { plan: null, athleteProfile: null, metaName: "" };
 
-  const plan = planDoc?.plan
+  const rawPlan = planDoc?.plan
     ? planDoc.plan
     : planDoc?.weeks
     ? { ...planDoc, weeks: planDoc.weeks }
     : planDoc;
+  const plan = withReloadedPlanVersionFields(rawPlan, planDoc);
 
   const athleteProfile = planDoc?.athleteProfile || plan?.athleteProfile || null;
 
@@ -1100,7 +1184,14 @@ function pickLatestByType(docs) {
       continue;
     }
 
-    if (getDocSortMs(docData) > getDocSortMs(byType[type])) {
+    const current = byType[type];
+    const nextPriority = planSourcePriority(docData, type);
+    const currentPriority = planSourcePriority(current, type);
+
+    if (
+      nextPriority > currentPriority ||
+      (nextPriority === currentPriority && getDocSortMs(docData) > getDocSortMs(current))
+    ) {
       byType[type] = docData;
     }
   }
@@ -1155,7 +1246,6 @@ export default function ViewPlanPage() {
   const [selectedType, setSelectedType] = useState(null);
   const [error, setError] = useState("");
   const [expandedWeek, setExpandedWeek] = useState(0);
-  const [sessionLogMap, setSessionLogMap] = useState({});
   const didInitialSelect = useRef(false);
 
   useEffect(() => {
@@ -1255,34 +1345,6 @@ export default function ViewPlanPage() {
     })();
   }, [user?.uid, loadPlans]);
 
-  useEffect(() => {
-    if (!user?.uid || !selectedPlanDoc?.id) {
-      setSessionLogMap({});
-      return;
-    }
-
-    const ref = collection(db, "users", user.uid, "sessionLogs");
-    const unsub = onSnapshot(
-      query(ref, where("planId", "==", String(selectedPlanDoc.id))),
-      (snap) => {
-        const nextMap = {};
-        snap.forEach((docSnap) => {
-          nextMap[docSnap.id] = docSnap.data() || {};
-        });
-        setSessionLogMap(nextMap);
-      },
-      () => {
-        setSessionLogMap({});
-      }
-    );
-
-    return () => {
-      try {
-        unsub?.();
-      } catch {}
-    };
-  }, [selectedPlanDoc?.id, user?.uid]);
-
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadPlans();
@@ -1367,7 +1429,10 @@ export default function ViewPlanPage() {
   const isHybrid = selectedType === "hybrid";
 
   const runAvailability = athleteProfile?.availability || {};
-  const runDays = Array.isArray(runAvailability?.runDays) ? runAvailability.runDays : [];
+  const runDays = useMemo(
+    () => (Array.isArray(runAvailability?.runDays) ? runAvailability.runDays : []),
+    [runAvailability?.runDays]
+  );
   const longRunDay = runAvailability?.longRunDay || "Sun";
 
   const weeks = useMemo(() => {
@@ -1388,44 +1453,6 @@ export default function ViewPlanPage() {
 
     return arr.map((w, idx) => normaliseRunWeek(w, idx + 1, runDays, longRunDay));
   }, [plan, selectedPlanDoc, isHybrid, isStrength, runDays, longRunDay]);
-
-  const decoratedWeeks = useMemo(() => {
-    const selectedPlanId = String(selectedPlanDoc?.id || "").trim();
-    if (!selectedPlanId) return weeks;
-
-    return (Array.isArray(weeks) ? weeks : []).map((weekObj, weekIdx) => {
-      const days = Array.isArray(weekObj?.days) ? weekObj.days : [];
-
-      return {
-        ...weekObj,
-        days: DAY_ORDER.map((dayLabel, dayIdx) => {
-          const sourceDay =
-            days.find((d) => normaliseDayLabel(d?.day, null) === dayLabel) ||
-            days[dayIdx] ||
-            { day: dayLabel, sessions: [] };
-
-          const sessions = Array.isArray(sourceDay?.sessions) ? sourceDay.sessions : [];
-          return {
-            ...sourceDay,
-            day: dayLabel,
-            sessions: sessions.map((sessionObj, sessionIdx) => {
-              const sessionKey = buildSessionKey(selectedPlanId, weekIdx, dayIdx, sessionIdx);
-              const log = sessionLogMap[sessionKey] || null;
-              const status = resolveSessionLogStatus(log);
-              const savedTrainSessionId = String(log?.lastTrainSessionId || "").trim() || null;
-
-              return {
-                ...sessionObj,
-                __sessionKey: sessionKey,
-                __status: status || "",
-                __savedTrainSessionId: savedTrainSessionId,
-              };
-            }),
-          };
-        }),
-      };
-    });
-  }, [selectedPlanDoc?.id, sessionLogMap, weeks]);
 
   const runDerived = useMemo(() => {
     if (!isRun) return null;
@@ -1498,13 +1525,20 @@ export default function ViewPlanPage() {
     const targets = plan?.targets || selectedPlanDoc?.targets;
 
     const targetArr = Array.isArray(targets) ? targets : [];
-    const maxWeeklyKm = targetArr.length
+    const targetMaxWeeklyKm = targetArr.length
       ? Math.max(...targetArr.map((t) => Number(t?.weeklyKm || 0)))
       : null;
 
-    const maxLongKm = targetArr.length
+    const targetMaxLongKm = targetArr.length
       ? Math.max(...targetArr.map((t) => Number(t?.longRunKm || 0)))
       : null;
+
+    const pickMaxKm = (...values) => {
+      const nums = values
+        .map((v) => Number(v))
+        .filter((v) => Number.isFinite(v) && v > 0);
+      return nums.length ? Math.round(Math.max(...nums) * 10) / 10 : "";
+    };
 
     const runDaysArr = Array.isArray(availability?.runDays) && availability.runDays.length
       ? availability.runDays
@@ -1545,8 +1579,8 @@ export default function ViewPlanPage() {
       difficulty: fallbackDifficulty,
       weeklyKmNow: current?.weeklyKm ?? runDerived?.weeklyKmNow ?? "",
       longestRunNow: current?.longestRunKm ?? runDerived?.longestRunNow ?? "",
-      maxWeeklyKm: maxWeeklyKm || runDerived?.maxWeeklyKm,
-      maxLongKm: maxLongKm || runDerived?.maxLongKm,
+      maxWeeklyKm: pickMaxKm(targetMaxWeeklyKm, runDerived?.maxWeeklyKm, current?.weeklyKm),
+      maxLongKm: pickMaxKm(targetMaxLongKm, runDerived?.maxLongKm, current?.longestRunKm),
     };
   }, [isRun, athleteProfile, plan, selectedPlanDoc, weeks.length, metaName, runDerived]);
 
@@ -1699,6 +1733,11 @@ export default function ViewPlanPage() {
 
   const showAddStrength = !!plansByType.run && !plansByType.strength;
   const showAddRun = !!plansByType.strength && !plansByType.run;
+  const planIntelligence = {
+    ...(selectedPlanDoc || {}),
+    ...(selectedPlanDoc?.plan || {}),
+    ...(plan || {}),
+  };
 
   if (loading) {
     return (
@@ -1956,6 +1995,27 @@ export default function ViewPlanPage() {
           </View>
         </LinearGradient>
 
+        {isRun || isHybrid ? (
+          <PlanIntelligenceCards
+            planSource={planIntelligence.planSource}
+            templateId={planIntelligence.templateId}
+            templateVersion={planIntelligence.templateVersion}
+            planVersion={planIntelligence.planVersion}
+            rulesEngineVersion={planIntelligence.rulesEngineVersion}
+            generatedAt={planIntelligence.generatedAt}
+            inputProfileSnapshot={planIntelligence.inputProfileSnapshot}
+            generatorFeatures={planIntelligence.generatorFeatures}
+            goalRealism={planIntelligence.goalRealism}
+            paceModel={planIntelligence.paceModel}
+            validationSummary={planIntelligence.validationSummary}
+            planExplanation={planIntelligence.planExplanation}
+            readinessAdjustment={planIntelligence.readinessAdjustment}
+            strengthAdjustment={planIntelligence.strengthAdjustment}
+            weeklyRecalculation={planIntelligence.weeklyRecalculation}
+            missedSessionRepair={planIntelligence.missedSessionRepair}
+          />
+        ) : null}
+
         {showAddStrength ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Add companion plan</Text>
@@ -2080,7 +2140,7 @@ export default function ViewPlanPage() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.weekTitle}>Week {week.weekNumber}</Text>
                   <Text style={styles.weekMeta}>{weekMeta}</Text>
-                  {isStrength && week?.focus ? (
+                  {week?.focus ? (
                     <Text style={styles.weekFocus}>{week.focus}</Text>
                   ) : null}
                 </View>
@@ -2090,6 +2150,22 @@ export default function ViewPlanPage() {
 
               {isOpen && (
                 <View style={styles.weekBody}>
+                  {week?.coachNote || week?.progressionReason || week?.riskNote ? (
+                    <View style={styles.weekCoachBlock}>
+                      {week?.coachNote ? (
+                        <Text style={styles.weekCoachText}>{week.coachNote}</Text>
+                      ) : null}
+                      {week?.progressionReason ? (
+                        <Text style={styles.weekCoachSub}>
+                          <Text style={styles.boldText}>Progression: </Text>
+                          {week.progressionReason}
+                        </Text>
+                      ) : null}
+                      {week?.riskNote ? (
+                        <Text style={styles.weekRiskText}>{week.riskNote}</Text>
+                      ) : null}
+                    </View>
+                  ) : null}
                   {(week?.days || []).map((dayObj, dIdx) => (
                     <DayBlock
                       key={`day-${wIdx}-${dIdx}`}
@@ -2266,15 +2342,22 @@ function RunSessionBlock({ session, styles }) {
       ? `${Math.round(Number(targetHr.minBpm))}-${Math.round(Number(targetHr.maxBpm))} bpm`
       : null;
 
-  const rawSteps = Array.isArray(session?.steps)
+  const displaySteps = Array.isArray(session?.workoutSteps)
+    ? session.workoutSteps
+    : Array.isArray(session?.workout?.workoutSteps)
+    ? session.workout.workoutSteps
+    : [];
+  const rawStepsWithDisplayPreference = displaySteps.length
+    ? displaySteps
+    : Array.isArray(session?.steps)
     ? session.steps
     : Array.isArray(session?.workout?.steps)
     ? session.workout.steps
     : [];
   const isEasySession = /easy/i.test(String(session?.sessionType || session?.type || ""));
   const steps = isEasySession
-    ? rawSteps.filter((st) => !isWarmCooldownRunStep(st))
-    : rawSteps;
+    ? rawStepsWithDisplayPreference.filter((st) => !isWarmCooldownRunStep(st))
+    : rawStepsWithDisplayPreference;
   const showWarmupMin = isEasySession ? null : warmupMin;
   const showCooldownMin = isEasySession ? null : cooldownMin;
 
@@ -2306,6 +2389,8 @@ function RunSessionBlock({ session, styles }) {
       )}
 
       {!!notes && <Text style={styles.sessionNotes}>{notes}</Text>}
+
+      <CoachNoteBlock session={session} styles={styles} />
 
       {!!steps.length && (
         <View style={styles.stepsWrap}>
@@ -2377,6 +2462,8 @@ function StrengthSessionBlock({ session, styles }) {
 
       {!!notes && <Text style={styles.sessionNotes}>{notes}</Text>}
 
+      <CoachNoteBlock session={session} styles={styles} />
+
       {!!coaching?.progressionNote && (
         <Text style={styles.sessionNotes}>
           <Text style={styles.boldText}>Progression: </Text>
@@ -2417,6 +2504,37 @@ function StrengthSessionBlock({ session, styles }) {
           })}
         </View>
       )}
+    </View>
+  );
+}
+
+function CoachNoteBlock({ session, styles }) {
+  const whyThisSession = String(session?.whyThisSession || "").trim();
+  const executionTip = String(session?.executionTip || "").trim();
+  const coachNote = String(session?.coachNote || "").trim();
+
+  if (!whyThisSession && !executionTip && !coachNote) return null;
+
+  return (
+    <View style={styles.coachNoteBlock}>
+      {whyThisSession ? (
+        <Text style={styles.coachNoteText}>
+          <Text style={styles.coachNoteLabel}>Why: </Text>
+          {whyThisSession}
+        </Text>
+      ) : null}
+      {executionTip ? (
+        <Text style={styles.coachNoteText}>
+          <Text style={styles.coachNoteLabel}>Tip: </Text>
+          {executionTip}
+        </Text>
+      ) : null}
+      {coachNote ? (
+        <Text style={styles.coachNoteText}>
+          <Text style={styles.coachNoteLabel}>Coach: </Text>
+          {coachNote}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -2841,6 +2959,32 @@ function makeStyles(t, topInset = 0) {
       marginTop: 4,
       opacity: 0.9,
     },
+    weekCoachBlock: {
+      backgroundColor: t.surfaceAlt,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: t.border,
+      borderRadius: 8,
+      padding: 11,
+      gap: 6,
+    },
+    weekCoachText: {
+      color: t.text,
+      fontSize: 12,
+      lineHeight: 17,
+      fontWeight: "700",
+    },
+    weekCoachSub: {
+      color: t.subtext,
+      fontSize: 12,
+      lineHeight: 17,
+      fontWeight: "600",
+    },
+    weekRiskText: {
+      color: "#f59e0b",
+      fontSize: 12,
+      lineHeight: 17,
+      fontWeight: "700",
+    },
     chevron: {
       color: t.subtext,
       fontSize: 18,
@@ -2931,6 +3075,25 @@ function makeStyles(t, topInset = 0) {
       color: t.subtext,
       fontSize: 12,
       lineHeight: 17,
+    },
+    coachNoteBlock: {
+      backgroundColor: t.card,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: t.border,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 9,
+      gap: 5,
+    },
+    coachNoteText: {
+      color: t.subtext,
+      fontSize: 12,
+      lineHeight: 17,
+      fontWeight: "600",
+    },
+    coachNoteLabel: {
+      color: t.text,
+      fontWeight: "900",
     },
     sessionChipRow: {
       flexDirection: "row",

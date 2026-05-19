@@ -32,8 +32,10 @@ import {
   View,
 } from "react-native";
 import Svg, {
+  Circle as SvgCircle,
   Line as SvgLine,
   Path as SvgPath,
+  Text as SvgText,
 } from "react-native-svg";
 // ❌ REMOVE this line:
 // import MapView, { Polyline } from "react-native-maps";
@@ -278,16 +280,37 @@ function formatRpeLabel(value, prefix = "RPE") {
   return `${prefix} ${Number.isInteger(n) ? n : n.toFixed(1)}`;
 }
 
+function cleanStepText(value) {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value).trim();
+  }
+  if (typeof value === "object") {
+    const text = String(
+      value.label ||
+        value.title ||
+        value.name ||
+        value.display ||
+        value.displayName ||
+        value.description ||
+        value.value ||
+        ""
+    ).trim();
+    return text;
+  }
+  return "";
+}
+
 function readStepLabel(step) {
-  return String(
-    step?.label ||
-      step?.title ||
-      step?.name ||
-      step?.type ||
-      step?.kind ||
-      step?.intensity ||
-      "Step"
-  ).trim();
+  return (
+    cleanStepText(step?.label) ||
+    cleanStepText(step?.title) ||
+    cleanStepText(step?.name) ||
+    cleanStepText(step?.type) ||
+    cleanStepText(step?.kind) ||
+    cleanStepText(step?.intensity) ||
+    "Step"
+  );
 }
 
 function formatRunStep(step) {
@@ -297,8 +320,15 @@ function formatRunStep(step) {
   const distanceKm = firstNumber(step?.distanceKm, step?.km);
   const durationSec = firstNumber(step?.durationSec, step?.seconds, step?.timeSec);
   const durationMin = firstNumber(step?.durationMin, step?.minutes);
-  const pace = String(step?.pace || step?.targetPace || step?.paceLabel || "").trim();
-  const effort = String(step?.effort || step?.target || step?.zone || step?.rpe || "").trim();
+  const pace =
+    cleanStepText(step?.pace) ||
+    cleanStepText(step?.targetPace) ||
+    cleanStepText(step?.paceLabel);
+  const effort =
+    cleanStepText(step?.effort) ||
+    cleanStepText(step?.target) ||
+    cleanStepText(step?.zone) ||
+    cleanStepText(step?.rpe);
 
   const bits = [
     repeat > 1 ? `${Math.round(repeat)}x` : null,
@@ -919,6 +949,7 @@ export default function ActivityDetailPage() {
   const [editEffortBarWidth, setEditEffortBarWidth] = useState(0);
   const [editMediaUris, setEditMediaUris] = useState([]);
   const [editDeleting, setEditDeleting] = useState(false);
+  const [chartDetail, setChartDetail] = useState(null);
   const linkedActivityReferences = useMemo(() => {
     const refs = [
       activity?.id,
@@ -938,17 +969,26 @@ export default function ActivityDetailPage() {
     id,
   ]);
   const targetTrainSessionId = useMemo(() => {
-    const raw = Array.isArray(params?.linkTrainSessionId)
+    const rawLink = Array.isArray(params?.linkTrainSessionId)
       ? params.linkTrainSessionId[0]
       : params?.linkTrainSessionId;
+    const rawSession = Array.isArray(params?.sessionId)
+      ? params.sessionId[0]
+      : params?.sessionId;
     const value = String(
-      raw ||
+      rawLink ||
+        rawSession ||
         activity?.linkedTrainSessionId ||
         activity?.storedData?.linkedTrainSessionId ||
         ""
     ).trim();
     return value || null;
-  }, [activity?.linkedTrainSessionId, activity?.storedData?.linkedTrainSessionId, params?.linkTrainSessionId]);
+  }, [
+    activity?.linkedTrainSessionId,
+    activity?.storedData?.linkedTrainSessionId,
+    params?.linkTrainSessionId,
+    params?.sessionId,
+  ]);
   const targetPlanSessionKey = useMemo(() => {
     const raw = Array.isArray(params?.linkSessionKey)
       ? params.linkSessionKey[0]
@@ -1234,34 +1274,50 @@ export default function ActivityDetailPage() {
         }
 
         if ((!snap || !snap.exists()) && linkedActivityReferences.length) {
-          for (const refValue of linkedActivityReferences) {
-            const sessionsSnap = await getDocs(
-              query(
-                collection(db, "users", uid, "trainSessions"),
-                where("linkedActivity.reference", "==", refValue),
-                limit(1)
-              )
-            );
-            snap = sessionsSnap.docs[0] || null;
+          const linkedActivityFields = [
+            "linkedActivity.reference",
+            "linkedActivity.id",
+            "linkedActivity.activityId",
+          ];
+          for (const fieldName of linkedActivityFields) {
+            for (const refValue of linkedActivityReferences) {
+              const sessionsSnap = await getDocs(
+                query(
+                  collection(db, "users", uid, "trainSessions"),
+                  where(fieldName, "==", refValue),
+                  limit(1)
+                )
+              );
+              snap = sessionsSnap.docs[0] || null;
+              if (snap?.exists()) break;
+            }
             if (snap?.exists()) break;
           }
         }
 
         if ((!snap || !snap.exists()) && linkedActivityReferences.length) {
-          for (const refValue of linkedActivityReferences) {
-            const logsSnap = await getDocs(
-              query(
-                collection(db, "users", uid, "sessionLogs"),
-                where("linkedActivity.reference", "==", refValue),
-                limit(1)
-              )
-            );
-            const logData = logsSnap.docs[0]?.data() || null;
-            const lastTrainSessionId = String(logData?.lastTrainSessionId || "").trim();
-            if (lastTrainSessionId) {
-              snap = await getDoc(doc(db, "users", uid, "trainSessions", lastTrainSessionId));
-              if (snap.exists()) break;
+          const linkedActivityFields = [
+            "linkedActivity.reference",
+            "linkedActivity.id",
+            "linkedActivity.activityId",
+          ];
+          for (const fieldName of linkedActivityFields) {
+            for (const refValue of linkedActivityReferences) {
+              const logsSnap = await getDocs(
+                query(
+                  collection(db, "users", uid, "sessionLogs"),
+                  where(fieldName, "==", refValue),
+                  limit(1)
+                )
+              );
+              const logData = logsSnap.docs[0]?.data() || null;
+              const lastTrainSessionId = String(logData?.lastTrainSessionId || "").trim();
+              if (lastTrainSessionId) {
+                snap = await getDoc(doc(db, "users", uid, "trainSessions", lastTrainSessionId));
+                if (snap.exists()) break;
+              }
             }
+            if (snap?.exists()) break;
           }
         }
 
@@ -1363,10 +1419,25 @@ export default function ActivityDetailPage() {
     return `${mins}:${secs}/km`;
   };
 
+  const openLineChart = (config) => {
+    setChartDetail({ type: "line", ...config });
+  };
+
+  const openWorkoutChart = (config) => {
+    setChartDetail({ type: "workout", ...config });
+  };
+
   const formatDateTime = (iso) => {
     if (!iso) return "";
     const d = new Date(iso);
-    return d.toLocaleString();
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   };
 
   const formatHeaderDate = (iso) => {
@@ -2641,7 +2712,7 @@ export default function ActivityDetailPage() {
             value:
               activity?.total_elevation_gain != null
                 ? `${Math.round(activity.total_elevation_gain)} m`
-                : "-",
+                : null,
             icon: "trending-up",
           },
           {
@@ -2887,9 +2958,43 @@ export default function ActivityDetailPage() {
   ]);
 
   const isLinkedToTargetSession = useMemo(() => {
-    const ref = String(targetTrainSession?.linkedActivity?.reference || "").trim();
-    return !!ref && linkedActivityReferences.includes(ref);
-  }, [linkedActivityReferences, targetTrainSession?.linkedActivity?.reference]);
+    const refs = [
+      targetTrainSession?.linkedActivity?.reference,
+      targetTrainSession?.linkedActivity?.id,
+      targetTrainSession?.linkedActivity?.activityId,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    return refs.some((ref) => linkedActivityReferences.includes(ref));
+  }, [
+    linkedActivityReferences,
+    targetTrainSession?.linkedActivity?.activityId,
+    targetTrainSession?.linkedActivity?.id,
+    targetTrainSession?.linkedActivity?.reference,
+  ]);
+
+  const linkedCompletedSession = useMemo(() => {
+    if (!targetTrainSession || !isLinkedToTargetSession) return null;
+    const title = String(
+      targetTrainSession.title ||
+        targetTrainSession.name ||
+        targetTrainSession.sessionTitle ||
+        targetTrainSession.sessionType ||
+        "Completed session"
+    ).trim();
+    const summaryBits = [
+      targetTrainSession.planName,
+      targetTrainSession.weekLabel,
+      targetTrainSession.dayLabel,
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    return {
+      id: String(targetTrainSession.id || targetTrainSessionId || "").trim(),
+      title: title || "Completed session",
+      meta: summaryBits.join(" • "),
+    };
+  }, [isLinkedToTargetSession, targetTrainSession, targetTrainSessionId]);
 
   const performedSessionSummary = useMemo(() => {
     if (!activity) return null;
@@ -3705,7 +3810,7 @@ export default function ActivityDetailPage() {
         </View>
       ) : (
         <ScrollView contentContainerStyle={s.content}>
-          {/* Title + meta */}
+          {/* Activity summary */}
           <View style={s.heroBlock}>
             <View style={s.metaChipRow}>
               {!!headerDateLabel ? (
@@ -3734,9 +3839,11 @@ export default function ActivityDetailPage() {
               ) : null}
             </View>
             <Text style={s.activityTitle}>{name}</Text>
-            <Text style={s.activityType}>
-              {activityTypeLabel} • {formatDateTime(activity.start_date)}
-            </Text>
+            {formatDateTime(activity.start_date) ? (
+              <Text style={s.activityType}>
+                {activityTypeLabel} · {formatDateTime(activity.start_date)}
+              </Text>
+            ) : null}
           </View>
 
           {activity.photoUrls?.length ? (
@@ -3772,6 +3879,56 @@ export default function ActivityDetailPage() {
               </View>
             )}
 
+          {linkedCompletedSession ? (
+            <View style={s.linkPlanCard}>
+              <View style={s.linkPlanHeader}>
+                <Text style={s.linkPlanEyebrow}>Linked completed session</Text>
+                <View style={[s.linkPlanStatusChip, s.linkPlanStatusChipDone]}>
+                  <Text style={[s.linkPlanStatusText, s.linkPlanStatusTextDone]}>
+                    Linked
+                  </Text>
+                </View>
+              </View>
+              <View style={s.linkPlanContentRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.linkPlanTitle}>{linkedCompletedSession.title}</Text>
+                  {linkedCompletedSession.meta ? (
+                    <Text style={s.linkPlanMeta}>{linkedCompletedSession.meta}</Text>
+                  ) : (
+                    <Text style={s.linkPlanMeta}>
+                      Open the completed Train session for the planned workout context.
+                    </Text>
+                  )}
+                </View>
+                <TouchableOpacity
+                  style={s.linkPlanIconButton}
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    if (linkedCompletedSession.id) {
+                      router.push(`/train/history/${linkedCompletedSession.id}`);
+                    }
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="View completed session"
+                >
+                  <Feather name="arrow-up-right" size={17} color={accentText} />
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity
+                style={[s.linkPlanButton, s.linkPlanButtonCompact]}
+                activeOpacity={0.85}
+                onPress={() => {
+                  if (linkedCompletedSession.id) {
+                    router.push(`/train/history/${linkedCompletedSession.id}`);
+                  }
+                }}
+              >
+                <Feather name="arrow-up-right" size={15} color={accentText} />
+                <Text style={s.linkPlanButtonText}>View completed session</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {sessionBenefit ? (
             <View style={s.benefitCard}>
               <View style={s.benefitIcon}>
@@ -3779,12 +3936,12 @@ export default function ActivityDetailPage() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={s.benefitEyebrow}>Session benefit</Text>
-                <Text style={s.benefitText}>{sessionBenefit}</Text>
+                <Text style={s.benefitText} numberOfLines={4}>{sessionBenefit}</Text>
               </View>
             </View>
           ) : null}
 
-          {performedSessionSummary ? (
+          {performedSessionSummary && !linkedCompletedSession ? (
             <View style={s.performedCard}>
               <View style={s.performedHeader}>
                 <View style={s.performedIcon}>
@@ -4214,6 +4371,17 @@ export default function ActivityDetailPage() {
                         isDark={isDark}
                         accent={isDark ? "#EF4444" : "#DC2626"}
                         xUnit={hrChartUnit}
+                        yFormatter={(value) => `${Math.round(value)}`}
+                        onExpand={() =>
+                          openLineChart({
+                            title: "Heart Rate",
+                            data: hrLinePoints,
+                            accent: isDark ? "#EF4444" : "#DC2626",
+                            xUnit: hrChartUnit,
+                            yFormatter: (value) => `${Math.round(value)}`,
+                            valueFormatter: (value) => `${Math.round(value)} bpm`,
+                          })
+                        }
                       />
                   ) : (
                     <Text style={s.centerText}>No heart-rate stream available for this activity.</Text>
@@ -4285,6 +4453,16 @@ export default function ActivityDetailPage() {
                           colors={colors}
                           isDark={isDark}
                           accent={isDark ? "#A855F7" : "#9333EA"}
+                          yFormatter={(value) => `${Math.round(value)}W`}
+                          onExpand={() =>
+                            openLineChart({
+                              title: "Power",
+                              data: powerLinePoints,
+                              accent: isDark ? "#A855F7" : "#9333EA",
+                              yFormatter: (value) => `${Math.round(value)}W`,
+                              valueFormatter: (value) => `${Math.round(value)} W`,
+                            })
+                          }
                         />
                       ) : (
                         <Text style={s.centerText}>No power stream available for this activity.</Text>
@@ -4323,6 +4501,16 @@ export default function ActivityDetailPage() {
                           colors={colors}
                           isDark={isDark}
                           accent={isDark ? "#EC4899" : "#DB2777"}
+                          yFormatter={(value) => `${Math.round(value)}`}
+                          onExpand={() =>
+                            openLineChart({
+                              title: "Cadence",
+                              data: cadenceLinePoints,
+                              accent: isDark ? "#EC4899" : "#DB2777",
+                              yFormatter: (value) => `${Math.round(value)}`,
+                              valueFormatter: (value) => `${Math.round(value)} spm`,
+                            })
+                          }
                         />
                       ) : (
                         <Text style={s.centerText}>No cadence stream available for this activity.</Text>
@@ -4362,6 +4550,14 @@ export default function ActivityDetailPage() {
                     colors={colors}
                     isDark={isDark}
                     accent={isDark ? "#60A5FA" : "#2563EB"}
+                    onExpand={() =>
+                      openWorkoutChart({
+                        title: "Workout Analysis",
+                        data: workoutBars,
+                        accent: isDark ? "#60A5FA" : "#2563EB",
+                        valueFormatter: (value) => formatPace(Number(value) * 60),
+                      })
+                    }
                   />
                 </View>
                 ) : null}
@@ -4374,6 +4570,16 @@ export default function ActivityDetailPage() {
                       colors={colors}
                       isDark={isDark}
                       accent={isDark ? "#3B82F6" : "#2563EB"}
+                      yFormatter={(value) => formatPace(Number(value) * 60).replace("/km", "")}
+                      onExpand={() =>
+                        openLineChart({
+                          title: "Pace",
+                          data: paceLinePoints,
+                          accent: isDark ? "#3B82F6" : "#2563EB",
+                          yFormatter: (value) => formatPace(Number(value) * 60).replace("/km", ""),
+                          valueFormatter: (value) => formatPace(Number(value) * 60),
+                        })
+                      }
                     />
                   ) : null}
                   <View style={s.metricInlineRow}>
@@ -4405,6 +4611,16 @@ export default function ActivityDetailPage() {
                       colors={colors}
                       isDark={isDark}
                       accent={isDark ? "#60A5FA" : "#3B82F6"}
+                      yFormatter={(value) => formatPace(Number(value) * 60).replace("/km", "")}
+                      onExpand={() =>
+                        openLineChart({
+                          title: "Grade Adjusted Pace",
+                          data: gapLinePoints,
+                          accent: isDark ? "#60A5FA" : "#3B82F6",
+                          yFormatter: (value) => formatPace(Number(value) * 60).replace("/km", ""),
+                          valueFormatter: (value) => formatPace(Number(value) * 60),
+                        })
+                      }
                     />
                   ) : null}
                   <View style={s.metricInlineRowSingle}>
@@ -4445,6 +4661,17 @@ export default function ActivityDetailPage() {
                         isDark={isDark}
                         accent={isDark ? "#EF4444" : "#DC2626"}
                         xUnit={hrChartUnit}
+                        yFormatter={(value) => `${Math.round(value)}`}
+                        onExpand={() =>
+                          openLineChart({
+                            title: "Heart Rate",
+                            data: hrLinePoints,
+                            accent: isDark ? "#EF4444" : "#DC2626",
+                            xUnit: hrChartUnit,
+                            yFormatter: (value) => `${Math.round(value)}`,
+                            valueFormatter: (value) => `${Math.round(value)} bpm`,
+                          })
+                        }
                       />
                   ) : null}
                   <View style={s.metricInlineRow}>
@@ -4511,6 +4738,16 @@ export default function ActivityDetailPage() {
                           colors={colors}
                           isDark={isDark}
                           accent={isDark ? "#A855F7" : "#9333EA"}
+                          yFormatter={(value) => `${Math.round(value)}W`}
+                          onExpand={() =>
+                            openLineChart({
+                              title: "Power",
+                              data: powerLinePoints,
+                              accent: isDark ? "#A855F7" : "#9333EA",
+                              yFormatter: (value) => `${Math.round(value)}W`,
+                              valueFormatter: (value) => `${Math.round(value)} W`,
+                            })
+                          }
                         />
                       ) : (
                         <Text style={s.centerText}>No power stream available for this activity.</Text>
@@ -4578,6 +4815,16 @@ export default function ActivityDetailPage() {
                           colors={colors}
                           isDark={isDark}
                           accent={isDark ? "#EC4899" : "#DB2777"}
+                          yFormatter={(value) => `${Math.round(value)}`}
+                          onExpand={() =>
+                            openLineChart({
+                              title: "Cadence",
+                              data: cadenceLinePoints,
+                              accent: isDark ? "#EC4899" : "#DB2777",
+                              yFormatter: (value) => `${Math.round(value)}`,
+                              valueFormatter: (value) => `${Math.round(value)} spm`,
+                            })
+                          }
                         />
                       ) : (
                         <Text style={s.centerText}>No cadence stream available for this activity.</Text>
@@ -4615,6 +4862,16 @@ export default function ActivityDetailPage() {
                       colors={colors}
                       isDark={isDark}
                       accent={isDark ? "#22D3EE" : "#0284C7"}
+                      yFormatter={(value) => `${Math.round(value)}m`}
+                      onExpand={() =>
+                        openLineChart({
+                          title: "Elevation",
+                          data: elevationLinePoints,
+                          accent: isDark ? "#22D3EE" : "#0284C7",
+                          yFormatter: (value) => `${Math.round(value)}m`,
+                          valueFormatter: (value) => `${Math.round(value)} m`,
+                        })
+                      }
                     />
                   ) : null}
                   <View style={s.metricInlineRow}>
@@ -4983,6 +5240,13 @@ export default function ActivityDetailPage() {
           </View>
         </ScrollView>
 	      )}
+
+      <ChartDetailModal
+        chart={chartDetail}
+        colors={colors}
+        isDark={isDark}
+        onClose={() => setChartDetail(null)}
+      />
 
 	      <Modal
 	        visible={infoOpen}
@@ -5377,15 +5641,138 @@ export default function ActivityDetailPage() {
 
 /* ---- local components ---- */
 
-function LineProfileChart({ data, colors, isDark, accent, xUnit = "km" }) {
+function formatChartXValue(value, xUnit) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "-";
+  if (xUnit === "km") return `${n.toFixed(n < 10 ? 2 : 1)} km`;
+  if (xUnit === "min") return `${Math.round(n)} min`;
+  return `${Math.round(n)}`;
+}
+
+function ChartDetailModal({ chart, colors, isDark, onClose }) {
+  const [selectedPoint, setSelectedPoint] = useState(null);
+  const [selectedBar, setSelectedBar] = useState(null);
+
+  useEffect(() => {
+    setSelectedPoint(null);
+    setSelectedBar(null);
+  }, [chart]);
+
+  if (!chart) return null;
+
+  const valueFormatter =
+    typeof chart.valueFormatter === "function"
+      ? chart.valueFormatter
+      : typeof chart.yFormatter === "function"
+      ? chart.yFormatter
+      : (value) => `${Math.round(Number(value || 0))}`;
+  const activeValue = selectedPoint?.y ?? selectedBar?.y;
+  const hasSelection = Number.isFinite(Number(activeValue));
+  const selectedX = selectedPoint?.x ?? selectedBar?.x;
+  const chartXUnit = chart.xUnit || "km";
+  const selectionLabel = hasSelection
+    ? `${valueFormatter(activeValue)}${
+        selectedX != null ? ` • ${formatChartXValue(selectedX, chartXUnit)}` : ""
+      }`
+    : chart.type === "workout"
+    ? "Tap a bar to inspect that effort."
+    : "Tap the graph to inspect a point.";
+
+  return (
+    <Modal visible={Boolean(chart)} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.58)" }}>
+        <View
+          style={{
+            maxHeight: "82%",
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            padding: 18,
+            paddingBottom: 28,
+            backgroundColor: colors.card,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: colors.border,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontSize: 22, fontWeight: "900" }}>
+                {chart.title || "Graph"}
+              </Text>
+              <Text style={{ marginTop: 3, color: colors.subtext, fontSize: 13, fontWeight: "700" }}>
+                {selectionLabel}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={onClose}
+              activeOpacity={0.85}
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 21,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(15,23,42,0.06)",
+              }}
+            >
+              <Feather name="x" size={20} color={colors.text} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ marginTop: 16 }}>
+            {chart.type === "workout" ? (
+              <WorkoutAnalysisChart
+                data={chart.data}
+                colors={colors}
+                isDark={isDark}
+                accent={chart.accent}
+                interactive
+                selectedBar={selectedBar}
+                onBarSelect={setSelectedBar}
+                height={240}
+              />
+            ) : (
+              <LineProfileChart
+                data={chart.data}
+                colors={colors}
+                isDark={isDark}
+                accent={chart.accent}
+                xUnit={chartXUnit}
+                yFormatter={chart.yFormatter}
+                interactive
+                selectedPoint={selectedPoint}
+                onPointSelect={setSelectedPoint}
+                height={260}
+              />
+            )}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function LineProfileChart({
+  data,
+  colors,
+  isDark,
+  accent,
+  xUnit = "km",
+  yFormatter,
+  onExpand,
+  interactive = false,
+  selectedPoint,
+  onPointSelect,
+  height = 140,
+}) {
   const width = 340;
-  const height = 140;
-  const padLeft = 10;
+  const [layoutWidth, setLayoutWidth] = useState(width);
+  const padLeft = 44;
   const padRight = 10;
   const padTop = 10;
   const padBottom = 16;
   const bg = isDark ? "#18191E" : colors.sapSilverLight || colors.muted;
   const border = isDark ? "rgba(255,255,255,0.10)" : colors.border;
+  const axisColor = isDark ? "rgba(255,255,255,0.62)" : "rgba(15,23,42,0.56)";
 
   const safe = Array.isArray(data)
     ? data.filter(
@@ -5424,27 +5811,114 @@ function LineProfileChart({ data, colors, isDark, accent, xUnit = "km" }) {
 
   const avgY = safe.reduce((sum, p) => sum + Number(p.y), 0) / safe.length;
   const avgLineY = yFor(avgY);
+  const formatY =
+    typeof yFormatter === "function"
+      ? yFormatter
+      : (value) => `${Math.round(Number(value || 0))}`;
+  const yTicks = [
+    { value: maxY, y: padTop, anchor: "start" },
+    { value: (minY + maxY) / 2, y: padTop + plotH * 0.5, anchor: "middle" },
+    { value: minY, y: padTop + plotH, anchor: "end" },
+  ];
+  const selected =
+    selectedPoint && Number.isFinite(Number(selectedPoint.x)) && Number.isFinite(Number(selectedPoint.y))
+      ? selectedPoint
+      : null;
+  const selectedX = selected ? xFor(selected.x) : null;
+  const selectedY = selected ? yFor(selected.y) : null;
+
+  const handleTouch = (event) => {
+    if (!interactive || typeof onPointSelect !== "function") return;
+    const localX = Number(event?.nativeEvent?.locationX);
+    if (!Number.isFinite(localX)) return;
+    const svgX = (localX / Math.max(1, layoutWidth)) * width;
+    const targetX = minX + ((svgX - padLeft) / (plotW || 1)) * (maxX - minX);
+    const clampedX = Math.max(minX, Math.min(maxX, targetX));
+    const nearest = safe.reduce((best, point) => {
+      if (!best) return point;
+      return Math.abs(Number(point.x) - clampedX) < Math.abs(Number(best.x) - clampedX)
+        ? point
+        : best;
+    }, null);
+    if (nearest) onPointSelect(nearest);
+  };
+
+  const chart = (
+    <View
+      onLayout={(event) => setLayoutWidth(event.nativeEvent.layout.width || width)}
+      onStartShouldSetResponder={() => Boolean(interactive)}
+      onResponderRelease={handleTouch}
+      style={{
+        borderRadius: 12,
+        overflow: "hidden",
+        backgroundColor: bg,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: border,
+      }}
+    >
+      <Svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
+        {yTicks.map((tick, idx) => (
+          <SvgText
+            key={`y-axis-${idx}`}
+            x={padLeft - 8}
+            y={tick.y}
+            fill={axisColor}
+            fontSize="9"
+            fontWeight="700"
+            textAnchor="end"
+            alignmentBaseline={tick.anchor}
+          >
+            {formatY(tick.value)}
+          </SvgText>
+        ))}
+        <SvgLine x1={padLeft} y1={padTop} x2={padLeft} y2={height - padBottom} stroke={border} strokeWidth={1} opacity={0.65} />
+        <SvgLine x1={padLeft} y1={padTop + plotH * 0.25} x2={width - padRight} y2={padTop + plotH * 0.25} stroke={border} strokeWidth={1} opacity={0.45} />
+        <SvgLine x1={padLeft} y1={padTop + plotH * 0.5} x2={width - padRight} y2={padTop + plotH * 0.5} stroke={border} strokeWidth={1} opacity={0.45} />
+        <SvgLine x1={padLeft} y1={padTop + plotH * 0.75} x2={width - padRight} y2={padTop + plotH * 0.75} stroke={border} strokeWidth={1} opacity={0.45} />
+        <SvgPath d={areaPath} fill={accent} opacity={0.28} />
+        <SvgPath d={path} fill="none" stroke={accent} strokeWidth={2.5} />
+        <SvgLine
+          x1={padLeft}
+          y1={avgLineY}
+          x2={width - padRight}
+          y2={avgLineY}
+          stroke={isDark ? "rgba(255,255,255,0.55)" : "rgba(15,23,42,0.35)"}
+          strokeDasharray="5 4"
+          strokeWidth={1}
+        />
+        {selected ? (
+          <>
+            <SvgLine
+              x1={selectedX}
+              y1={padTop}
+              x2={selectedX}
+              y2={height - padBottom}
+              stroke={isDark ? "rgba(255,255,255,0.72)" : "rgba(15,23,42,0.48)"}
+              strokeWidth={1}
+            />
+            <SvgCircle
+              cx={selectedX}
+              cy={selectedY}
+              r={5}
+              fill={accent}
+              stroke={isDark ? "#050505" : "#FFFFFF"}
+              strokeWidth={2}
+            />
+          </>
+        ) : null}
+      </Svg>
+    </View>
+  );
 
   return (
     <View style={{ marginTop: 8 }}>
-      <View style={{ borderRadius: 12, overflow: "hidden", backgroundColor: bg, borderWidth: StyleSheet.hairlineWidth, borderColor: border }}>
-        <Svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
-          <SvgLine x1={padLeft} y1={padTop + plotH * 0.25} x2={width - padRight} y2={padTop + plotH * 0.25} stroke={border} strokeWidth={1} opacity={0.45} />
-          <SvgLine x1={padLeft} y1={padTop + plotH * 0.5} x2={width - padRight} y2={padTop + plotH * 0.5} stroke={border} strokeWidth={1} opacity={0.45} />
-          <SvgLine x1={padLeft} y1={padTop + plotH * 0.75} x2={width - padRight} y2={padTop + plotH * 0.75} stroke={border} strokeWidth={1} opacity={0.45} />
-          <SvgPath d={areaPath} fill={accent} opacity={0.28} />
-          <SvgPath d={path} fill="none" stroke={accent} strokeWidth={2.5} />
-          <SvgLine
-            x1={padLeft}
-            y1={avgLineY}
-            x2={width - padRight}
-            y2={avgLineY}
-            stroke={isDark ? "rgba(255,255,255,0.55)" : "rgba(15,23,42,0.35)"}
-            strokeDasharray="5 4"
-            strokeWidth={1}
-          />
-        </Svg>
-      </View>
+      {onExpand && !interactive ? (
+        <TouchableOpacity activeOpacity={0.9} onPress={onExpand}>
+          {chart}
+        </TouchableOpacity>
+      ) : (
+        chart
+      )}
       <View style={{ marginTop: 4, flexDirection: "row", justifyContent: "space-between" }}>
         <Text style={{ fontSize: 10, color: colors.subtext }}>
           {xUnit === "km" ? "0 km" : xUnit === "min" ? "0 min" : "0"}
@@ -5503,7 +5977,17 @@ function SectionInsight({ insight, colors, styles }) {
   );
 }
 
-function WorkoutAnalysisChart({ data, colors, isDark, accent }) {
+function WorkoutAnalysisChart({
+  data,
+  colors,
+  isDark,
+  accent,
+  onExpand,
+  interactive = false,
+  selectedBar,
+  onBarSelect,
+  height = 122,
+}) {
   const bars = Array.isArray(data)
     ? data.filter((p) => Number.isFinite(Number(p?.y)) && Number(p.y) > 0)
     : [];
@@ -5513,10 +5997,12 @@ function WorkoutAnalysisChart({ data, colors, isDark, accent }) {
   const min = Math.min(...bars.map((b) => Number(b.y)));
   const avg = bars.reduce((sum, b) => sum + Number(b.y || 0), 0) / bars.length;
 
-  const chartH = 122;
+  const chartH = height;
   const barW = 12;
   const gap = 3;
   const rowW = bars.length * (barW + gap);
+  const axisW = 38;
+  const axisColor = colors.subtext;
   const scale = (v) => {
     const n = Number(v || 0);
     if (!Number.isFinite(n) || max === min) return chartH * 0.62;
@@ -5525,8 +6011,7 @@ function WorkoutAnalysisChart({ data, colors, isDark, accent }) {
   };
   const avgHeight = scale(avg);
 
-  return (
-    <View style={{ marginTop: 6 }}>
+  const chart = (
       <View
         style={{
           height: chartH,
@@ -5534,16 +6019,54 @@ function WorkoutAnalysisChart({ data, colors, isDark, accent }) {
           borderWidth: StyleSheet.hairlineWidth,
           borderColor: isDark ? "rgba(255,255,255,0.12)" : colors.border,
           backgroundColor: isDark ? "#18191E" : colors.sapSilverLight || colors.muted,
-          paddingHorizontal: 9,
+          paddingLeft: axisW,
+          paddingRight: 9,
           paddingVertical: 9,
           justifyContent: "flex-end",
           overflow: "hidden",
         }}
       >
         <View
+          pointerEvents="none"
           style={{
             position: "absolute",
-            left: 10,
+            left: 8,
+            top: 10,
+            bottom: 10,
+            width: axisW - 12,
+            justifyContent: "space-between",
+          }}
+        >
+          {[max, avg, min].map((value, idx) => (
+            <Text
+              key={`workout-y-${idx}`}
+              style={{
+                color: axisColor,
+                fontSize: 9,
+                fontWeight: "800",
+                textAlign: "right",
+              }}
+              numberOfLines={1}
+            >
+              {Math.round(value)}
+            </Text>
+          ))}
+        </View>
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: axisW,
+            top: 10,
+            bottom: 10,
+            borderLeftWidth: StyleSheet.hairlineWidth,
+            borderColor: isDark ? "rgba(255,255,255,0.18)" : colors.border,
+          }}
+        />
+        <View
+          style={{
+            position: "absolute",
+            left: axisW,
             right: 10,
             bottom: 10 + avgHeight - 1,
             borderTopWidth: 1,
@@ -5560,21 +6083,53 @@ function WorkoutAnalysisChart({ data, colors, isDark, accent }) {
               gap,
             }}
           >
-            {bars.map((bar, idx) => (
-              <View
-                key={`wa-bar-${idx}`}
-                style={{
-                  width: barW,
-                  height: scale(bar.y),
-                  borderRadius: 4,
-                  backgroundColor: accent,
-                  opacity: 0.96,
-                }}
-              />
-            ))}
+            {bars.map((bar, idx) => {
+              const selected =
+                selectedBar &&
+                Number(selectedBar.x) === Number(bar.x) &&
+                Number(selectedBar.y) === Number(bar.y);
+              const barNode = (
+                <View
+                  style={{
+                    width: barW,
+                    height: scale(bar.y),
+                    borderRadius: 4,
+                    backgroundColor: accent,
+                    opacity: selected ? 1 : 0.96,
+                    borderWidth: selected ? 2 : 0,
+                    borderColor: isDark ? "#FFFFFF" : "#0F172A",
+                  }}
+                />
+              );
+              return interactive ? (
+                <TouchableOpacity
+                  key={`wa-bar-${idx}`}
+                  activeOpacity={0.82}
+                  onPress={() => {
+                    if (typeof onBarSelect === "function") onBarSelect(bar);
+                  }}
+                  style={{ justifyContent: "flex-end" }}
+                >
+                  {barNode}
+                </TouchableOpacity>
+              ) : (
+                <View key={`wa-bar-${idx}`}>{barNode}</View>
+              );
+            })}
           </View>
         </ScrollView>
       </View>
+  );
+
+  return (
+    <View style={{ marginTop: 6 }}>
+      {onExpand && !interactive ? (
+        <TouchableOpacity activeOpacity={0.9} onPress={onExpand}>
+          {chart}
+        </TouchableOpacity>
+      ) : (
+        chart
+      )}
     </View>
   );
 }
@@ -6009,7 +6564,7 @@ function makeStyles(colors, isDark, accentFill, accentText) {
     content: {
       paddingHorizontal: 18,
       paddingBottom: 64,
-      gap: 8,
+      gap: 10,
     },
     center: {
       flex: 1,
@@ -6044,8 +6599,8 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       }),
     },
     heroBlock: {
-      paddingTop: 2,
-      paddingBottom: 0,
+      paddingTop: 4,
+      paddingBottom: 2,
     },
     sectionBlock: {
       paddingTop: 0,
@@ -6055,14 +6610,14 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       backgroundColor: cardBg,
       borderRadius: 18,
       overflow: "hidden",
-      height: 204,
+      height: 214,
       borderWidth: 0,
     },
     map: {
       flex: 1,
     },
     benefitCard: {
-      marginTop: 2,
+      marginTop: 0,
       borderRadius: 18,
       padding: 13,
       backgroundColor: isDark ? "rgba(230,255,59,0.10)" : "rgba(184,215,0,0.14)",
@@ -6089,8 +6644,8 @@ function makeStyles(colors, isDark, accentFill, accentText) {
     },
     benefitText: {
       marginTop: 4,
-      fontSize: 14,
-      lineHeight: 19,
+      fontSize: 13,
+      lineHeight: 18,
       fontWeight: "800",
       color: colors.text,
     },
@@ -6232,10 +6787,11 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       color: accentText,
     },
     activityTitle: {
-      fontSize: 18,
+      fontSize: 20,
+      lineHeight: 25,
       fontWeight: "900",
       color: colors.text,
-      marginTop: 5,
+      marginTop: 7,
     },
     activityType: {
       marginTop: 4,
@@ -6254,7 +6810,7 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       backgroundColor: cardBg,
     },
     statsGrid: {
-      marginTop: 1,
+      marginTop: 2,
       flexDirection: "row",
       flexWrap: "wrap",
       justifyContent: "space-between",
@@ -6427,7 +6983,7 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       color: colors.subtext,
     },
     linkPlanCard: {
-      marginTop: 2,
+      marginTop: 0,
       borderRadius: 18,
       padding: 14,
       backgroundColor: isDark ? "rgba(255,255,255,0.05)" : colors.sapSilverLight || colors.card,
@@ -6438,6 +6994,20 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       justifyContent: "space-between",
       gap: 10,
     },
+    linkPlanContentRow: {
+      marginTop: 10,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+    },
+    linkPlanIconButton: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: accentFill,
+    },
     linkPlanEyebrow: {
       fontSize: 11,
       fontWeight: "900",
@@ -6446,7 +7016,6 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       textTransform: "uppercase",
     },
     linkPlanTitle: {
-      marginTop: 10,
       fontSize: 16,
       lineHeight: 21,
       fontWeight: "900",
@@ -6468,6 +7037,10 @@ function makeStyles(colors, isDark, accentFill, accentText) {
       alignItems: "center",
       justifyContent: "center",
       gap: 8,
+    },
+    linkPlanButtonCompact: {
+      minHeight: 40,
+      marginTop: 12,
     },
     linkPlanButtonDisabled: {
       opacity: 0.6,
