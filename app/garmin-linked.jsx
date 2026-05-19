@@ -5,6 +5,7 @@ import { ActivityIndicator, Text, TouchableOpacity, View } from "react-native";
 
 import { API_URL } from "../config/api";
 import { auth } from "../firebaseConfig";
+import { refreshTrainingWidgetSnapshotForUser } from "../src/widgets/trainingWidgetSnapshot";
 
 function isNonFatalInitialSyncResponse(res, data) {
   const message = String(
@@ -79,6 +80,10 @@ export default function GarminLinked() {
         try {
           if (active) setStatus("Garmin connected. Importing recent activities...");
           await triggerGarminInitialSync();
+          await refreshTrainingWidgetSnapshotForUser({
+            userId: auth.currentUser?.uid || null,
+            reason: "garmin_import",
+          });
         } catch (syncError) {
           console.log("Garmin initial sync after link failed", syncError);
         }

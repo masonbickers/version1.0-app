@@ -12,6 +12,7 @@ import {
 import { db } from "../../../firebaseConfig";
 import { activityMatchIdentity } from "./activitySessionMatch";
 import { decodeSessionKey } from "./sessionHelpers";
+import { refreshTrainingWidgetSnapshotForUser } from "../../widgets/trainingWidgetSnapshot";
 
 function normaliseList(value) {
   if (Array.isArray(value)) return value;
@@ -951,6 +952,12 @@ export async function linkExternalActivityToPlannedSession({
   );
 
   await batch.commit();
+  await refreshTrainingWidgetSnapshotForUser({
+    userId: uid,
+    reason: "activity_linked",
+  }).catch((error) => {
+    console.warn("[widgets] linked activity snapshot failed:", error?.message || error);
+  });
 
   return {
     trainSessionId: trainSessionRef.id,
@@ -1027,6 +1034,12 @@ export async function attachExternalActivityToTrainSession({
   }
 
   await batch.commit();
+  await refreshTrainingWidgetSnapshotForUser({
+    userId: uid,
+    reason: "activity_attached",
+  }).catch((error) => {
+    console.warn("[widgets] attached activity snapshot failed:", error?.message || error);
+  });
 
   return {
     trainSessionId: trainSessionRef.id,

@@ -68,6 +68,12 @@
           "cameraPermission": "Allow Be to use your camera to scan meals.",
           "photosPermission": "Allow Be to choose photos for nutrition logging and your profile."
         }
+      ],
+      [
+        "./plugins/withTodayRunWidget",
+        {
+          "appGroupIdentifier": "group.com.bickers.beapp.widgets"
+        }
       ]
     ],
     "experiments": {

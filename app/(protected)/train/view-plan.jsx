@@ -31,6 +31,7 @@ import {
 
 import { auth, db } from "../../../firebaseConfig";
 import { useTheme } from "../../../providers/ThemeProvider";
+import { refreshTrainingWidgetSnapshotForUser } from "../../../src/widgets/trainingWidgetSnapshot";
 
 /* ------------------------------------------------------------
    Constants
@@ -1201,6 +1202,14 @@ export default function ViewPlanPage() {
       }
 
       setPlansByType(picked);
+      if (picked.run) {
+        await refreshTrainingWidgetSnapshotForUser({
+          userId: user.uid,
+          reason: "plan_loaded",
+        }).catch((error) => {
+          console.warn("[widgets] plan load snapshot failed:", error?.message || error);
+        });
+      }
 
       const availableTypes = ["hybrid", "run", "strength"].filter((t) => !!picked[t]);
 

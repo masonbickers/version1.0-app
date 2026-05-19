@@ -11,6 +11,7 @@ import {
 import { AuthProvider } from "../providers/AuthProvider";
 import { LiveActivityProvider } from "../providers/LiveActivityProvider";
 import { ThemeProvider } from "../providers/ThemeProvider";
+import { TrainingWidgetProvider } from "../providers/TrainingWidgetProvider";
 
 class RootErrorBoundary extends React.Component {
   constructor(props) {
@@ -61,9 +62,11 @@ export default function RootLayout() {
       <RootErrorBoundary>
         <ThemeProvider>
           <AuthProvider>
-            <LiveActivityProvider>
-              <Stack screenOptions={{ headerShown: false }} />
-            </LiveActivityProvider>
+            <TrainingWidgetProvider>
+              <LiveActivityProvider>
+                <Stack screenOptions={{ headerShown: false }} />
+              </LiveActivityProvider>
+            </TrainingWidgetProvider>
           </AuthProvider>
         </ThemeProvider>
       </RootErrorBoundary>

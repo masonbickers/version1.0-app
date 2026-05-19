@@ -12,6 +12,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../../../firebaseConfig";
 import { activityDedupeKey, likelySameActivity } from "../activities/activityDedupe";
+import { refreshTrainingWidgetSnapshotForUser } from "../../widgets/trainingWidgetSnapshot";
   
   function startOfDay(d) {
     const x = new Date(d);
@@ -140,5 +141,12 @@ import { activityDedupeKey, likelySameActivity } from "../activities/activityDed
       { lastStravaSyncAt: serverTimestamp() },
       { merge: true }
     );
+
+    await refreshTrainingWidgetSnapshotForUser({
+      userId: uid,
+      reason: "strava_import",
+    }).catch((error) => {
+      console.warn("[widgets] Strava import snapshot failed:", error?.message || error);
+    });
   }
   

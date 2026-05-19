@@ -37,6 +37,7 @@ import {
   loadPlannedSessionRecord,
   stripNilValues,
 } from "../../../../../src/train/utils/sessionRecordHelpers";
+import { refreshTrainingWidgetSnapshotForUser } from "../../../../../src/widgets/trainingWidgetSnapshot";
 
 const PROVIDERS = ["Garmin", "Strava"];
 
@@ -370,6 +371,12 @@ export default function LinkActivityScreen() {
       );
 
       await batch.commit();
+      await refreshTrainingWidgetSnapshotForUser({
+        userId: uid,
+        reason: "activity_linked",
+      }).catch((error) => {
+        console.warn("[widgets] linked activity snapshot failed:", error?.message || error);
+      });
       setExistingTrainSessionId(trainSessionRef.id);
 
       Alert.alert("Linked", "Activity has been linked and saved to history.", [

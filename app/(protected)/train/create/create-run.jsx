@@ -31,6 +31,7 @@ import { auth, db } from "../../../../firebaseConfig";
 import { useTheme } from "../../../../providers/ThemeProvider";
 import { getJsonAuthHeaders } from "../../../../src/lib/api/authHeaders";
 import { withPlanAdaptationDefaults } from "../../../../src/lib/train/adaptationModel";
+import { publishTrainingWidgetSnapshotFromPlan } from "../../../../src/widgets/trainingWidgetSnapshot";
 
 /* ------------------------------------------------------------------ */
 /* CONFIG                                                             */
@@ -1316,7 +1317,14 @@ export default function CreateRunPlan() {
         debug: { weeks: weeksCount, week0Sessions },
       });
 
-      await addDoc(collection(db, "users", uid, "plans"), planDoc);
+      const planRef = await addDoc(collection(db, "users", uid, "plans"), planDoc);
+      await publishTrainingWidgetSnapshotFromPlan({
+        userId: uid,
+        planDoc: { id: planRef.id, ...planDoc },
+        reason: "plan_saved",
+      }).catch((error) => {
+        console.warn("[widgets] plan save snapshot failed:", error?.message || error);
+      });
 
       Alert.alert(
         "Plan created",

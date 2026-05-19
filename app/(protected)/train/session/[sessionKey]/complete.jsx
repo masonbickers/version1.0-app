@@ -39,6 +39,7 @@ import {
   loadPlannedSessionRecord,
   stripNilValues,
 } from "../../../../../src/train/utils/sessionRecordHelpers";
+import { refreshTrainingWidgetSnapshotForUser } from "../../../../../src/widgets/trainingWidgetSnapshot";
 
 function toNum(value) {
   const n = Number(value);
@@ -1229,6 +1230,12 @@ export default function SessionCompleteScreen() {
       );
       batch.set(sessionLogRef, sessionLogPayload, { merge: true });
       await batch.commit();
+      await refreshTrainingWidgetSnapshotForUser({
+        userId: uid,
+        reason: "session_completed",
+      }).catch((error) => {
+        console.warn("[widgets] session completion snapshot failed:", error?.message || error);
+      });
 
       if (isStrengthDraft && status === "completed") {
         const entries = Array.isArray(trainSessionPayload?.strengthLog?.entries)
