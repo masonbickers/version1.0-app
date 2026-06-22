@@ -1815,6 +1815,130 @@ function completionContent(completion) {
   return completion?.choices?.[0]?.message?.content?.trim() || "";
 }
 
+function responsesOutputText(payload) {
+  if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  const output = Array.isArray(payload?.output) ? payload.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const part of content) {
+      const text = part?.text || part?.output_text;
+      if (typeof text === "string" && text.trim()) return text.trim();
+    }
+  }
+
+  return "";
+}
+
+async function createCoachChatResponsesFetchFallback({
+  model,
+  systemPrompt,
+  mergedContext,
+  liveContextFacts,
+  plan,
+  planSummary,
+  trimmedMessages,
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured.");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 35000);
+  const compactContext = compactCoachContext(mergedContext, planSummary);
+  const compactPlan = compactPlanForCoach(plan, planSummary);
+  const payload = {
+    context: compactContext,
+    liveContextFacts,
+    currentPlan: compactPlan,
+    conversation: trimmedMessages.slice(-8).map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
+  };
+  const requestBody = {
+    model,
+    input: [
+      {
+        role: "system",
+        content: [
+          {
+            type: "input_text",
+            text: `${systemPrompt}\n\nReturn valid JSON only with keys reply, updatedPlan, nutritionDraft, and coachActions.`,
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text:
+              "Use this compact coach-chat payload to answer the latest user message:\n" +
+              safeStringify(payload, 12000),
+          },
+        ],
+      },
+    ],
+  };
+
+  console.info("[coach-chat] OpenAI direct responses request", {
+    model,
+    payloadBytes: byteSize(requestBody),
+    messages: trimmedMessages.length,
+    contextBytes: byteSize(compactContext),
+    planBytes: byteSize(compactPlan),
+  });
+
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    console.info("[coach-chat] OpenAI direct responses status", {
+      model,
+      status: response.status,
+      ok: response.ok,
+      outputBytes: byteSize(text),
+    });
+
+    if (!response.ok) {
+      const error = new Error(`OpenAI responses request failed with ${response.status}`);
+      error.status = response.status;
+      error.responseText = text.slice(0, 1000);
+      throw error;
+    }
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+
+    const outputText = responsesOutputText(parsed);
+    if (!outputText) throw new Error("OpenAI responses request returned an empty reply.");
+    return {
+      choices: [
+        {
+          message: {
+            content: outputText,
+          },
+        },
+      ],
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function createCoachChatCompletionWithRetry({
   openai,
   primaryModel,
@@ -1901,6 +2025,24 @@ async function createCoachChatCompletionWithRetry({
         error: openAIErrorInfo(error),
       });
     }
+  }
+
+  try {
+    return await createCoachChatResponsesFetchFallback({
+      model: fallbackModel || primaryModel,
+      systemPrompt,
+      mergedContext,
+      liveContextFacts,
+      plan,
+      planSummary,
+      trimmedMessages,
+    });
+  } catch (error) {
+    lastError = error;
+    console.warn("[coach-chat] OpenAI direct responses fallback failed", {
+      error: openAIErrorInfo(error),
+      responseText: error?.responseText || null,
+    });
   }
 
   throw lastError || new Error("OpenAI request failed");
