@@ -208,6 +208,11 @@ for (const prompt of missedSessionCases) {
 const aiLedAdjustmentPrompts = [
   "I only have 30 minutes today",
   "I'm tired today, should I train?",
+  "I slept badly last night, should I adjust my workout?",
+  "What should I eat after training?",
+  "How should I approach this week?",
+  "Can I move today's session to tomorrow?",
+  "I want to lose fat but keep performance, what should I do?",
 ];
 
 for (const prompt of aiLedAdjustmentPrompts) {

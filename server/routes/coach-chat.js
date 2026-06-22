@@ -1711,6 +1711,280 @@ function safeStringify(value, maxChars = 16000) {
   }
 }
 
+function byteSize(value) {
+  try {
+    return Buffer.byteLength(
+      typeof value === "string" ? value : JSON.stringify(value ?? null),
+      "utf8"
+    );
+  } catch {
+    return 0;
+  }
+}
+
+function openAIErrorInfo(error) {
+  return {
+    name: error?.name || "Error",
+    message: error?.message || String(error),
+    status: error?.status || error?.response?.status || null,
+    code: error?.code || error?.error?.code || null,
+    type: error?.type || error?.error?.type || null,
+  };
+}
+
+function compactCoachContext(context, planSummary = null) {
+  const training = context?.training || {};
+  const nutrition = context?.nutrition || {};
+  const athleteProfile = context?.athleteProfile || {};
+
+  return {
+    clock: context?.clock || null,
+    activePlanSummary: context?.activePlanSummary || planSummary || null,
+    athleteProfile: {
+      goal: athleteProfile?.goal || athleteProfile?.primaryGoal || null,
+      injuries: athleteProfile?.injuries || athleteProfile?.constraints || null,
+      coachMemory: athleteProfile?.coachMemory || null,
+    },
+    training: {
+      todaySession: training?.todaySession || null,
+      todaySchedule: normaliseList(training?.todaySchedule).slice(0, 4),
+      currentWeekSchedule: normaliseList(training?.currentWeekSchedule).slice(0, 10),
+      recentCompletedSessions: normaliseList(training?.recentCompletedSessions).slice(0, 6),
+      lastCompletedSession: training?.lastCompletedSession || null,
+    },
+    nutrition: nutrition
+      ? {
+          targets: nutrition?.targets || nutrition?.dailyTargets || null,
+          today: nutrition?.today || nutrition?.todayTotals || nutrition?.currentDay || null,
+        }
+      : null,
+  };
+}
+
+function compactPlanForCoach(plan, planSummary = null) {
+  if (!plan) return null;
+  if (planSummary) return planSummary;
+  return summarisePlan(plan) || {
+    name: plan?.name || plan?.title || null,
+    primaryActivity: plan?.primaryActivity || plan?.kind || null,
+  };
+}
+
+function buildCoachChatMessages({
+  systemPrompt,
+  mergedContext,
+  liveContextFacts,
+  plan,
+  planSummary,
+  trimmedMessages,
+  compact = false,
+}) {
+  const contextForModel = compact ? compactCoachContext(mergedContext, planSummary) : mergedContext;
+  const planForModel = compact ? compactPlanForCoach(plan, planSummary) : plan;
+  const contextLimit = compact ? 5500 : 14000;
+  const planLimit = compact ? 4500 : 18000;
+  const messageLimit = compact ? 8 : 20;
+  const recentMessages = trimmedMessages.slice(-messageLimit).map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
+
+  return [
+    { role: "system", content: systemPrompt },
+    {
+      role: "system",
+      content: "USER_CONTEXT_JSON:\n" + safeStringify(contextForModel, contextLimit),
+    },
+    ...(liveContextFacts
+      ? [
+          {
+            role: "system",
+            content: "LIVE_CONTEXT_FACTS:\n" + liveContextFacts,
+          },
+        ]
+      : []),
+    {
+      role: "system",
+      content: "CURRENT_PLAN_JSON:\n" + safeStringify(planForModel, planLimit),
+    },
+    ...recentMessages,
+  ];
+}
+
+function completionContent(completion) {
+  return completion?.choices?.[0]?.message?.content?.trim() || "";
+}
+
+async function createCoachChatCompletionWithRetry({
+  openai,
+  primaryModel,
+  fallbackModel,
+  systemPrompt,
+  mergedContext,
+  liveContextFacts,
+  plan,
+  planSummary,
+  trimmedMessages,
+}) {
+  const fullMessages = buildCoachChatMessages({
+    systemPrompt,
+    mergedContext,
+    liveContextFacts,
+    plan,
+    planSummary,
+    trimmedMessages,
+    compact: false,
+  });
+  const fullPayloadBytes = byteSize({ model: primaryModel, messages: fullMessages });
+  const useCompactFirst = fullPayloadBytes > 52000;
+  const attempts = [
+    {
+      model: primaryModel,
+      compact: useCompactFirst,
+      reason: useCompactFirst ? "initial_compact_large_payload" : "initial",
+    },
+    {
+      model: fallbackModel || primaryModel,
+      compact: true,
+      reason: "retry_compact",
+    },
+  ];
+
+  let lastError = null;
+
+  for (const attempt of attempts) {
+    const messagesForAttempt = attempt.compact
+      ? buildCoachChatMessages({
+          systemPrompt,
+          mergedContext,
+          liveContextFacts,
+          plan,
+          planSummary,
+          trimmedMessages,
+          compact: true,
+        })
+      : fullMessages;
+    const requestBody = {
+      model: attempt.model,
+      messages: messagesForAttempt,
+      temperature: 0.35,
+      response_format: { type: "json_object" },
+    };
+    const diagnostics = {
+      model: attempt.model,
+      compact: attempt.compact,
+      reason: attempt.reason,
+      payloadBytes: byteSize(requestBody),
+      messages: messagesForAttempt.length,
+      contextBytes: byteSize(mergedContext),
+      planBytes: byteSize(plan),
+    };
+
+    console.info("[coach-chat] OpenAI request", diagnostics);
+
+    try {
+      const completion = await openai.chat.completions.create(requestBody, {
+        timeout: 35000,
+        maxRetries: 0,
+      });
+      console.info("[coach-chat] OpenAI response", {
+        model: attempt.model,
+        compact: attempt.compact,
+        status: "ok",
+        outputBytes: byteSize(completionContent(completion)),
+      });
+      return completion;
+    } catch (error) {
+      lastError = error;
+      console.warn("[coach-chat] OpenAI request failed", {
+        ...diagnostics,
+        error: openAIErrorInfo(error),
+      });
+    }
+  }
+
+  throw lastError || new Error("OpenAI request failed");
+}
+
+function firstTodaySessionName(context) {
+  const training = context?.training || {};
+  const todaySchedule = normaliseList(training?.todaySchedule);
+  const first = todaySchedule.find(Boolean) || training?.todaySession || null;
+  return first ? sessionDisplayName(first) : "";
+}
+
+function buildLocalCoachFallbackReply(message, context) {
+  const text = normaliseText(message);
+  const sessionName = firstTodaySessionName(context);
+  const todayPhrase = sessionName ? `today's ${sessionName} session` : "today's planned session";
+
+  if (/\b\d+\s*(?:min|mins|minute|minutes)\b/.test(text) || text.includes("only have")) {
+    return [
+      "Use the time you have and keep it controlled.",
+      "",
+      `If ${todayPhrase} is still planned, do the highest-value part rather than rushing the whole thing:`,
+      "- 5 min warm-up",
+      "- 20 min main work at controlled effort",
+      "- 5 min easy cooldown or mobility",
+      "",
+      "Skip accessories or extra volume today. Do not try to cram the full session into 30 minutes.",
+    ].join("\n");
+  }
+
+  if (
+    text.includes("tired") ||
+    text.includes("fatigued") ||
+    text.includes("slept badly") ||
+    text.includes("bad sleep") ||
+    text.includes("poor sleep")
+  ) {
+    return [
+      "Adjust down rather than forcing it.",
+      "",
+      `If ${todayPhrase} is still planned, keep it easy-to-moderate, reduce volume, and avoid chasing intensity.`,
+      "If you feel worse during the warm-up, switch to mobility, walking, or recovery.",
+    ].join("\n");
+  }
+
+  if (text.includes("eat") || text.includes("nutrition") || text.includes("meal") || text.includes("food")) {
+    return [
+      "After training, prioritise recovery basics.",
+      "",
+      "- Get a protein serving in",
+      "- Add carbs if the session was hard or long",
+      "- Rehydrate",
+      "- Keep the meal simple and repeatable",
+      "",
+      "A good default is lean protein plus rice, potatoes, pasta, oats, fruit, or bread.",
+    ].join("\n");
+  }
+
+  if (text.includes("move") || text.includes("reschedule") || text.includes("tomorrow")) {
+    return [
+      "Moving a session is usually fine if it keeps the week consistent.",
+      "",
+      "Do not stack two hard sessions back to back. Move the session to tomorrow only if tomorrow is easy enough, or continue with the next planned session and keep the week controlled.",
+    ].join("\n");
+  }
+
+  if (text.includes("week")) {
+    return [
+      "Keep the week simple and consistent.",
+      "",
+      "- Prioritise the key planned sessions",
+      "- Keep easy work genuinely easy",
+      "- Avoid making up missed work aggressively",
+      "- Adjust down if recovery is poor",
+    ].join("\n");
+  }
+
+  return [
+    "Use your current plan as the baseline and keep the next step conservative.",
+    "",
+    "If recovery is good, do the planned work. If time, sleep, soreness, or stress is limiting you, reduce volume first and keep the quality controlled.",
+  ].join("\n");
+}
+
 function extractJsonObject(raw = "") {
   const text = String(raw || "").trim();
   if (!text) return null;
@@ -1998,90 +2272,73 @@ Allowed coachActions types:
 - memory_save: proposed coach memory. Payload must include text and category.
       `.trim();
 
-      const contextMessage = {
-        role: "system",
-        content:
-          "USER_CONTEXT_JSON:\n" + safeStringify(mergedContext, 14000),
-      };
-
       const liveContextFacts = buildLiveContextFacts(mergedContext);
-      const factsMessage = liveContextFacts
-        ? {
-            role: "system",
-            content: "LIVE_CONTEXT_FACTS:\n" + liveContextFacts,
-          }
-        : null;
-
-      const planMessage = plan
-        ? {
-            role: "system",
-            content:
-              "CURRENT_PLAN_JSON:\n" + safeStringify(plan, 18000),
-          }
-        : {
-            role: "system",
-            content:
-              "CURRENT_PLAN_JSON:\nnull",
-          };
-
-      const chatMessages = [
-        { role: "system", content: systemPrompt },
-        contextMessage,
-        ...(factsMessage ? [factsMessage] : []),
-        planMessage,
-        ...trimmedMessages,
-      ];
-
-      let completion;
+      const openAiRequestStartedAt = Date.now();
       try {
-        completion = await openai.chat.completions.create({
-          model: coachChatModel,
-          messages: chatMessages,
-          temperature: 0.35,
-          response_format: { type: "json_object" },
+        const completion = await createCoachChatCompletionWithRetry({
+          openai,
+          primaryModel: coachChatModel,
+          fallbackModel: OPENAI_FALLBACK_MODEL,
+          systemPrompt,
+          mergedContext,
+          liveContextFacts,
+          plan,
+          planSummary,
+          trimmedMessages,
         });
-      } catch (modelError) {
-        if (coachChatModel === OPENAI_FALLBACK_MODEL) throw modelError;
-        console.warn(
-          `[coach-chat] ${coachChatModel} failed; falling back to ${OPENAI_FALLBACK_MODEL}:`,
-          modelError?.message || modelError
-        );
-        completion = await openai.chat.completions.create({
-          model: OPENAI_FALLBACK_MODEL,
-          messages: chatMessages,
-          temperature: 0.35,
-          response_format: { type: "json_object" },
+
+        const raw = completionContent(completion);
+        const parsed = extractJsonObject(raw);
+
+        const reply =
+          typeof parsed?.reply === "string" && parsed.reply.trim()
+            ? parsed.reply.trim()
+            : raw || buildLocalCoachFallbackReply(latestUserText, mergedContext);
+
+        const updatedPlan =
+          parsed && Object.prototype.hasOwnProperty.call(parsed, "updatedPlan")
+            ? parsed.updatedPlan
+            : null;
+        const nutritionDraft =
+          parsed && Object.prototype.hasOwnProperty.call(parsed, "nutritionDraft")
+            ? parsed.nutritionDraft
+            : null;
+        const coachActions = Array.isArray(parsed?.coachActions)
+          ? parsed.coachActions.filter((action) => action && typeof action === "object")
+          : [];
+
+        return res.json({
+          reply,
+          updatedPlan: updatedPlan && typeof updatedPlan === "object" ? updatedPlan : null,
+          nutritionDraft:
+            nutritionDraft && typeof nutritionDraft === "object" ? nutritionDraft : null,
+          coachActions,
+          raw,
+        });
+      } catch (openAiError) {
+        const reply = buildLocalCoachFallbackReply(latestUserText, mergedContext);
+        const raw = JSON.stringify({
+          reply,
+          updatedPlan: null,
+          nutritionDraft: null,
+          coachActions: [],
+          source: "local_fallback",
+          openAiError: openAIErrorInfo(openAiError),
+        });
+        console.warn("[coach-chat] returning local fallback after OpenAI failures", {
+          elapsedMs: Date.now() - openAiRequestStartedAt,
+          error: openAIErrorInfo(openAiError),
+          fallbackBytes: byteSize(reply),
+        });
+
+        return res.json({
+          reply,
+          updatedPlan: null,
+          nutritionDraft: null,
+          coachActions: [],
+          raw,
         });
       }
-
-      const raw = completion.choices?.[0]?.message?.content?.trim() || "";
-      const parsed = extractJsonObject(raw);
-
-      const reply =
-        typeof parsed?.reply === "string" && parsed.reply.trim()
-          ? parsed.reply.trim()
-          : raw || "Got it. Ask me another question.";
-
-      const updatedPlan =
-        parsed && Object.prototype.hasOwnProperty.call(parsed, "updatedPlan")
-          ? parsed.updatedPlan
-          : null;
-      const nutritionDraft =
-        parsed && Object.prototype.hasOwnProperty.call(parsed, "nutritionDraft")
-          ? parsed.nutritionDraft
-          : null;
-      const coachActions = Array.isArray(parsed?.coachActions)
-        ? parsed.coachActions.filter((action) => action && typeof action === "object")
-        : [];
-
-      return res.json({
-        reply,
-        updatedPlan: updatedPlan && typeof updatedPlan === "object" ? updatedPlan : null,
-        nutritionDraft:
-          nutritionDraft && typeof nutritionDraft === "object" ? nutritionDraft : null,
-        coachActions,
-        raw,
-      });
     } catch (err) {
       console.error("[coach-chat] error:", err);
       return res.status(500).json({
