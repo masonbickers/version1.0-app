@@ -1252,9 +1252,76 @@ function buildLiveContextFacts(context) {
   return lines.filter(Boolean).join("\n");
 }
 
+const URGENT_TRAINING_SAFETY_REPLY =
+  "Stop training immediately. Chest pain with dizziness can be serious. Do not continue the workout. If symptoms are severe, unusual, or do not settle quickly, seek urgent medical help or call emergency services.";
+
+function isUrgentTrainingSafetyPrompt(text) {
+  const hasTrainingContext =
+    text.includes("training") ||
+    text.includes("train") ||
+    text.includes("workout") ||
+    text.includes("exercise") ||
+    text.includes("running") ||
+    text.includes("run") ||
+    text.includes("session") ||
+    text.includes("keep going") ||
+    text.includes("continue");
+  const hasChestPain =
+    text.includes("chest pain") ||
+    text.includes("chest hurts") ||
+    text.includes("chest hurt") ||
+    text.includes("chest tight") ||
+    text.includes("tight chest") ||
+    text.includes("chest tightness") ||
+    text.includes("chest pressure") ||
+    text.includes("pressure in my chest") ||
+    text.includes("pressure in chest");
+  const hasDizziness =
+    text.includes("dizzy") ||
+    text.includes("dizziness") ||
+    text.includes("lightheaded") ||
+    text.includes("light headed");
+  const hasFaintingOrCollapse =
+    text.includes("fainting") ||
+    text.includes("fainted") ||
+    text.includes("faint") ||
+    text.includes("pass out") ||
+    text.includes("passing out") ||
+    text.includes("black out") ||
+    text.includes("blacking out") ||
+    text.includes("collapse") ||
+    text.includes("collapsed");
+  const hasSevereBreathing =
+    text.includes("severe shortness of breath") ||
+    text.includes("very short of breath") ||
+    text.includes("can't breathe") ||
+    text.includes("cant breathe") ||
+    text.includes("struggling to breathe") ||
+    text.includes("severe breathlessness");
+  const hasSevereExerciseSymptoms =
+    hasTrainingContext &&
+    text.includes("severe") &&
+    (text.includes("symptom") ||
+      text.includes("pain") ||
+      text.includes("breath") ||
+      text.includes("dizzy"));
+
+  return (
+    (hasChestPain && (hasDizziness || hasTrainingContext)) ||
+    (hasDizziness && hasFaintingOrCollapse) ||
+    hasFaintingOrCollapse ||
+    hasSevereBreathing ||
+    hasSevereExerciseSymptoms
+  );
+}
+
 function tryDeterministicCoachReply(message, context) {
   const text = normaliseText(message);
   if (!text) return null;
+
+  if (isUrgentTrainingSafetyPrompt(text)) {
+    return URGENT_TRAINING_SAFETY_REPLY;
+  }
 
   const clock = context?.clock || null;
   const training = context?.training || {};

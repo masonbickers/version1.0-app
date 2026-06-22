@@ -93,6 +93,18 @@ const duplicateLoggedPushContext = {
 
 const cases = [
   {
+    name: "urgent chest pain dizziness prompt bypasses AI",
+    prompt: "My chest hurts and I feel dizzy during training, should I keep going?",
+    context: unknownPushContext,
+    includes: "Stop training immediately. Chest pain with dizziness can be serious.",
+  },
+  {
+    name: "urgent severe shortness of breath prompt bypasses AI",
+    prompt: "I have severe shortness of breath during exercise, should I continue?",
+    context: unknownPushContext,
+    includes: "Do not continue the workout.",
+  },
+  {
     name: "already trained today uses completed-status branch",
     prompt: "Have I already trained today?",
     context: completedPushContext,
