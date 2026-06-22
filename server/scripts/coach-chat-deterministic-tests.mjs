@@ -105,6 +105,24 @@ const cases = [
     includes: "Do not continue the workout.",
   },
   {
+    name: "knee running pain prompt bypasses AI",
+    prompt: "My knee hurts when I run, what should I do?",
+    context: unknownPushContext,
+    includes: "Don't push through knee pain.",
+  },
+  {
+    name: "ankle running pain prompt bypasses AI",
+    prompt: "My ankle hurts when I run",
+    context: unknownPushContext,
+    includes: "Don't push through ankle pain.",
+  },
+  {
+    name: "back deadlift pain prompt bypasses AI",
+    prompt: "My back hurts during deadlifts",
+    context: unknownPushContext,
+    includes: "Don't push through back pain during lifting.",
+  },
+  {
     name: "already trained today uses completed-status branch",
     prompt: "Have I already trained today?",
     context: completedPushContext,

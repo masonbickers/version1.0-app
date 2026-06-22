@@ -1255,6 +1255,21 @@ function buildLiveContextFacts(context) {
 const URGENT_TRAINING_SAFETY_REPLY =
   "Stop training immediately. Chest pain with dizziness can be serious. Do not continue the workout. If symptoms are severe, unusual, or do not settle quickly, seek urgent medical help or call emergency services.";
 
+const COMMON_TRAINING_INJURY_REPLIES = {
+  knee:
+    "Don't push through knee pain. Stop or reduce running for now, switch to low-impact work such as cycling/walking if pain-free, and keep any strength work controlled. If the pain is sharp, worsening, swollen, changes your gait, or doesn't improve with rest, get it checked by a physio or medical professional.",
+  ankle:
+    "Don't push through ankle pain. Stop or reduce running for now, switch to low-impact work such as cycling or walking only if pain-free, and avoid anything that changes your stride. If the pain is sharp, worsening, swollen, affects your gait, or doesn't improve with rest, get it checked by a physio or medical professional.",
+  shin:
+    "Don't push through shin pain. Reduce or stop running for now, avoid hard surfaces and speed work, and use pain-free low-impact training instead. If the pain is sharp, worsening, localised, swollen, or doesn't improve with rest, get it checked by a physio or medical professional.",
+  back:
+    "Don't push through back pain during lifting. Stop heavy pulls or loaded movements for now, keep any movement controlled and pain-free, and avoid forcing range or load. If the pain is sharp, worsening, travels down your leg, causes weakness/numbness, or doesn't improve with rest, get it checked by a physio or medical professional.",
+  shoulder:
+    "Don't push through shoulder pain when pressing. Stop or reduce pressing for now, use pain-free ranges only, and keep any upper-body strength work controlled. If the pain is sharp, worsening, unstable, swollen, or doesn't improve with rest, get it checked by a physio or medical professional.",
+  general:
+    "Don't push through pain during exercise. Stop or reduce the painful movement for now, switch to pain-free low-impact work if appropriate, and keep any training controlled. If the pain is sharp, worsening, swollen, changes how you move, or doesn't improve with rest, get it checked by a physio or medical professional.",
+};
+
 function isUrgentTrainingSafetyPrompt(text) {
   const hasTrainingContext =
     text.includes("training") ||
@@ -1315,12 +1330,106 @@ function isUrgentTrainingSafetyPrompt(text) {
   );
 }
 
+function hasNegatedPainSignal(text) {
+  return (
+    text.includes("no pain") ||
+    text.includes("not in pain") ||
+    text.includes("without pain") ||
+    text.includes("doesn't hurt") ||
+    text.includes("doesnt hurt") ||
+    text.includes("does not hurt")
+  );
+}
+
+function hasTrainingPainSignal(text) {
+  return (
+    text.includes("pain") ||
+    text.includes("hurts") ||
+    text.includes("hurt") ||
+    text.includes("ache") ||
+    text.includes("aches") ||
+    text.includes("sore") ||
+    text.includes("injury") ||
+    text.includes("injured")
+  );
+}
+
+function hasCommonTrainingContext(text) {
+  return (
+    text.includes("run") ||
+    text.includes("running") ||
+    text.includes("train") ||
+    text.includes("training") ||
+    text.includes("workout") ||
+    text.includes("exercise") ||
+    text.includes("lifting") ||
+    text.includes("lift") ||
+    text.includes("deadlift") ||
+    text.includes("squat") ||
+    text.includes("press") ||
+    text.includes("pressing") ||
+    text.includes("during") ||
+    text.includes("when i")
+  );
+}
+
+function commonTrainingInjuryReply(text) {
+  if (!hasTrainingPainSignal(text) || hasNegatedPainSignal(text)) return null;
+
+  const hasTrainingContext = hasCommonTrainingContext(text);
+  const hasKnee = text.includes("knee");
+  const hasAnkle = text.includes("ankle");
+  const hasShin = text.includes("shin");
+  const hasBack = text.includes("back") || text.includes("lower back");
+  const hasShoulder = text.includes("shoulder") || text.includes("rotator cuff");
+
+  if (hasKnee && (hasTrainingContext || text.includes("runner"))) {
+    return COMMON_TRAINING_INJURY_REPLIES.knee;
+  }
+
+  if (hasAnkle && hasTrainingContext) {
+    return COMMON_TRAINING_INJURY_REPLIES.ankle;
+  }
+
+  if (hasShin && hasTrainingContext) {
+    return COMMON_TRAINING_INJURY_REPLIES.shin;
+  }
+
+  if (hasBack && hasTrainingContext) {
+    return COMMON_TRAINING_INJURY_REPLIES.back;
+  }
+
+  if (hasShoulder && hasTrainingContext) {
+    return COMMON_TRAINING_INJURY_REPLIES.shoulder;
+  }
+
+  const asksAboutPainDuringExercise =
+    (text.includes("pain during") ||
+      text.includes("hurts during") ||
+      text.includes("hurt during") ||
+      text.includes("pain when i") ||
+      text.includes("hurts when i") ||
+      text.includes("hurt when i")) &&
+    hasTrainingContext;
+
+  if (asksAboutPainDuringExercise) {
+    return COMMON_TRAINING_INJURY_REPLIES.general;
+  }
+
+  return null;
+}
+
 function tryDeterministicCoachReply(message, context) {
   const text = normaliseText(message);
   if (!text) return null;
 
   if (isUrgentTrainingSafetyPrompt(text)) {
     return URGENT_TRAINING_SAFETY_REPLY;
+  }
+
+  const injuryReply = commonTrainingInjuryReply(text);
+  if (injuryReply) {
+    return injuryReply;
   }
 
   const clock = context?.clock || null;
