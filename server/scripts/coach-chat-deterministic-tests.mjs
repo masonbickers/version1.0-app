@@ -254,7 +254,7 @@ assert.equal(
 );
 assert.equal(
   nutritionAfterLimitedTimePriority.intent,
-  "nutrition",
+  "post_training_nutrition",
   "latest nutrition question should override previous limited-time topic"
 );
 assert.ok(
@@ -271,6 +271,53 @@ assert.equal(
   ),
   false,
   "latest user message should not be duplicated into previous conversation context"
+);
+
+const fatLossAfterPostTrainingPriority = __coachChatLatestPriorityForTest([
+  {
+    role: "user",
+    content: "What should I eat after training?",
+  },
+  {
+    role: "assistant",
+    content:
+      "After training, aim for 25-40g protein with carbs and fluids. Good options include chicken and rice, Greek yoghurt and fruit, or a protein shake and banana.",
+  },
+  {
+    role: "user",
+    content: "I want to lose fat but keep performance, what should I do?",
+  },
+]);
+
+assert.equal(
+  fatLossAfterPostTrainingPriority.latestUserText,
+  "I want to lose fat but keep performance, what should I do?",
+  "latest user message should be the fat-loss/performance question"
+);
+assert.equal(
+  fatLossAfterPostTrainingPriority.intent,
+  "fat_loss_performance",
+  "fat-loss/performance question should not be treated as post-training nutrition"
+);
+assert.ok(
+  fatLossAfterPostTrainingPriority.instruction.includes("small calorie deficit"),
+  "fat-loss/performance instruction should mention calorie deficit strategy"
+);
+assert.ok(
+  fatLossAfterPostTrainingPriority.instruction.includes("high protein"),
+  "fat-loss/performance instruction should mention protein"
+);
+assert.ok(
+  fatLossAfterPostTrainingPriority.instruction.includes("carbs around training"),
+  "fat-loss/performance instruction should mention carbs around training"
+);
+assert.ok(
+  fatLossAfterPostTrainingPriority.instruction.includes("consistent strength work"),
+  "fat-loss/performance instruction should mention maintaining training"
+);
+assert.ok(
+  fatLossAfterPostTrainingPriority.instruction.includes("not a post-training meal question"),
+  "fat-loss/performance instruction should prevent post-training meal continuation"
 );
 
 const duplicateReply = __coachChatDeterministicReplyForTest(

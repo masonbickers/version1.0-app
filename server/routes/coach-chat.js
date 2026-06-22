@@ -1799,6 +1799,56 @@ function compactPlanForCoach(plan, planSummary = null) {
 function latestUserIntentHint(text) {
   const clean = normaliseText(text);
   if (
+    clean.includes("lose fat") ||
+    clean.includes("fat loss") ||
+    clean.includes("drop fat") ||
+    clean.includes("body composition") ||
+    clean.includes("cut weight") ||
+    clean.includes("cutting") ||
+    (clean.includes("performance") &&
+      (clean.includes("calorie") ||
+        clean.includes("deficit") ||
+        clean.includes("weight") ||
+        clean.includes("fat")))
+  ) {
+    return "fat_loss_performance";
+  }
+
+  if (
+    clean.includes("hit my protein") ||
+    clean.includes("protein target") ||
+    clean.includes("protein goal") ||
+    clean.includes("enough protein") ||
+    clean.includes("more protein")
+  ) {
+    return "protein_target";
+  }
+
+  if (
+    clean.includes("before a run") ||
+    clean.includes("before my run") ||
+    clean.includes("before running") ||
+    clean.includes("pre run") ||
+    clean.includes("pre-run") ||
+    clean.includes("before speed") ||
+    clean.includes("before intervals")
+  ) {
+    return "pre_run_fuelling";
+  }
+
+  if (
+    clean.includes("after training") ||
+    clean.includes("after my workout") ||
+    clean.includes("after workout") ||
+    clean.includes("post training") ||
+    clean.includes("post-training") ||
+    clean.includes("post workout") ||
+    clean.includes("post-workout")
+  ) {
+    return "post_training_nutrition";
+  }
+
+  if (
     clean.includes("eat") ||
     clean.includes("food") ||
     clean.includes("meal") ||
@@ -1806,11 +1856,9 @@ function latestUserIntentHint(text) {
     clean.includes("protein") ||
     clean.includes("carb") ||
     clean.includes("fuel") ||
-    clean.includes("hydrate") ||
-    clean.includes("fat loss") ||
-    clean.includes("lose fat")
+    clean.includes("hydrate")
   ) {
-    return "nutrition";
+    return "general_nutrition";
   }
 
   if (
@@ -1857,20 +1905,64 @@ function buildRecentConversationContext(trimmedMessages, latestUserText, limit =
 
 function latestUserPriorityInstruction(latestUserText) {
   const intent = latestUserIntentHint(latestUserText);
+  const isNutritionIntent = [
+    "post_training_nutrition",
+    "fat_loss_performance",
+    "protein_target",
+    "pre_run_fuelling",
+    "general_nutrition",
+  ].includes(intent);
   const lines = [
     "LATEST_USER_MESSAGE_PRIORITY:",
     "- Answer the latest user message directly.",
     "- Conversation history is background context only; it must not override the latest ask.",
     "- Do not continue a previous topic unless the latest user message clearly asks to continue it.",
+    "- Answer the latest user intent. Do not reuse the format, topic, or recommendation from the previous assistant reply unless the latest message asks for a follow-up.",
     `- Latest user intent hint: ${intent}.`,
   ];
 
-  if (intent === "nutrition") {
+  if (isNutritionIntent) {
     lines.push(
       "- This is a nutrition question. Answer with food/fuelling guidance first.",
       "- Do not provide a timed mobility, recovery, or workout plan unless the user asks for activity.",
-      "- Include protein + carbs + fluids, practical food examples, and a useful protein range when appropriate.",
       "- Use training context only to personalise the nutrition advice."
+    );
+  }
+
+  if (intent === "post_training_nutrition") {
+    lines.push(
+      "- This is post-training nutrition. Include protein + carbs + fluids, practical food examples, and a useful protein range when appropriate.",
+      "- Do not answer as a general fat-loss strategy unless the user asks about fat loss."
+    );
+  }
+
+  if (intent === "fat_loss_performance") {
+    lines.push(
+      "- This is a fat-loss plus performance strategy question, not a post-training meal question.",
+      "- Do not give a meal-list-only answer.",
+      "- Explain the strategy: small calorie deficit, high protein, carbs around training, consistent strength work, recovery, and tracking.",
+      "- Mention avoiding aggressive calorie cuts if performance, recovery, or mood drops.",
+      "- Food examples are optional and secondary; the main answer should be strategy."
+    );
+  }
+
+  if (intent === "protein_target") {
+    lines.push(
+      "- This is a protein-target question. Give practical protein servings across the day and simple examples.",
+      "- Keep training-plan context secondary."
+    );
+  }
+
+  if (intent === "pre_run_fuelling") {
+    lines.push(
+      "- This is pre-run fuelling. Give timing-based options for 2-3 hours before and 30-60 minutes before running.",
+      "- Mention easy carbs and avoiding heavy high-fat foods right before running."
+    );
+  }
+
+  if (intent === "general_nutrition") {
+    lines.push(
+      "- This is general nutrition advice. Give practical food guidance before discussing plan context."
     );
   }
 
