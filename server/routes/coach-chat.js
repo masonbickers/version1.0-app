@@ -1941,6 +1941,8 @@ function latestUserPriorityInstruction(latestUserText) {
       "- This is a fat-loss plus performance strategy question, not a post-training meal question.",
       "- Do not give a meal-list-only answer.",
       "- Explain the strategy: small calorie deficit, high protein, carbs around training, consistent strength work, recovery, and tracking.",
+      "- You must mention keeping strength training consistent.",
+      "- You must mention tracking weight, measurements, performance, or weekly trends.",
       "- Mention avoiding aggressive calorie cuts if performance, recovery, or mood drops.",
       "- Food examples are optional and secondary; the main answer should be strategy."
     );
