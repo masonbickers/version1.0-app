@@ -146,6 +146,7 @@ function latestUserMessage(messages) {
 function normaliseText(value) {
   return String(value || "")
     .toLowerCase()
+    .replace(/\u2019/g, "'")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -1419,6 +1420,103 @@ function commonTrainingInjuryReply(text) {
   return null;
 }
 
+function isMissedSessionPrompt(text) {
+  const mentionsSession =
+    text.includes("session") ||
+    text.includes("workout") ||
+    text.includes("training") ||
+    text.includes("run") ||
+    text.includes("gym");
+  const missedSignal =
+    text.includes("missed") ||
+    text.includes("miss ") ||
+    text.includes("skipped") ||
+    text.includes("skip ") ||
+    text.includes("couldn't do") ||
+    text.includes("couldnt do") ||
+    text.includes("didn't do") ||
+    text.includes("didnt do") ||
+    text.includes("did not do");
+
+  return mentionsSession && missedSignal;
+}
+
+function isAiLedTrainingAdjustmentPrompt(text) {
+  const tiredSignal =
+    text.includes("tired") ||
+    text.includes("fatigued") ||
+    text.includes("exhausted") ||
+    text.includes("sore") ||
+    text.includes("slept badly") ||
+    text.includes("bad sleep") ||
+    text.includes("poor sleep");
+  const limitedTimeSignal =
+    (text.includes("only have") ||
+      text.includes("only got") ||
+      text.includes("limited time") ||
+      text.includes("short on time")) &&
+    /\b\d+\s*(?:min|mins|minute|minutes)\b/.test(text);
+  const moveSignal =
+    text.includes("move today's session") ||
+    text.includes("move todays session") ||
+    text.includes("move my session") ||
+    text.includes("reschedule today's session") ||
+    text.includes("reschedule todays session") ||
+    text.includes("reschedule my session");
+
+  return tiredSignal || limitedTimeSignal || moveSignal;
+}
+
+function buildMissedSessionAdvice({ clock, training, todaySchedule }) {
+  const todayLabel = clock?.todayLabel || "today";
+  const completedToday = todayCompletedSessions(training, clock || {});
+  const { rows, unmatchedCompleted } = buildTodaySessionState(todaySchedule, completedToday);
+  const completedRows = rows.filter((row) => row.status === "completed");
+  const remainingRows = rows.filter((row) =>
+    ["due", "in_progress", "unknown"].includes(row.status)
+  );
+  const skippedRows = rows.filter((row) => row.status === "skipped");
+  const completedEvidence = completedRows.length ? completedRows : unmatchedCompleted;
+
+  if (completedEvidence.length && !remainingRows.length) {
+    return [
+      `It looks like today's ${formatInlineSessionNames(completedEvidence)} session is marked as completed. If that's right, you don't need to make it up.`,
+      "",
+      "If you meant a different session or the log is wrong, don't double up aggressively. Either do a shorter controlled version, move it to tomorrow, or continue with the next planned session.",
+    ].join("\n");
+  }
+
+  if (completedEvidence.length && remainingRows.length) {
+    return [
+      `It looks like you've completed ${formatInlineSessionNames(completedEvidence)} today, but ${formatInlineSessionNames(remainingRows)} still appears planned or not confirmed.`,
+      "",
+      "If that is the session you missed, don't double up aggressively. Do a shorter controlled version, move it to tomorrow, or continue with the next planned session.",
+    ].join("\n");
+  }
+
+  if (remainingRows.length) {
+    return [
+      `If you missed today's ${formatInlineSessionNames(remainingRows)} session, don't double up aggressively.`,
+      "",
+      "Either do a shorter controlled version, move it to tomorrow, or continue with the next planned session. Keep the next 24 hours controlled rather than trying to force the work back in.",
+    ].join("\n");
+  }
+
+  if (skippedRows.length) {
+    return [
+      `Today's ${formatInlineSessionNames(skippedRows)} session is marked as skipped.`,
+      "",
+      "Don't double up aggressively. Either move it to tomorrow if it still fits, or continue with the next planned session and keep the week controlled.",
+    ].join("\n");
+  }
+
+  return [
+    `I don't see a planned session for ${todayLabel}.`,
+    "",
+    "If you missed a workout, don't double up aggressively. Either do a shorter controlled version, move it to tomorrow, or continue with the next planned session.",
+  ].join("\n");
+}
+
 function tryDeterministicCoachReply(message, context) {
   const text = normaliseText(message);
   if (!text) return null;
@@ -1443,6 +1541,10 @@ function tryDeterministicCoachReply(message, context) {
   const currentWeekSchedule = Array.isArray(training?.currentWeekSchedule)
     ? training.currentWeekSchedule.filter(Boolean)
     : [];
+
+  if (isMissedSessionPrompt(text)) {
+    return buildMissedSessionAdvice({ clock: clock || {}, training, todaySchedule });
+  }
 
   const asksDay =
     text.includes("what day is it") ||
@@ -1485,6 +1587,10 @@ function tryDeterministicCoachReply(message, context) {
 
   if (asksAlreadyTrainedToday || asksShouldStillDoTodayWorkout) {
     return buildTodayPlanReply({ text, clock: clock || {}, training, todaySchedule });
+  }
+
+  if (isAiLedTrainingAdjustmentPrompt(text)) {
+    return null;
   }
 
   const asksTodayPlan =

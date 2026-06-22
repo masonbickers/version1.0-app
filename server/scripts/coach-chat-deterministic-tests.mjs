@@ -91,6 +91,12 @@ const duplicateLoggedPushContext = {
   },
 };
 
+const missedSessionCases = [
+  "I missed today's session, what should I do?",
+  "I missed my workout today",
+  "I skipped today's session",
+];
+
 const cases = [
   {
     name: "urgent chest pain dizziness prompt bypasses AI",
@@ -173,6 +179,43 @@ for (const testCase of cases) {
     reply.startsWith("Today is Monday, 22 June 2026.\n\nYou have"),
     false,
     `${testCase.name}: reply hit the old generic today-plan wording:\n${reply}`
+  );
+}
+
+for (const prompt of missedSessionCases) {
+  const reply = __coachChatDeterministicReplyForTest(prompt, completedPushContext);
+  assert.ok(reply, `${prompt}: expected short adaptive missed-session reply`);
+  assert.ok(
+    reply.includes("marked as completed"),
+    `${prompt}: expected completed status acknowledgement, got:\n${reply}`
+  );
+  assert.ok(
+    reply.includes("don't double up aggressively"),
+    `${prompt}: expected conservative no-doubling advice, got:\n${reply}`
+  );
+  assert.equal(
+    reply.includes("Today's planned training is already complete."),
+    false,
+    `${prompt}: should not return generic completed-plan block:\n${reply}`
+  );
+  assert.equal(
+    reply.includes("\nCompleted:"),
+    false,
+    `${prompt}: should not dump completed session section:\n${reply}`
+  );
+}
+
+const aiLedAdjustmentPrompts = [
+  "I only have 30 minutes today",
+  "I'm tired today, should I train?",
+];
+
+for (const prompt of aiLedAdjustmentPrompts) {
+  const reply = __coachChatDeterministicReplyForTest(prompt, completedPushContext);
+  assert.equal(
+    reply,
+    null,
+    `${prompt}: expected AI-led adaptation instead of deterministic today-plan reply, got:\n${reply}`
   );
 }
 
