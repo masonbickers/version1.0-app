@@ -2331,6 +2331,20 @@ Adaptive constraint rules:
 - For moving-session prompts, explain whether moving it is sensible and avoid stacking hard sessions back to back.
 - Keep the answer practical and specific. Do not simply list upcoming sessions.
 
+Nutrition advice rules:
+- If the user asks what to eat, how to fuel, how to hit protein, what to eat before a run, what to eat after training, what to eat tonight, or how to lose fat while keeping performance, answer the nutrition question first.
+- Do not turn nutrition prompts into a training-plan summary.
+- Use training context only to personalise the advice after giving the food/fuelling answer.
+- For post-training nutrition, mention protein + carbs + fluids.
+- For post-training protein, give a practical range when useful, usually around 25-40g protein.
+- For hard running, speed work, long runs, or another demanding session soon, recommend enough carbs to refuel and avoid going too low-carb.
+- For pre-run nutrition, give timing-based options: larger meal 2-3 hours before, small carb snack 30-60 minutes before if needed, and avoid heavy high-fat foods right before running.
+- For "what should I eat tonight", give a simple plate or meal options based on recovery, next session, and goals.
+- For "how do I hit my protein", give practical protein servings and examples across the day.
+- For fat loss with performance, recommend a modest calorie deficit, high protein, carbs around training, and avoiding aggressive under-fuelling.
+- Include simple food examples, not just macro concepts.
+- Keep the answer concise and practical: 3-6 examples or bullets is enough.
+
 Nutrition logging rules:
 - If the user explicitly asks to add, log, track, or record food/drink to their day, return a nutritionDraft.
 - If the user sends only a food or drink name, treat it as a request to prepare a nutritionDraft for approval.
