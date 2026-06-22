@@ -1415,71 +1415,6 @@ function tryDeterministicCoachReply(message, context) {
   return null;
 }
 
-function deterministicBranchForDebug(message, context) {
-  const text = normaliseText(message);
-  if (!text) return "other/AI";
-
-  const clock = context?.clock || null;
-  const asksDay =
-    text.includes("what day is it") ||
-    text.includes("what day is today") ||
-    text.includes("what's the day");
-  const asksDate =
-    text.includes("what date is it") ||
-    text.includes("what's the date") ||
-    text.includes("what is the date");
-  const asksTime =
-    text.includes("what time is it") ||
-    text.includes("what's the time") ||
-    text.includes("what is the time now");
-  if ((asksDay || asksDate || asksTime) && clock) return "other/AI";
-
-  const asksAlreadyTrainedToday =
-    text.includes("already trained") ||
-    text.includes("already completed") ||
-    text.includes("completed today") ||
-    text.includes("done today") ||
-    text.includes("did i train today") ||
-    text.includes("have i trained today") ||
-    text.includes("have i already trained") ||
-    text.includes("have i already completed");
-  if (asksAlreadyTrainedToday) return "asksAlreadyTrainedToday";
-
-  const asksShouldStillDoTodayWorkout =
-    text.includes("should i still") ||
-    text.includes("still do today") ||
-    text.includes("do today's workout") ||
-    text.includes("do todays workout") ||
-    text.includes("repeat today") ||
-    userStatesCompletedPremise(text);
-  if (asksShouldStillDoTodayWorkout) return "asksShouldStillDoTodayWorkout";
-
-  const asksTodayPlan =
-    (text.includes("today") &&
-      (text.includes("session") ||
-        text.includes("workout") ||
-        text.includes("training") ||
-        text.includes("train") ||
-        text.includes("plan") ||
-        text.includes("have") ||
-        text.includes("still do"))) ||
-    text.includes("what should i train") ||
-    text.includes("what do i have today") ||
-    text.includes("what should i do today") ||
-    text.includes("what's on today");
-
-  return asksTodayPlan ? "asksTodayPlan" : "other/AI";
-}
-
-function logLiveCoachChatHit({ message, branch, reply }) {
-  console.log("LIVE COACH CHAT ROUTE HIT", {
-    timestamp: new Date().toISOString(),
-    incomingUserMessage: String(message || "").slice(0, 500),
-    deterministicBranch: branch || "other/AI",
-    replyPreview: cleanCoachText(reply).slice(0, 80),
-  });
-}
-
 export function __coachChatDeterministicReplyForTest(message, context) {
   return tryDeterministicCoachReply(message, context);
 }
@@ -1593,11 +1528,6 @@ export default function coachChatRoute(openai) {
       if (latestUserWithAttachment) {
         const reply =
           "I've attached the image, but image analysis is not enabled yet. Describe what you want me to look at and I'll help from there.";
-        logLiveCoachChatHit({
-          message: latestUserText,
-          branch: "other/AI",
-          reply,
-        });
         return res.json({
           reply,
           updatedPlan: null,
@@ -1609,11 +1539,6 @@ export default function coachChatRoute(openai) {
       const localNutritionDraft = createNutritionDraftFromText(latestUserText);
       if (localNutritionDraft) {
         const reply = `I prepared an estimate for ${localNutritionDraft.title}. Review it before adding it to today.`;
-        logLiveCoachChatHit({
-          message: latestUserText,
-          branch: "other/AI",
-          reply,
-        });
         return res.json({
           reply,
           updatedPlan: null,
@@ -1629,11 +1554,6 @@ export default function coachChatRoute(openai) {
       );
 
       if (deterministicReply) {
-        logLiveCoachChatHit({
-          message: latestUserText,
-          branch: deterministicBranchForDebug(latestUserText, mergedContext),
-          reply: deterministicReply,
-        });
         return res.json({
           reply: deterministicReply,
           updatedPlan: null,
@@ -1871,12 +1791,6 @@ Allowed coachActions types:
       const coachActions = Array.isArray(parsed?.coachActions)
         ? parsed.coachActions.filter((action) => action && typeof action === "object")
         : [];
-
-      logLiveCoachChatHit({
-        message: latestUserText,
-        branch: "other/AI",
-        reply,
-      });
 
       return res.json({
         reply,
