@@ -1701,6 +1701,32 @@ export function __coachChatDeterministicReplyForTest(message, context) {
   return tryDeterministicCoachReply(message, context);
 }
 
+export function __coachChatLatestPriorityForTest(messages) {
+  const trimmedMessages = (Array.isArray(messages) ? messages : [])
+    .filter(
+      (message) =>
+        (message?.role === "user" || message?.role === "assistant") &&
+        typeof message?.content === "string" &&
+        message.content.trim()
+    )
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content || "").trim(),
+    }));
+  const latestUserText = latestUserMessage(trimmedMessages);
+
+  return {
+    latestUserText,
+    intent: latestUserIntentHint(latestUserText),
+    instruction: latestUserPriorityInstruction(latestUserText),
+    previousConversationContext: buildRecentConversationContext(
+      trimmedMessages,
+      latestUserText,
+      8
+    ),
+  };
+}
+
 function safeStringify(value, maxChars = 16000) {
   try {
     const json = JSON.stringify(value, null, 2);
@@ -1770,6 +1796,93 @@ function compactPlanForCoach(plan, planSummary = null) {
   };
 }
 
+function latestUserIntentHint(text) {
+  const clean = normaliseText(text);
+  if (
+    clean.includes("eat") ||
+    clean.includes("food") ||
+    clean.includes("meal") ||
+    clean.includes("nutrition") ||
+    clean.includes("protein") ||
+    clean.includes("carb") ||
+    clean.includes("fuel") ||
+    clean.includes("hydrate") ||
+    clean.includes("fat loss") ||
+    clean.includes("lose fat")
+  ) {
+    return "nutrition";
+  }
+
+  if (
+    clean.includes("only have") ||
+    clean.includes("short on time") ||
+    clean.includes("limited time") ||
+    /\b\d+\s*(?:min|mins|minute|minutes)\b/.test(clean)
+  ) {
+    return "limited_time";
+  }
+
+  if (
+    clean.includes("tired") ||
+    clean.includes("slept badly") ||
+    clean.includes("bad sleep") ||
+    clean.includes("fatigued") ||
+    clean.includes("sore")
+  ) {
+    return "readiness_recovery";
+  }
+
+  if (clean.includes("move") || clean.includes("reschedule") || clean.includes("tomorrow")) {
+    return "reschedule";
+  }
+
+  return "general";
+}
+
+function buildRecentConversationContext(trimmedMessages, latestUserText, limit = 8) {
+  const latest = String(latestUserText || "").trim();
+  const priorMessages = trimmedMessages
+    .filter((message, index) => {
+      if (index === trimmedMessages.length - 1 && message.role === "user") return false;
+      return !(message.role === "user" && String(message.content || "").trim() === latest);
+    })
+    .slice(-limit)
+    .map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
+  return priorMessages;
+}
+
+function latestUserPriorityInstruction(latestUserText) {
+  const intent = latestUserIntentHint(latestUserText);
+  const lines = [
+    "LATEST_USER_MESSAGE_PRIORITY:",
+    "- Answer the latest user message directly.",
+    "- Conversation history is background context only; it must not override the latest ask.",
+    "- Do not continue a previous topic unless the latest user message clearly asks to continue it.",
+    `- Latest user intent hint: ${intent}.`,
+  ];
+
+  if (intent === "nutrition") {
+    lines.push(
+      "- This is a nutrition question. Answer with food/fuelling guidance first.",
+      "- Do not provide a timed mobility, recovery, or workout plan unless the user asks for activity.",
+      "- Include protein + carbs + fluids, practical food examples, and a useful protein range when appropriate.",
+      "- Use training context only to personalise the nutrition advice."
+    );
+  }
+
+  if (intent === "limited_time") {
+    lines.push(
+      "- This is a time-constraint question. Give a practical time-boxed training or recovery structure first."
+    );
+  }
+
+  return lines.join("\n");
+}
+
 function buildCoachChatMessages({
   systemPrompt,
   mergedContext,
@@ -1784,10 +1897,12 @@ function buildCoachChatMessages({
   const contextLimit = compact ? 5500 : 14000;
   const planLimit = compact ? 4500 : 18000;
   const messageLimit = compact ? 8 : 20;
-  const recentMessages = trimmedMessages.slice(-messageLimit).map((message) => ({
-    role: message.role,
-    content: message.content,
-  }));
+  const latestUserText = latestUserMessage(trimmedMessages);
+  const recentContext = buildRecentConversationContext(
+    trimmedMessages,
+    latestUserText,
+    messageLimit
+  );
 
   return [
     { role: "system", content: systemPrompt },
@@ -1807,7 +1922,24 @@ function buildCoachChatMessages({
       role: "system",
       content: "CURRENT_PLAN_JSON:\n" + safeStringify(planForModel, planLimit),
     },
-    ...recentMessages,
+    ...(recentContext.length
+      ? [
+          {
+            role: "system",
+            content:
+              "RECENT_CONVERSATION_CONTEXT_FOR_BACKGROUND_ONLY:\n" +
+              safeStringify(recentContext, compact ? 3500 : 7000),
+          },
+        ]
+      : []),
+    {
+      role: "system",
+      content: latestUserPriorityInstruction(latestUserText),
+    },
+    {
+      role: "user",
+      content: latestUserText,
+    },
   ];
 }
 
@@ -1848,14 +1980,18 @@ async function createCoachChatResponsesFetchFallback({
   const timeout = setTimeout(() => controller.abort(), 35000);
   const compactContext = compactCoachContext(mergedContext, planSummary);
   const compactPlan = compactPlanForCoach(plan, planSummary);
+  const latestUserText = latestUserMessage(trimmedMessages);
   const payload = {
     context: compactContext,
     liveContextFacts,
     currentPlan: compactPlan,
-    conversation: trimmedMessages.slice(-8).map((message) => ({
-      role: message.role,
-      content: message.content,
-    })),
+    latestUserMessage: latestUserText,
+    latestUserIntentHint: latestUserIntentHint(latestUserText),
+    previousConversationContext: buildRecentConversationContext(
+      trimmedMessages,
+      latestUserText,
+      8
+    ),
   };
   const requestBody = {
     model,
@@ -1865,7 +2001,7 @@ async function createCoachChatResponsesFetchFallback({
         content: [
           {
             type: "input_text",
-            text: `${systemPrompt}\n\nReturn valid JSON only with keys reply, updatedPlan, nutritionDraft, and coachActions.`,
+            text: `${systemPrompt}\n\n${latestUserPriorityInstruction(latestUserText)}\n\nReturn valid JSON only with keys reply, updatedPlan, nutritionDraft, and coachActions.`,
           },
         ],
       },

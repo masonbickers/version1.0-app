@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { __coachChatDeterministicReplyForTest } from "../routes/coach-chat.js";
+import {
+  __coachChatDeterministicReplyForTest,
+  __coachChatLatestPriorityForTest,
+} from "../routes/coach-chat.js";
 
 const completedPushContext = {
   clock: {
@@ -227,6 +230,48 @@ for (const prompt of aiLedAdjustmentPrompts) {
     `${prompt}: expected AI-led adaptation instead of deterministic today-plan reply, got:\n${reply}`
   );
 }
+
+const nutritionAfterLimitedTimePriority = __coachChatLatestPriorityForTest([
+  {
+    role: "user",
+    content: "I only have 30 minutes today, what should I do?",
+  },
+  {
+    role: "assistant",
+    content:
+      "Use the 30 minutes for recovery: mobility, easy cycling, and light stretching.",
+  },
+  {
+    role: "user",
+    content: "What should I eat after training?",
+  },
+]);
+
+assert.equal(
+  nutritionAfterLimitedTimePriority.latestUserText,
+  "What should I eat after training?",
+  "latest user message should be the nutrition question"
+);
+assert.equal(
+  nutritionAfterLimitedTimePriority.intent,
+  "nutrition",
+  "latest nutrition question should override previous limited-time topic"
+);
+assert.ok(
+  nutritionAfterLimitedTimePriority.instruction.includes("This is a nutrition question"),
+  "latest-priority instruction should explicitly mark nutrition intent"
+);
+assert.ok(
+  nutritionAfterLimitedTimePriority.instruction.includes("Do not provide a timed mobility"),
+  "latest-priority instruction should prevent continuing the previous recovery-plan topic"
+);
+assert.equal(
+  nutritionAfterLimitedTimePriority.previousConversationContext.some((message) =>
+    message.content.includes("What should I eat after training?")
+  ),
+  false,
+  "latest user message should not be duplicated into previous conversation context"
+);
 
 const duplicateReply = __coachChatDeterministicReplyForTest(
   "What should I train today?",
