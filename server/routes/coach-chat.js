@@ -836,16 +836,14 @@ function buildTodaySessionState(todaySchedule, completedToday) {
       return;
     }
 
-    const matchIndex = rows.findIndex(
-      (row) =>
-        row.status !== "completed" &&
-        sessionsAreLikelySame(row.session, completedSession)
+    const matchIndex = rows.findIndex((row) =>
+      sessionsAreLikelySame(row.session, completedSession)
     );
     if (matchIndex >= 0) {
       rows[matchIndex] = {
         ...rows[matchIndex],
         status: "completed",
-        matchedCompletedSession: completedSession,
+        matchedCompletedSession: rows[matchIndex].matchedCompletedSession || completedSession,
       };
       matchedLogs.add(completedIndex);
     }
