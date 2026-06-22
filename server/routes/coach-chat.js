@@ -1,5 +1,9 @@
 // server/routes/coach-chat.js
 import express from "express";
+import {
+  OPENAI_COACH_CHAT_MODEL,
+  OPENAI_FALLBACK_MODEL,
+} from "../config/openaiModels.js";
 
 function normaliseList(value) {
   if (Array.isArray(value)) return value;
@@ -146,6 +150,371 @@ function normaliseText(value) {
     .trim();
 }
 
+const NUTRITION_ESTIMATES = [
+  {
+    title: "Flat white",
+    pluralTitle: "flat whites",
+    aliases: ["flat white", "flatwhite"],
+    calories: 120,
+    protein: 6,
+    carbs: 10,
+    fat: 6,
+    servingText: "1 regular cup",
+    notes: "Estimated from a typical flat white with dairy milk.",
+  },
+  {
+    title: "Latte",
+    pluralTitle: "lattes",
+    aliases: ["latte", "caffe latte", "cafe latte"],
+    calories: 150,
+    protein: 8,
+    carbs: 12,
+    fat: 7,
+    servingText: "1 regular cup",
+    notes: "Estimated from a regular latte with dairy milk.",
+  },
+  {
+    title: "Cappuccino",
+    pluralTitle: "cappuccinos",
+    aliases: ["cappuccino"],
+    calories: 100,
+    protein: 5,
+    carbs: 8,
+    fat: 5,
+    servingText: "1 regular cup",
+    notes: "Estimated from a regular cappuccino with dairy milk.",
+  },
+  {
+    title: "Americano",
+    pluralTitle: "americanos",
+    aliases: ["americano", "black coffee", "coffee"],
+    calories: 5,
+    protein: 0,
+    carbs: 0,
+    fat: 0,
+    servingText: "1 cup",
+    notes: "Estimated as black coffee without milk or sugar.",
+  },
+  {
+    title: "Banana",
+    pluralTitle: "bananas",
+    aliases: ["banana"],
+    calories: 105,
+    protein: 1.3,
+    carbs: 27,
+    fat: 0.3,
+    servingText: "1 medium banana",
+    notes: "Estimated from a medium banana.",
+  },
+  {
+    title: "Protein shake",
+    pluralTitle: "protein shakes",
+    aliases: ["protein shake", "whey shake"],
+    calories: 140,
+    protein: 25,
+    carbs: 3,
+    fat: 2,
+    servingText: "1 serving",
+    notes: "Estimated from a typical whey protein shake mixed with water.",
+  },
+  {
+    title: "Grilled chicken breast burger with chips",
+    pluralTitle: "grilled chicken breast burgers with chips",
+    aliases: [
+      "grilled chicken breast burger with chips",
+      "grilled chicken burger with chips",
+      "chicken breast burger with chips",
+      "chicken burger with chips",
+      "chicken burger and chips",
+    ],
+    calories: 780,
+    protein: 48,
+    carbs: 82,
+    fat: 28,
+    servingText: "1 burger with 1 side of chips",
+    notes: "Estimated from a grilled chicken burger with bun and a medium side of chips.",
+  },
+];
+const NUTRITION_COMPONENT_ESTIMATES = [
+  {
+    aliases: ["chips", "fries"],
+    calories: 330,
+    protein: 4,
+    carbs: 45,
+    fat: 15,
+  },
+  {
+    aliases: ["chicken breast", "grilled chicken", "chicken"],
+    calories: 220,
+    protein: 36,
+    carbs: 0,
+    fat: 6,
+  },
+  {
+    aliases: ["burger"],
+    calories: 390,
+    protein: 22,
+    carbs: 36,
+    fat: 17,
+  },
+  {
+    aliases: ["wrap"],
+    calories: 280,
+    protein: 12,
+    carbs: 36,
+    fat: 9,
+  },
+  {
+    aliases: ["sandwich"],
+    calories: 330,
+    protein: 16,
+    carbs: 42,
+    fat: 10,
+  },
+  {
+    aliases: ["rice"],
+    calories: 240,
+    protein: 5,
+    carbs: 52,
+    fat: 1,
+  },
+  {
+    aliases: ["pasta"],
+    calories: 360,
+    protein: 12,
+    carbs: 68,
+    fat: 4,
+  },
+  {
+    aliases: ["salad"],
+    calories: 180,
+    protein: 8,
+    carbs: 14,
+    fat: 10,
+  },
+];
+const NUTRITION_FOOD_KEYWORDS = [
+  "americano",
+  "banana",
+  "burger",
+  "cappuccino",
+  "chicken",
+  "chips",
+  "coffee",
+  "egg",
+  "fries",
+  "latte",
+  "pasta",
+  "pizza",
+  "porridge",
+  "rice",
+  "salad",
+  "sandwich",
+  "shake",
+  "smoothie",
+  "toast",
+  "wrap",
+  "yoghurt",
+  "yogurt",
+];
+
+function normaliseNutritionSearchText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[^a-z0-9.\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function titleCaseNutritionItem(value) {
+  return String(value || "")
+    .trim()
+    .split(/\s+/)
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1).toLowerCase() : ""))
+    .join(" ");
+}
+
+function inferNutritionMealType(text) {
+  const clean = normaliseNutritionSearchText(text);
+  if (/\bbreakfast\b/.test(clean)) return "Breakfast";
+  if (/\blunch\b/.test(clean)) return "Lunch";
+  if (/\bdinner\b|\btea\b/.test(clean)) return "Dinner";
+  if (/\bsnack\b/.test(clean)) return "Snack";
+  return "Unspecified";
+}
+
+function extractNutritionItemText(message) {
+  const clean = normaliseNutritionSearchText(message);
+  if (!clean) return "";
+
+  const patterns = [
+    /^(?:please\s+)?(?:can you\s+)?(?:add|log|track|record)\s+(?:my\s+)?(.+?)$/,
+    /^(?:i\s+)?(?:just\s+)?(?:had|ate|drank)\s+(.+?)$/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = clean.match(pattern);
+    if (match?.[1]) {
+      return match[1]
+        .replace(/\b(?:to|for)\s+(?:my\s+)?(?:day|today|nutrition|food log|diary|breakfast|lunch|dinner|snack)\b.*$/i, "")
+        .replace(/\b(?:today|this morning|this afternoon|tonight)\b.*$/i, "")
+        .replace(/^(?:a|an|one|some|my)\s+/, "")
+        .trim();
+    }
+  }
+
+  if (isLikelyStandaloneNutritionItem(message)) {
+    return clean.replace(/^(?:a|an|one|some|my)\s+/, "").trim();
+  }
+
+  return "";
+}
+
+function isLikelyStandaloneNutritionItem(message) {
+  const raw = String(message || "").trim();
+  const clean = normaliseNutritionSearchText(raw);
+  if (!clean || clean.length < 3 || clean.length > 90) return false;
+  if (raw.includes("?")) return false;
+  if (/^(?:what|why|how|when|where|should|can|could|would|will|do|does|is|are)\b/.test(clean)) {
+    return false;
+  }
+  return NUTRITION_FOOD_KEYWORDS.some((keyword) => clean.includes(keyword));
+}
+
+function parseNutritionQuantity(text) {
+  const clean = normaliseNutritionSearchText(text);
+  const numeric = clean.match(/^(\d+(?:\.\d+)?)\s+/);
+  if (numeric) {
+    const count = Number(numeric[1]);
+    if (Number.isFinite(count) && count > 0 && count <= 10) return count;
+  }
+  if (/^(?:two|couple)\s+/.test(clean)) return 2;
+  if (/^three\s+/.test(clean)) return 3;
+  return 1;
+}
+
+function findNutritionEstimate(itemText) {
+  const clean = normaliseNutritionSearchText(itemText)
+    .replace(/^(\d+(?:\.\d+)?|two|three|couple)\s+/, "")
+    .replace(/^(?:a|an|one|some)\s+/, "")
+    .trim();
+  if (!clean) return null;
+
+  return NUTRITION_ESTIMATES.find((estimate) =>
+    estimate.aliases.some((alias) => {
+      const cleanAlias = normaliseNutritionSearchText(alias);
+      return clean === cleanAlias || clean.includes(cleanAlias);
+    })
+  );
+}
+
+function createComponentNutritionEstimate(itemText) {
+  const clean = normaliseNutritionSearchText(itemText);
+  if (!clean || !isLikelyStandaloneNutritionItem(clean)) return null;
+
+  const matched = [];
+  NUTRITION_COMPONENT_ESTIMATES.forEach((component) => {
+    const hasComponent = component.aliases.some((alias) =>
+      clean.includes(normaliseNutritionSearchText(alias))
+    );
+    if (hasComponent) matched.push(component);
+  });
+
+  if (!matched.length) return null;
+
+  const totals = matched.reduce(
+    (sum, item) => ({
+      calories: sum.calories + item.calories,
+      protein: sum.protein + item.protein,
+      carbs: sum.carbs + item.carbs,
+      fat: sum.fat + item.fat,
+    }),
+    { calories: 0, protein: 0, carbs: 0, fat: 0 }
+  );
+
+  if (totals.calories < 80) return null;
+
+  return {
+    title: titleCaseNutritionItem(clean),
+    pluralTitle: titleCaseNutritionItem(clean),
+    aliases: [clean],
+    calories: totals.calories,
+    protein: totals.protein,
+    carbs: totals.carbs,
+    fat: totals.fat,
+    servingText: "1 estimated serving",
+    notes: "Estimated from recognised meal components. Review the numbers before adding.",
+  };
+}
+
+function createNutritionDraftFromText(message) {
+  const itemText = extractNutritionItemText(message);
+  if (!itemText) return null;
+
+  const estimate = findNutritionEstimate(itemText) || createComponentNutritionEstimate(itemText);
+  if (!estimate) return null;
+
+  const quantity = parseNutritionQuantity(itemText);
+  const multiplier = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+  const title =
+    multiplier > 1
+      ? `${multiplier} ${estimate.pluralTitle || `${estimate.title.toLowerCase()}s`}`
+      : estimate.title;
+
+  return {
+    title: titleCaseNutritionItem(title),
+    mealType: inferNutritionMealType(message),
+    calories: Math.round(estimate.calories * multiplier),
+    protein: Number((estimate.protein * multiplier).toFixed(1)),
+    carbs: Number((estimate.carbs * multiplier).toFixed(1)),
+    fat: Number((estimate.fat * multiplier).toFixed(1)),
+    servingText: multiplier > 1 ? `${multiplier} servings` : estimate.servingText,
+    notes: estimate.notes,
+    source: "coach_chat",
+  };
+}
+
+function cleanCoachText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .replace(/([.!?]){2,}/g, "$1")
+    .trim();
+}
+
+function sessionActivityText(session) {
+  return normaliseText(
+    [
+      session?.planKind,
+      session?.primaryActivity,
+      session?.activityType,
+      session?.sessionType,
+      session?.type,
+      session?.workout?.sport,
+      session?.title,
+      session?.name,
+    ].join(" ")
+  );
+}
+
+function isStrengthLikeSession(session) {
+  const text = sessionActivityText(session);
+  return /\b(strength|gym|weight|weights|weighttraining|push|pull|legs|upper|lower|bench|dumbbell|press|squat|deadlift|hyrox)\b/.test(text);
+}
+
+function meaningfulSessionDistanceKm(session) {
+  const distance = Number(session?.distanceKm ?? session?.actualDistanceKm ?? session?.plannedDistanceKm);
+  if (!Number.isFinite(distance) || distance <= 0) return null;
+  if (isStrengthLikeSession(session)) return null;
+  return Number(distance.toFixed(distance >= 10 ? 1 : 2)).toString().replace(/\.0$/, "");
+}
+
+function meaningfulSessionDurationMin(session) {
+  const duration = Number(session?.durationMin ?? session?.actualDurationMin ?? session?.targetDurationMin);
+  if (!Number.isFinite(duration) || duration <= 0) return null;
+  return Math.round(duration);
+}
+
 function formatSessionDetail(session, { includeDate = false } = {}) {
   if (!session) return null;
 
@@ -153,9 +522,11 @@ function formatSessionDetail(session, { includeDate = false } = {}) {
   const bits = [];
   if (includeDate && session?.dateLabel) bits.push(session.dateLabel);
   bits.push(title);
-  if (session?.distanceKm != null) bits.push(`${session.distanceKm} km`);
-  else if (session?.durationMin != null) bits.push(`${session.durationMin} min`);
-  return bits.filter(Boolean).join(" · ");
+  const distanceKm = meaningfulSessionDistanceKm(session);
+  const durationMin = meaningfulSessionDurationMin(session);
+  if (distanceKm != null) bits.push(`${distanceKm} km`);
+  else if (durationMin != null) bits.push(`${durationMin} min`);
+  return cleanCoachText(bits.filter(Boolean).join(" · "));
 }
 
 function formatSessionCoachLine(session, { includeDate = false } = {}) {
@@ -165,12 +536,607 @@ function formatSessionCoachLine(session, { includeDate = false } = {}) {
   const bits = [];
   if (includeDate && session?.dateLabel) bits.push(session.dateLabel);
   bits.push(title);
-  if (session?.distanceKm != null) bits.push(`${session.distanceKm} km`);
-  else if (session?.durationMin != null) bits.push(`${session.durationMin} min`);
+  const distanceKm = meaningfulSessionDistanceKm(session);
+  const durationMin = meaningfulSessionDurationMin(session);
+  if (distanceKm != null) bits.push(`${distanceKm} km`);
+  else if (durationMin != null) bits.push(`${durationMin} min`);
 
-  const effort = String(session?.notes || session?.description || "").trim();
+  const effort = cleanCoachText(session?.notes || session?.description || "");
   const main = bits.filter(Boolean).join(" - ");
-  return effort ? `${main}. ${effort}` : main;
+  return cleanCoachText(effort ? `${main}. ${effort}` : main);
+}
+
+function formatCompletedSessionFact(session) {
+  if (!session) return null;
+
+  const bits = [
+    session?.dateLabel || session?.date || null,
+    session?.name || session?.title || "Completed session",
+    session?.type || null,
+    session?.durationMin ? `${session.durationMin} min` : null,
+    session?.distanceKm ? `${session.distanceKm} km` : null,
+    session?.strength?.loggedExercises
+      ? `${session.strength.loggedExercises} exercises`
+      : null,
+    session?.strength?.totalSets ? `${session.strength.totalSets} sets` : null,
+  ].filter(Boolean);
+
+  const exerciseNames = Array.isArray(session?.strength?.exercises)
+    ? session.strength.exercises
+        .slice(0, 5)
+        .map((item) => item?.name)
+        .filter(Boolean)
+    : [];
+  const takeaways = Array.isArray(session?.analysis?.keyTakeaways)
+    ? session.analysis.keyTakeaways.filter(Boolean).slice(0, 3)
+    : [];
+
+  return [
+    bits.join(" · "),
+    exerciseNames.length ? `Exercises: ${exerciseNames.join(", ")}` : null,
+    session?.analysis?.summary ? `Summary: ${session.analysis.summary}` : null,
+    takeaways.length ? `Takeaways: ${takeaways.join("; ")}` : null,
+    session?.analysis?.recoveryImpact
+      ? `Recovery impact: ${session.analysis.recoveryImpact}`
+      : null,
+    session?.analysis?.coachRecommendation
+      ? `Coach recommendation: ${session.analysis.coachRecommendation}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(". ");
+}
+
+function firstNonEmptyString(values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function sessionDateKey(session) {
+  const raw = firstNonEmptyString([
+    session?.date,
+    session?.isoDate,
+    session?.completedAt,
+    session?.statusAt,
+    session?.startIso,
+    session?.startedAt,
+    session?.updatedAt,
+    session?.createdAt,
+  ]);
+  const isoMatch = raw.match(/\d{4}-\d{2}-\d{2}/);
+  return isoMatch ? isoMatch[0] : "";
+}
+
+function sessionIdentityKeys(session) {
+  return [
+    session?.sessionKey,
+    session?.linkedSessionId,
+    session?.linkedTrainSessionId,
+    session?.id,
+    session?.trainSessionId,
+    session?.lastTrainSessionId,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+}
+
+function titleToken(session) {
+  return normaliseText(
+    session?.title ||
+      session?.name ||
+      session?.sessionName ||
+      session?.sessionTitle ||
+      session?.type ||
+      session?.sessionType ||
+      ""
+  );
+}
+
+function numberOrNull(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sessionsAreLikelySame(planned, completed) {
+  if (!planned || !completed) return false;
+
+  const plannedKeys = sessionIdentityKeys(planned);
+  const completedKeys = new Set(sessionIdentityKeys(completed));
+  if (plannedKeys.some((key) => completedKeys.has(key))) return true;
+
+  const samePlanPosition =
+    String(planned?.planId || "").trim() &&
+    String(planned?.planId || "").trim() === String(completed?.planId || "").trim() &&
+    Number(planned?.weekIndex) === Number(completed?.weekIndex) &&
+    Number(planned?.dayIndex) === Number(completed?.dayIndex) &&
+    Number(planned?.sessionIndex) === Number(completed?.sessionIndex);
+  if (samePlanPosition) return true;
+
+  const plannedTitle = titleToken(planned);
+  const completedTitle = titleToken(completed);
+  if (!plannedTitle || !completedTitle || plannedTitle !== completedTitle) return false;
+
+  const plannedDistance = numberOrNull(planned?.distanceKm ?? planned?.actualDistanceKm);
+  const completedDistance = numberOrNull(completed?.distanceKm ?? completed?.actualDistanceKm);
+  if (
+    plannedDistance != null &&
+    completedDistance != null &&
+    Math.abs(plannedDistance - completedDistance) <= 0.2
+  ) {
+    return true;
+  }
+
+  const plannedDuration = numberOrNull(planned?.durationMin ?? planned?.actualDurationMin);
+  const completedDuration = numberOrNull(completed?.durationMin ?? completed?.actualDurationMin);
+  if (
+    plannedDuration != null &&
+    completedDuration != null &&
+    Math.abs(plannedDuration - completedDuration) <= 5
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function statusTextForSession(session) {
+  return normaliseText(
+    firstNonEmptyString([
+      session?.status,
+      session?.sessionStatus,
+      session?.state,
+      session?.logStatus,
+      session?.completionStatus,
+      session?.matchStatus,
+      session?.draft?.status,
+    ])
+  ).replace(/[\s-]+/g, "_");
+}
+
+function hasSessionStatusSignal(session) {
+  return Boolean(
+    statusTextForSession(session) ||
+      session?.completed === true ||
+      session?.completedAt ||
+      session?.skipped === true ||
+      session?.skippedAt ||
+      session?.movedToSessionKey ||
+      session?.movedToDate ||
+      session?.rescheduledToDate ||
+      session?.rescheduledToIso ||
+      session?.draft
+  );
+}
+
+function classifySessionStatus(session) {
+  const status = statusTextForSession(session);
+  const haystack = normaliseText(
+    [
+      status,
+      session?.statusLabel,
+      session?.title,
+      session?.name,
+      session?.sessionType,
+      session?.type,
+    ].join(" ")
+  );
+
+  if (
+    status.includes("complete") ||
+    status.includes("completed") ||
+    status.includes("logged") ||
+    status.includes("linked") ||
+    status.includes("done") ||
+    session?.completed === true ||
+    !!session?.completedAt
+  ) {
+    return "completed";
+  }
+
+  if (
+    status.includes("skip") ||
+    status.includes("missed") ||
+    status.includes("cancel") ||
+    session?.skipped === true ||
+    !!session?.skippedAt
+  ) {
+    return "skipped";
+  }
+
+  if (
+    status.includes("moved") ||
+    status.includes("rescheduled") ||
+    status.includes("deferred") ||
+    status.includes("postponed") ||
+    !!session?.movedToSessionKey ||
+    !!session?.movedToDate ||
+    !!session?.rescheduledToDate ||
+    !!session?.rescheduledToIso
+  ) {
+    return "moved";
+  }
+
+  if (status.includes("progress") || status.includes("active") || status.includes("started")) {
+    return "in_progress";
+  }
+
+  if (/\b(rest|recovery day)\b/.test(haystack)) return "rest";
+  if (!hasSessionStatusSignal(session)) return "unknown";
+  if (
+    status.includes("fresh") ||
+    status.includes("planned") ||
+    status.includes("pending") ||
+    status.includes("not_started") ||
+    status.includes("scheduled") ||
+    status.includes("incomplete") ||
+    status.includes("due")
+  ) {
+    return "due";
+  }
+
+  return "unknown";
+}
+
+function movedTargetText(session) {
+  const target = firstNonEmptyString([
+    session?.movedToDate,
+    session?.rescheduledToDate,
+    session?.rescheduledToIso,
+    session?.movedToIso,
+    session?.movedToSessionKey,
+  ]);
+  if (!target) return "";
+  const dateMatch = target.match(/\d{4}-\d{2}-\d{2}/);
+  return dateMatch ? dateMatch[0] : target;
+}
+
+function todayCompletedSessions(training, clock) {
+  const todayIso = String(clock?.todayIso || "").slice(0, 10);
+  const recentCompletedSessions = Array.isArray(training?.recentCompletedSessions)
+    ? training.recentCompletedSessions.filter(Boolean)
+    : [];
+  const lastCompletedSession = training?.lastCompletedSession ? [training.lastCompletedSession] : [];
+  const seen = new Set();
+
+  return [...lastCompletedSession, ...recentCompletedSessions].filter((session) => {
+    const key = sessionIdentityKeys(session)[0] || `${sessionDateKey(session)}:${titleToken(session)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+
+    const sessionDay = sessionDateKey(session);
+    if (todayIso && sessionDay) return sessionDay === todayIso;
+    if (clock?.todayLabel && session?.dateLabel) {
+      return String(session.dateLabel).trim() === String(clock.todayLabel).trim();
+    }
+    return false;
+  });
+}
+
+function buildTodaySessionState(todaySchedule, completedToday) {
+  const rows = (Array.isArray(todaySchedule) ? todaySchedule : [])
+    .filter(Boolean)
+    .map((session) => ({
+      session,
+      status: classifySessionStatus(session),
+      matchedCompletedSession: null,
+    }));
+
+  const matchedLogs = new Set();
+  completedToday.forEach((completedSession, completedIndex) => {
+    const alreadyMatched = rows.some((row) =>
+      row.matchedCompletedSession
+        ? sessionsAreLikelySame(row.matchedCompletedSession, completedSession)
+        : false
+    );
+    if (alreadyMatched) {
+      matchedLogs.add(completedIndex);
+      return;
+    }
+
+    const matchIndex = rows.findIndex(
+      (row) =>
+        row.status !== "completed" &&
+        sessionsAreLikelySame(row.session, completedSession)
+    );
+    if (matchIndex >= 0) {
+      rows[matchIndex] = {
+        ...rows[matchIndex],
+        status: "completed",
+        matchedCompletedSession: completedSession,
+      };
+      matchedLogs.add(completedIndex);
+    }
+  });
+
+  if (
+    rows.length === 1 &&
+    completedToday.length === 1 &&
+    !["completed", "skipped", "moved", "rest"].includes(rows[0].status)
+  ) {
+    rows[0] = {
+      ...rows[0],
+      status: "completed",
+      matchedCompletedSession: completedToday[0],
+    };
+    matchedLogs.add(0);
+  }
+
+  return {
+    rows,
+    unmatchedCompleted: completedToday.filter((_, index) => !matchedLogs.has(index)),
+  };
+}
+
+function statusLabelForTodayRow(row) {
+  if (row?.status === "completed") return "completed";
+  if (row?.status === "skipped") return "skipped";
+  if (row?.status === "moved") {
+    const target = movedTargetText(row.session);
+    return target ? `moved to ${target}` : "moved";
+  }
+  if (row?.status === "in_progress") return "in progress";
+  if (row?.status === "rest") return "recovery";
+  if (row?.status === "due") return "still to do";
+  return "status not confirmed";
+}
+
+function formatTodayRow(row) {
+  const line = formatSessionCoachLine(row?.session) || "Session";
+  return `${line} (${statusLabelForTodayRow(row)})`;
+}
+
+function sectionLines(title, rows, formatter = formatTodayRow) {
+  const list = (Array.isArray(rows) ? rows : []).filter(Boolean);
+  if (!list.length) return [];
+  const heading = String(title || "").trim();
+  return [
+    ...(heading ? [heading] : []),
+    ...list.map((row) => `- ${formatter(row)}`),
+  ];
+}
+
+function sessionDisplayName(session) {
+  return cleanCoachText(
+    session?.title ||
+      session?.name ||
+      session?.sessionName ||
+      session?.sessionTitle ||
+      session?.type ||
+      session?.sessionType ||
+      "session"
+  );
+}
+
+function formatInlineSessionNames(rowsOrSessions) {
+  const names = (Array.isArray(rowsOrSessions) ? rowsOrSessions : [])
+    .map((item) => sessionDisplayName(item?.session || item))
+    .filter(Boolean);
+  if (!names.length) return "session";
+  if (names.length === 1) return names[0];
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+function userStatesCompletedPremise(text) {
+  return (
+    text.includes("if i already completed") ||
+    text.includes("if i've already completed") ||
+    text.includes("if i have already completed") ||
+    text.includes("already completed it") ||
+    text.includes("already completed today") ||
+    text.includes("already done it") ||
+    text.includes("already done today")
+  );
+}
+
+function buildTodayPlanReply({ text, clock, training, todaySchedule }) {
+  const todayLabel = clock?.todayLabel || "today";
+  const completedToday = todayCompletedSessions(training, clock);
+  const { rows, unmatchedCompleted } = buildTodaySessionState(todaySchedule, completedToday);
+  const dueRows = rows.filter((row) => row.status === "due" || row.status === "in_progress");
+  const unknownRows = rows.filter((row) => row.status === "unknown");
+  const plannedOrUnknownRows = [...dueRows, ...unknownRows];
+  const completedRows = rows.filter((row) => row.status === "completed");
+  const skippedRows = rows.filter((row) => row.status === "skipped");
+  const movedRows = rows.filter((row) => row.status === "moved");
+  const restRows = rows.filter((row) => row.status === "rest");
+  const completedEvidence = completedRows.length ? completedRows : unmatchedCompleted;
+  const hasCompletedEvidence = completedRows.length > 0 || unmatchedCompleted.length > 0;
+  const asksAlreadyTrained =
+    text.includes("already trained") ||
+    text.includes("already completed") ||
+    text.includes("completed today") ||
+    text.includes("done today") ||
+    text.includes("did i train today") ||
+    text.includes("have i trained today") ||
+    text.includes("have i already trained") ||
+    text.includes("have i already completed");
+  const asksShouldStillDo =
+    text.includes("should i still") ||
+    text.includes("do today") ||
+    text.includes("repeat");
+  const completedPremise = userStatesCompletedPremise(text);
+
+  if (asksShouldStillDo) {
+    if (completedPremise || hasCompletedEvidence) {
+      return [
+        "No — if you've already completed today's planned session, don't repeat it.",
+        "",
+        hasCompletedEvidence
+          ? `Completed today: ${formatInlineSessionNames(completedEvidence)}.`
+          : null,
+        "Focus on recovery, mobility, steps, or an easy walk.",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    if (dueRows.length) {
+      return [
+        `If you haven't completed it yet, do the planned ${formatInlineSessionNames(dueRows)} session and keep it controlled.`,
+      ].join("\n");
+    }
+
+    if (unknownRows.length) {
+      return [
+        `I can see today's ${formatInlineSessionNames(unknownRows)} session, but I can't confirm it has been logged as completed yet.`,
+        "",
+        "If you have completed it, don't repeat it. If you have not, do the planned work and keep it controlled.",
+      ].join("\n");
+    }
+  }
+
+  if (asksAlreadyTrained) {
+    if (hasCompletedEvidence && !plannedOrUnknownRows.length) {
+      return [
+        `Yes — you've already completed today's ${formatInlineSessionNames(completedEvidence)} session.`,
+        "Keep the rest of the day easy unless you've planned extra recovery work.",
+      ].join("\n");
+    }
+
+    if (hasCompletedEvidence && plannedOrUnknownRows.length) {
+      return [
+        `Yes — you've completed ${formatInlineSessionNames(completedEvidence)} today.`,
+        "",
+        ...sectionLines("Still planned or not confirmed:", plannedOrUnknownRows),
+      ].join("\n");
+    }
+
+    if (dueRows.length && !unknownRows.length) {
+      return [
+        `Not yet — today's ${formatInlineSessionNames(dueRows)} session is still planned.`,
+      ].join("\n");
+    }
+
+    if (unknownRows.length) {
+      return [
+        `I can see today's ${formatInlineSessionNames(unknownRows)} session, but I can't confirm it has been logged as completed yet.`,
+      ].join("\n");
+    }
+
+    if (skippedRows.length || movedRows.length) {
+      return [
+        "I do not have a completed session logged for today.",
+        "",
+        ...sectionLines("Skipped:", skippedRows),
+        ...sectionLines("Moved or rescheduled:", movedRows),
+      ].join("\n");
+    }
+
+    return "I do not have a completed session logged for today.";
+  }
+
+  if (!rows.length) {
+    if (completedToday.length) {
+      return [
+        asksAlreadyTrained
+          ? "Yes - you have already logged training today."
+          : `Today is ${todayLabel}.`,
+        "",
+        ...sectionLines(
+          "Completed today:",
+          completedToday,
+          (session) => formatSessionCoachLine(session) || formatCompletedSessionFact(session) || "Completed session"
+        ),
+        "",
+        "I do not have another planned session for today. Keep the rest of the day recovery-focused: mobility, an easy walk, stretching, and nutrition.",
+      ].join("\n");
+    }
+
+    return [
+      `Today is ${todayLabel}.`,
+      "",
+      "I do not have a planned session for you today in the loaded plan.",
+      "",
+      "Use it as a recovery day, or ask me for an optional light session if you feel fresh.",
+    ].join("\n");
+  }
+
+  if (!plannedOrUnknownRows.length) {
+    const allCompleted = completedRows.length === rows.length;
+
+    if (allCompleted) {
+      return [
+        asksShouldStillDo
+          ? "No - today's planned training is already complete."
+          : asksAlreadyTrained
+          ? "Yes - you have already completed today's planned training."
+          : `Today is ${todayLabel}. Today's planned training is already complete.`,
+        "",
+        ...sectionLines("Completed:", completedRows),
+        ...sectionLines(
+          unmatchedCompleted.length ? "Other training logged today:" : "",
+          unmatchedCompleted,
+          (session) => formatSessionCoachLine(session) || formatCompletedSessionFact(session) || "Completed session"
+        ).filter(Boolean),
+        "",
+        "No need to repeat it. Make the rest of today recovery-focused: mobility, an easy walk, stretching, and nutrition.",
+      ].join("\n");
+    }
+
+    if (movedRows.length && !completedRows.length && !skippedRows.length) {
+      return [
+        `Today is ${todayLabel}.`,
+        "",
+        ...sectionLines("Today's planned training has been moved or rescheduled:", movedRows),
+        "",
+        "Follow the updated scheduled day rather than doing it today.",
+      ].join("\n");
+    }
+
+    if (skippedRows.length && !completedRows.length && !movedRows.length) {
+      return [
+        `Today is ${todayLabel}.`,
+        "",
+        ...sectionLines("Today's planned training is marked skipped:", skippedRows),
+        "",
+        "Treat today as recovery unless you want help rescheduling it.",
+      ].join("\n");
+    }
+
+    if (restRows.length && !completedRows.length && !skippedRows.length && !movedRows.length) {
+      return [
+        `Today is ${todayLabel}.`,
+        "",
+        "Your plan has today down as recovery.",
+        "",
+        "Keep it easy: mobility, a walk, stretching, and good nutrition.",
+      ].join("\n");
+    }
+
+    return [
+      `Today is ${todayLabel}. Today's planned training is already resolved.`,
+      "",
+      ...sectionLines("Completed:", completedRows),
+      ...sectionLines("Skipped:", skippedRows),
+      ...sectionLines("Moved or rescheduled:", movedRows),
+      ...sectionLines("Recovery:", restRows),
+      "",
+      "There is nothing else planned to complete today.",
+    ].join("\n");
+  }
+
+  return [
+    completedRows.length || unmatchedCompleted.length
+      ? "You have already completed part of today's training."
+      : `Today is ${todayLabel}.`,
+    "",
+    ...sectionLines("Still to do:", dueRows),
+    ...sectionLines("Planned today:", unknownRows),
+    ...sectionLines("Already completed:", completedRows),
+    ...sectionLines(
+      unmatchedCompleted.length ? "Other training logged today:" : "",
+      unmatchedCompleted,
+      (session) => formatSessionCoachLine(session) || formatCompletedSessionFact(session) || "Completed session"
+    ).filter(Boolean),
+    ...sectionLines("Skipped:", skippedRows),
+    ...sectionLines("Moved or rescheduled:", movedRows),
+    "",
+    "Do only the remaining planned work. Do not repeat anything already completed.",
+  ].join("\n");
 }
 
 function buildLiveContextFacts(context) {
@@ -187,6 +1153,10 @@ function buildLiveContextFacts(context) {
     ? training.currentWeekSchedule.filter(Boolean)
     : [];
   const garminActivities = training?.garminActivities || null;
+  const lastCompletedSession = training?.lastCompletedSession || null;
+  const recentCompletedSessions = Array.isArray(training?.recentCompletedSessions)
+    ? training.recentCompletedSessions.filter(Boolean)
+    : [];
   const recentGarmin = Array.isArray(garminActivities?.recent)
     ? garminActivities.recent.filter(Boolean)
     : [];
@@ -217,7 +1187,9 @@ function buildLiveContextFacts(context) {
   }
 
   if (todaySchedule.length) {
-    lines.push(`Today's sessions: ${todaySchedule.map((item) => formatSessionDetail(item)).join(" | ")}`);
+    const completedToday = todayCompletedSessions(training, clock);
+    const { rows } = buildTodaySessionState(todaySchedule, completedToday);
+    lines.push(`Today's sessions: ${rows.map(formatTodayRow).join(" | ")}`);
   } else if (clock?.todayLabel) {
     lines.push("Today's sessions: none scheduled in the loaded plan.");
   }
@@ -229,6 +1201,23 @@ function buildLiveContextFacts(context) {
         .map((item) => formatSessionDetail(item, { includeDate: true }))
         .join(" | ")}`
     );
+  }
+
+  if (lastCompletedSession || recentCompletedSessions.length) {
+    const last = lastCompletedSession || recentCompletedSessions[0];
+    const lastFact = formatCompletedSessionFact(last);
+    if (lastFact) {
+      lines.push(`Last completed app session: ${lastFact}`);
+    }
+    if (recentCompletedSessions.length > 1) {
+      lines.push(
+        `Recent completed app sessions: ${recentCompletedSessions
+          .slice(0, 5)
+          .map(formatCompletedSessionFact)
+          .filter(Boolean)
+          .join(" | ")}`
+      );
+    }
   }
 
   if (garminActivities?.storedCount || recentGarmin.length) {
@@ -302,47 +1291,44 @@ function tryDeterministicCoachReply(message, context) {
     return lines.filter(Boolean).join("\n");
   }
 
+  const asksAlreadyTrainedToday =
+    text.includes("already trained") ||
+    text.includes("already completed") ||
+    text.includes("completed today") ||
+    text.includes("done today") ||
+    text.includes("did i train today") ||
+    text.includes("have i trained today") ||
+    text.includes("have i already trained") ||
+    text.includes("have i already completed");
+
+  const asksShouldStillDoTodayWorkout =
+    text.includes("should i still") ||
+    text.includes("still do today") ||
+    text.includes("do today's workout") ||
+    text.includes("do todays workout") ||
+    text.includes("repeat today") ||
+    userStatesCompletedPremise(text);
+
+  if (asksAlreadyTrainedToday || asksShouldStillDoTodayWorkout) {
+    return buildTodayPlanReply({ text, clock: clock || {}, training, todaySchedule });
+  }
+
   const asksTodayPlan =
     (text.includes("today") &&
       (text.includes("session") ||
         text.includes("workout") ||
         text.includes("training") ||
+        text.includes("train") ||
         text.includes("plan") ||
-        text.includes("have"))) ||
+        text.includes("have") ||
+        text.includes("still do"))) ||
+    text.includes("what should i train") ||
     text.includes("what do i have today") ||
+    text.includes("what should i do today") ||
     text.includes("what's on today");
 
-  if (asksTodayPlan && clock) {
-    if (!todaySchedule.length) {
-      return [
-        `Today is ${clock.todayLabel}.`,
-        "",
-        "I do not have a scheduled session for you today in the loaded plan.",
-        "",
-        "Use it as a recovery day, or log anything you do separately.",
-      ].join("\n");
-    }
-
-    if (todaySchedule.length === 1) {
-      const session = todaySchedule[0];
-      const line = formatSessionCoachLine(session);
-      return [
-        `Today is ${clock.todayLabel}.`,
-        "",
-        `You have ${line}.`,
-        "",
-        "Keep it controlled and follow the plan target rather than adding extra volume.",
-      ].join("\n");
-    }
-
-    return [
-      `Today is ${clock.todayLabel}.`,
-      "",
-      "You have these sessions today:",
-      ...todaySchedule.map((item) => `- ${formatSessionCoachLine(item)}`),
-      "",
-      "Prioritise the key session, and keep the rest easy unless the plan says otherwise.",
-    ].join("\n");
+  if (asksTodayPlan) {
+    return buildTodayPlanReply({ text, clock: clock || {}, training, todaySchedule });
   }
 
   const asksThisWeek =
@@ -431,6 +1417,75 @@ function tryDeterministicCoachReply(message, context) {
   return null;
 }
 
+function deterministicBranchForDebug(message, context) {
+  const text = normaliseText(message);
+  if (!text) return "other/AI";
+
+  const clock = context?.clock || null;
+  const asksDay =
+    text.includes("what day is it") ||
+    text.includes("what day is today") ||
+    text.includes("what's the day");
+  const asksDate =
+    text.includes("what date is it") ||
+    text.includes("what's the date") ||
+    text.includes("what is the date");
+  const asksTime =
+    text.includes("what time is it") ||
+    text.includes("what's the time") ||
+    text.includes("what is the time now");
+  if ((asksDay || asksDate || asksTime) && clock) return "other/AI";
+
+  const asksAlreadyTrainedToday =
+    text.includes("already trained") ||
+    text.includes("already completed") ||
+    text.includes("completed today") ||
+    text.includes("done today") ||
+    text.includes("did i train today") ||
+    text.includes("have i trained today") ||
+    text.includes("have i already trained") ||
+    text.includes("have i already completed");
+  if (asksAlreadyTrainedToday) return "asksAlreadyTrainedToday";
+
+  const asksShouldStillDoTodayWorkout =
+    text.includes("should i still") ||
+    text.includes("still do today") ||
+    text.includes("do today's workout") ||
+    text.includes("do todays workout") ||
+    text.includes("repeat today") ||
+    userStatesCompletedPremise(text);
+  if (asksShouldStillDoTodayWorkout) return "asksShouldStillDoTodayWorkout";
+
+  const asksTodayPlan =
+    (text.includes("today") &&
+      (text.includes("session") ||
+        text.includes("workout") ||
+        text.includes("training") ||
+        text.includes("train") ||
+        text.includes("plan") ||
+        text.includes("have") ||
+        text.includes("still do"))) ||
+    text.includes("what should i train") ||
+    text.includes("what do i have today") ||
+    text.includes("what should i do today") ||
+    text.includes("what's on today");
+
+  return asksTodayPlan ? "asksTodayPlan" : "other/AI";
+}
+
+function logLiveCoachChatHit({ message, branch, reply }) {
+  console.log("LIVE COACH CHAT ROUTE HIT", {
+    timestamp: new Date().toISOString(),
+    incomingUserMessage: String(message || "").slice(0, 500),
+    deterministicBranch: branch || "other/AI",
+    replyPreview: cleanCoachText(reply).slice(0, 80),
+  });
+}
+
+export function __coachChatDeterministicReplyForTest(message, context) {
+  return tryDeterministicCoachReply(message, context);
+}
+
 function safeStringify(value, maxChars = 16000) {
   try {
     const json = JSON.stringify(value, null, 2);
@@ -465,7 +1520,7 @@ function extractJsonObject(raw = "") {
  *
  * Request body:
  * {
- *   messages: [{ role: "user" | "assistant", content: string }],
+ *   messages: [{ role: "user" | "assistant", content: string, attachments?: [] }],
  *   plan?: object | null,
  *   nutrition?: object | null,
  *   context?: object | null
@@ -475,11 +1530,13 @@ function extractJsonObject(raw = "") {
  * {
  *   reply: string,
  *   updatedPlan: object | null,
+ *   nutritionDraft: object | null,
  *   raw: string
  * }
  */
 export default function coachChatRoute(openai) {
   const router = express.Router();
+  const coachChatModel = OPENAI_COACH_CHAT_MODEL;
 
   if (!openai) {
     console.warn("[coach-chat] OpenAI client not configured.");
@@ -506,12 +1563,23 @@ export default function coachChatRoute(openai) {
           (m) =>
             (m?.role === "user" || m?.role === "assistant") &&
             typeof m?.content === "string" &&
-            m.content.trim()
+            (m.content.trim() || Array.isArray(m?.attachments))
         )
         .slice(-30)
         .map((m) => ({
           role: m.role,
-          content: String(m.content).trim(),
+          content: String(m.content || "").trim(),
+          attachments: Array.isArray(m?.attachments)
+            ? m.attachments
+                .filter((attachment) => attachment?.type === "image" && attachment?.url)
+                .slice(0, 1)
+                .map((attachment) => ({
+                  type: "image",
+                  url: String(attachment.url || ""),
+                  mimeType: attachment.mimeType ? String(attachment.mimeType) : null,
+                  fileName: attachment.fileName ? String(attachment.fileName) : null,
+                }))
+            : [],
         }));
 
       const planSummary = summarisePlan(plan);
@@ -521,16 +1589,59 @@ export default function coachChatRoute(openai) {
         ...(planSummary ? { activePlanSummary: planSummary } : {}),
       };
       const latestUserText = latestUserMessage(trimmedMessages);
+      const latestUserWithAttachment = [...trimmedMessages]
+        .reverse()
+        .find((m) => m.role === "user" && Array.isArray(m.attachments) && m.attachments.length);
+      if (latestUserWithAttachment) {
+        const reply =
+          "I've attached the image, but image analysis is not enabled yet. Describe what you want me to look at and I'll help from there.";
+        logLiveCoachChatHit({
+          message: latestUserText,
+          branch: "other/AI",
+          reply,
+        });
+        return res.json({
+          reply,
+          updatedPlan: null,
+          nutritionDraft: null,
+          coachActions: [],
+          raw: JSON.stringify({ reply, updatedPlan: null, nutritionDraft: null, coachActions: [] }),
+        });
+      }
+      const localNutritionDraft = createNutritionDraftFromText(latestUserText);
+      if (localNutritionDraft) {
+        const reply = `I prepared an estimate for ${localNutritionDraft.title}. Review it before adding it to today.`;
+        logLiveCoachChatHit({
+          message: latestUserText,
+          branch: "other/AI",
+          reply,
+        });
+        return res.json({
+          reply,
+          updatedPlan: null,
+          nutritionDraft: localNutritionDraft,
+          coachActions: [],
+          raw: JSON.stringify({ reply, updatedPlan: null, nutritionDraft: localNutritionDraft }),
+        });
+      }
+
       const deterministicReply = tryDeterministicCoachReply(
         latestUserText,
         mergedContext
       );
 
       if (deterministicReply) {
+        logLiveCoachChatHit({
+          message: latestUserText,
+          branch: deterministicBranchForDebug(latestUserText, mergedContext),
+          reply: deterministicReply,
+        });
         return res.json({
           reply: deterministicReply,
           updatedPlan: null,
-          raw: JSON.stringify({ reply: deterministicReply, updatedPlan: null }),
+          nutritionDraft: null,
+          coachActions: [],
+          raw: JSON.stringify({ reply: deterministicReply, updatedPlan: null, nutritionDraft: null }),
         });
       }
 
@@ -570,7 +1681,7 @@ You know the user's live context:
 - recent training sessions
 - nutrition targets and intake
 - body metrics and weight trend
-- profile notes / injuries / constraints when provided
+- saved coach memory, profile notes, injuries, constraints when provided
 
 Grounding rules:
 - Treat USER_CONTEXT_JSON and CURRENT_PLAN_JSON as the source of truth.
@@ -583,14 +1694,49 @@ Grounding rules:
 - Do not invent meals, sessions, injuries, or targets.
 - If the user asks about nutrition, use their real targets/intake where available.
 - If the user asks about training or recovery, use their recent sessions and current plan where available.
+- If the user asks for their last completed session/workout, first use USER_CONTEXT_JSON.training.lastCompletedSession or recentCompletedSessions. Only fall back to Garmin activity history or planned schedule if no completed app session is available.
 - If USER_CONTEXT_JSON.training.garminActivities is present, use it as imported Garmin activity history for recent completed workouts.
+- If USER_CONTEXT_JSON.athleteProfile.coachMemory is present, use it as saved long-term user preference/constraint context.
 - If the user asks for changes to their plan, you may update it conservatively.
+
+Nutrition logging rules:
+- If the user explicitly asks to add, log, track, or record food/drink to their day, return a nutritionDraft.
+- If the user sends only a food or drink name, treat it as a request to prepare a nutritionDraft for approval.
+- Logging a specific food/drink does not require nutrition targets or current intake data.
+- Do not ask for nutrition targets before preparing a draft for a named item.
+- Do not say the food has been logged. It still needs user approval in the app.
+- If the user gives enough detail for a reasonable estimate, produce a conservative estimate using typical UK/EU nutrition values.
+- If the item or serving is too ambiguous, ask one short clarifying question and set nutritionDraft to null.
+- Use mealType "Breakfast", "Lunch", "Dinner", "Snack", or "Unspecified".
+- Use grams for protein/carbs/fat and kcal for calories.
+- Keep source as "coach_chat".
 
 Plan update rules:
 - Only return a non-null updatedPlan when the user is explicitly asking to change, move, reduce, increase, or adapt their plan.
 - Keep the same overall plan structure.
 - Respect progression and avoid reckless jumps in volume or intensity.
 - If you are not changing the plan, updatedPlan must be null.
+- Prefer coachActions for proposed app writes. Do not claim a change, meal, session edit, or memory has been saved until the user approves the action card.
+- When the user asks to change/save/log/remember something, include a coachActions item with a clear summary, reason, before/after when available, and payload needed by the app.
+
+Weekly check-in rules:
+- If the user message starts with "Weekly check-in completed", treat the Answers section as structured athlete feedback for this week.
+- Use USER_CONTEXT_JSON.training.currentWeekSchedule, recentCompletedSessions, lastCompletedSession, nutrition, and coachMemory to review the week. Do not invent completion counts, pain, sleep, sessions, or meals.
+- Reply with a concise weekly review, next week focus, and only the most useful adjustment recommendations.
+- If pain, niggles, injury concern, schedule limits, travel, or recurring constraints are reported, consider a memory_save coachAction so the user can approve saving that context.
+- If the user reports tired, very tired, poor sleep, too much, busy week, less time, travel, too hard, too long, or too intense, consider a conservative plan_update or session_edit coachAction.
+- If no change is needed, return coachActions: [].
+- Never say the plan, session, or memory has been changed until the user applies the action card.
+
+Daily readiness rules:
+- If the user message starts with "Daily readiness check-in completed", treat the Answers section and Local readiness label as structured feedback for today.
+- Use USER_CONTEXT_JSON.training.todaySession, todaySchedule, currentWeekSchedule, nutrition, recentCompletedSessions, and coachMemory. Do not invent sleep, soreness, pain, sessions, or meals.
+- Reply with a readiness rating, what to do today, and whether today's session should stay as planned, be made easier, moved, or replaced with recovery.
+- If the user is tired, sore, has poor sleep, or high fatigue but no pain, consider a conservative session_edit coachAction to make today's session easier.
+- If the user reports sharp pain or pain during movement, give cautious advice, avoid telling them to push through, and consider a memory_save coachAction.
+- If the user cannot train today or should move today's work, consider session_edit or plan_update only when the target can be identified from context.
+- If no change is needed, return coachActions: [].
+- Never say the plan, session, or memory has been changed until the user applies the action card.
 
 Safety:
 - Be conservative with injury advice.
@@ -600,14 +1746,56 @@ RESPONSE FORMAT:
 Return VALID JSON ONLY with this exact shape:
 {
   "reply": "chat reply text",
-  "updatedPlan": null
+  "updatedPlan": null,
+  "nutritionDraft": null,
+  "coachActions": []
 }
 
 If you are changing the plan:
 {
-  "reply": "chat reply text",
-  "updatedPlan": { ...full updated plan object... }
+  "reply": "chat reply text explaining this needs approval",
+  "updatedPlan": { ...full updated plan object... },
+  "nutritionDraft": null,
+  "coachActions": [
+    {
+      "id": "plan-update-1",
+      "type": "plan_update",
+      "status": "pending",
+      "title": "Update your plan?",
+      "summary": "Short change summary",
+      "reason": "Why this is sensible",
+      "dateKey": "YYYY-MM-DD if relevant",
+      "targetId": "active plan id if known",
+      "before": {},
+      "after": {},
+      "payload": {}
+    }
+  ]
 }
+
+If you are preparing a nutrition item for approval:
+{
+  "reply": "chat reply text telling the user to review and approve the estimate",
+  "updatedPlan": null,
+  "nutritionDraft": {
+    "title": "Flat white",
+    "mealType": "Snack",
+    "calories": 120,
+    "protein": 6,
+    "carbs": 10,
+    "fat": 6,
+    "servingText": "1 regular cup",
+    "notes": "Estimated from a typical flat white.",
+    "source": "coach_chat"
+  },
+  "coachActions": []
+}
+
+Allowed coachActions types:
+- plan_update: proposed active plan/schedule update. Payload may include updatedPlan, planId, planCollection.
+- meal_log: proposed meal. Payload must include title, mealType, calories, protein, carbs, fat, servingText, notes, source.
+- session_edit: proposed simple saved session edit. Payload must include targetCollection ("sessionLogs" or "trainSessions"), targetId, and updates.
+- memory_save: proposed coach memory. Payload must include text and category.
       `.trim();
 
       const contextMessage = {
@@ -644,12 +1832,27 @@ If you are changing the plan:
         ...trimmedMessages,
       ];
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
-        messages: chatMessages,
-        temperature: 0.35,
-        response_format: { type: "json_object" },
-      });
+      let completion;
+      try {
+        completion = await openai.chat.completions.create({
+          model: coachChatModel,
+          messages: chatMessages,
+          temperature: 0.35,
+          response_format: { type: "json_object" },
+        });
+      } catch (modelError) {
+        if (coachChatModel === OPENAI_FALLBACK_MODEL) throw modelError;
+        console.warn(
+          `[coach-chat] ${coachChatModel} failed; falling back to ${OPENAI_FALLBACK_MODEL}:`,
+          modelError?.message || modelError
+        );
+        completion = await openai.chat.completions.create({
+          model: OPENAI_FALLBACK_MODEL,
+          messages: chatMessages,
+          temperature: 0.35,
+          response_format: { type: "json_object" },
+        });
+      }
 
       const raw = completion.choices?.[0]?.message?.content?.trim() || "";
       const parsed = extractJsonObject(raw);
@@ -663,10 +1866,26 @@ If you are changing the plan:
         parsed && Object.prototype.hasOwnProperty.call(parsed, "updatedPlan")
           ? parsed.updatedPlan
           : null;
+      const nutritionDraft =
+        parsed && Object.prototype.hasOwnProperty.call(parsed, "nutritionDraft")
+          ? parsed.nutritionDraft
+          : null;
+      const coachActions = Array.isArray(parsed?.coachActions)
+        ? parsed.coachActions.filter((action) => action && typeof action === "object")
+        : [];
+
+      logLiveCoachChatHit({
+        message: latestUserText,
+        branch: "other/AI",
+        reply,
+      });
 
       return res.json({
         reply,
         updatedPlan: updatedPlan && typeof updatedPlan === "object" ? updatedPlan : null,
+        nutritionDraft:
+          nutritionDraft && typeof nutritionDraft === "object" ? nutritionDraft : null,
+        coachActions,
         raw,
       });
     } catch (err) {
