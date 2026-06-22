@@ -207,6 +207,7 @@ for (const prompt of missedSessionCases) {
 
 const aiLedAdjustmentPrompts = [
   "I only have 30 minutes today",
+  "What should I do if I'm short on time?",
   "I'm tired today, should I train?",
   "I slept badly last night, should I adjust my workout?",
   "What should I eat after training?",
