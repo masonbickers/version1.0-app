@@ -176,6 +176,39 @@ const weeklyOverviewContext = {
   },
 };
 
+const activePlanContext = {
+  clock: {
+    todayIso: "2026-06-23",
+    todayLabel: "Tuesday, 23 June 2026",
+  },
+  activePlanSummary: {
+    name: "Hybrid Run-Strength Plan",
+    primaryActivity: "hybrid run and strength",
+    goalPrimaryFocus: "consistency and quality without chasing extra volume",
+    sessionsCount: 7,
+  },
+  training: {
+    activePlans: [
+      {
+        id: "active-hybrid-plan",
+        name: "Hybrid Run-Strength Plan",
+        kind: "hybrid",
+        goalPrimaryFocus: "consistency and quality without chasing extra volume",
+      },
+    ],
+    todaySchedule: [
+      {
+        dateLabel: "Tue 23",
+        title: "Lower 1 - Strength + Run Durability",
+        planKind: "strength",
+        durationMin: 41,
+        status: "planned",
+      },
+    ],
+    currentWeekSchedule: weeklyOverviewContext.training.currentWeekSchedule,
+  },
+};
+
 const missedSessionCases = [
   "I missed today's session, what should I do?",
   "I missed my workout today",
@@ -287,6 +320,47 @@ for (const prompt of missedSessionCases) {
     reply.includes("\nCompleted:"),
     false,
     `${prompt}: should not dump completed session section:\n${reply}`
+  );
+}
+
+const activePlanPrompts = [
+  "What plan am I currently on?",
+  "What is my current plan?",
+  "What training plan am I on?",
+];
+
+for (const prompt of activePlanPrompts) {
+  const reply = __coachChatDeterministicReplyForTest(prompt, activePlanContext);
+  assert.ok(reply, `${prompt}: expected active-plan reply`);
+  assert.ok(
+    reply.includes("You're currently on"),
+    `${prompt}: should answer with the active/current plan:\n${reply}`
+  );
+  assert.ok(
+    reply.includes("Hybrid Run-Strength Plan"),
+    `${prompt}: should include active plan name when available:\n${reply}`
+  );
+  assert.ok(
+    reply.includes("Structure:"),
+    `${prompt}: should summarise plan structure:\n${reply}`
+  );
+  assert.ok(
+    reply.includes("Main focus:"),
+    `${prompt}: should summarise plan focus:\n${reply}`
+  );
+  assert.equal(
+    reply.startsWith("Today's session is"),
+    false,
+    `${prompt}: should not answer as only today's session:\n${reply}`
+  );
+  assert.equal(
+    reply.includes("Today's planned training is already"),
+    false,
+    `${prompt}: should not hit today-plan branch:\n${reply}`
+  );
+  assert.ok(
+    reply.split("\n").filter(Boolean).length <= 5,
+    `${prompt}: active-plan reply should stay concise:\n${reply}`
   );
 }
 

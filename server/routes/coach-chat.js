@@ -688,6 +688,113 @@ function buildCompactWeekOverview(currentWeekSchedule, clock) {
   ].join("\n"));
 }
 
+function isActivePlanQuestion(text) {
+  return (
+    text.includes("what plan am i currently on") ||
+    text.includes("what plan am i on") ||
+    text.includes("which plan am i on") ||
+    text.includes("what is my current plan") ||
+    text.includes("what's my current plan") ||
+    text.includes("what programme am i following") ||
+    text.includes("what program am i following") ||
+    text.includes("what training plan am i on") ||
+    text.includes("what training plan am i following") ||
+    text.includes("what plan am i following")
+  );
+}
+
+function titleForActivePlan(plan) {
+  return firstNonEmptyString([
+    plan?.name,
+    plan?.title,
+    plan?.planName,
+    plan?.planTitle,
+    plan?.summary?.name,
+    plan?.meta?.name,
+    plan?.meta?.title,
+  ]);
+}
+
+function focusForActivePlan(plan, summary) {
+  return firstNonEmptyString([
+    plan?.goalPrimaryFocus,
+    plan?.primaryGoal,
+    plan?.goal,
+    plan?.focus,
+    plan?.weekFocus,
+    plan?.currentWeekFocus,
+    plan?.phase,
+    plan?.block,
+    plan?.meta?.goalPrimaryFocus,
+    plan?.meta?.primaryGoal,
+    plan?.meta?.focus,
+    plan?.meta?.phase,
+    summary?.goalPrimaryFocus,
+    summary?.primaryActivity,
+  ]);
+}
+
+function structureForActivePlan(currentWeekSchedule, summary) {
+  const sessions = (Array.isArray(currentWeekSchedule) ? currentWeekSchedule : []).filter(Boolean);
+  if (sessions.length) {
+    const runCount = sessions.filter((session) => !isStrengthLikeSession(session)).length;
+    const strengthCount = sessions.filter(isStrengthLikeSession).length;
+    const bits = [];
+    if (runCount) bits.push(`${runCount} run${runCount === 1 ? "" : "s"}`);
+    if (strengthCount) bits.push(`${strengthCount} strength session${strengthCount === 1 ? "" : "s"}`);
+    if (bits.length) return `${bits.join(" + ")} this week`;
+    return `${sessions.length} session${sessions.length === 1 ? "" : "s"} this week`;
+  }
+
+  const summarySessions = Number(summary?.sessionsCount);
+  if (Number.isFinite(summarySessions) && summarySessions > 0) {
+    return `${summarySessions} planned session${summarySessions === 1 ? "" : "s"} loaded`;
+  }
+
+  return "";
+}
+
+function weekLabelForActivePlan(clock, currentWeekSchedule) {
+  const sessions = (Array.isArray(currentWeekSchedule) ? currentWeekSchedule : []).filter(Boolean);
+  const first = compactWeekDateLabel(sessions[0] || {});
+  const last = compactWeekDateLabel(sessions[sessions.length - 1] || {});
+  if (first && last && first !== "Day" && last !== "Day" && first !== last) {
+    return `${first}–${last}`;
+  }
+  return clock?.todayLabel ? `the week of ${clock.todayLabel}` : "";
+}
+
+function buildActivePlanReply({ clock, training, currentWeekSchedule, todaySchedule, context }) {
+  const activePlans = Array.isArray(training?.activePlans)
+    ? training.activePlans.filter(Boolean)
+    : [];
+  const summary = context?.activePlanSummary || null;
+  const primaryPlan = activePlans[0] || summary || null;
+
+  if (!primaryPlan && !currentWeekSchedule.length) {
+    return "I do not have an active plan loaded right now.";
+  }
+
+  const name = titleForActivePlan(primaryPlan);
+  const weekLabel = weekLabelForActivePlan(clock, currentWeekSchedule);
+  const focus = focusForActivePlan(primaryPlan, summary);
+  const structure = structureForActivePlan(currentWeekSchedule, summary);
+  const today = (Array.isArray(todaySchedule) ? todaySchedule : []).find(Boolean);
+  const todayName = today ? cleanCoachText(today?.title || today?.name || today?.sessionTitle || "today's session") : "";
+
+  const lines = [
+    name
+      ? `You're currently on ${name}${weekLabel ? ` for ${weekLabel}` : ""}.`
+      : `You're currently on your active training plan${weekLabel ? ` for ${weekLabel}` : ""}.`,
+  ];
+
+  if (focus) lines.push(`Main focus: ${cleanCoachText(focus)}.`);
+  if (structure) lines.push(`Structure: ${structure}.`);
+  if (todayName) lines.push(`Today is ${todayName}, but that is just one part of the wider plan.`);
+
+  return lines.join("\n");
+}
+
 function formatCompletedSessionFact(session) {
   if (!session) return null;
 
@@ -1283,9 +1390,6 @@ function buildLiveContextFacts(context) {
   const lines = [];
   const clock = context?.clock || null;
   const training = context?.training || {};
-  const activePlans = Array.isArray(training?.activePlans)
-    ? training.activePlans.filter(Boolean)
-    : [];
   const todaySchedule = Array.isArray(training?.todaySchedule)
     ? training.todaySchedule.filter(Boolean)
     : [];
@@ -1738,6 +1842,16 @@ function tryDeterministicCoachReply(message, context) {
     return null;
   }
 
+  if (isActivePlanQuestion(text)) {
+    return buildActivePlanReply({
+      clock: clock || {},
+      training,
+      currentWeekSchedule,
+      todaySchedule,
+      context,
+    });
+  }
+
   const asksTodayPlan =
     (text.includes("today") &&
       (text.includes("session") ||
@@ -1801,31 +1915,6 @@ function tryDeterministicCoachReply(message, context) {
       ...daySessions.map((item) => `- ${formatSessionCoachLine(item, { includeDate: true })}`),
       "",
       "Stick to the target unless your recovery says otherwise.",
-    ].join("\n");
-  }
-
-  const asksActivePlan =
-    text.includes("what plan am i on") ||
-    text.includes("which plan am i on") ||
-    text.includes("what training plan am i on") ||
-    text.includes("what is my current plan") ||
-    text.includes("what's my current plan");
-
-  if (asksActivePlan) {
-    if (!activePlans.length) {
-      return "I do not have an active plan loaded right now.";
-    }
-
-    return [
-      "You are currently on" + (activePlans.length > 1 ? " these plans:" : " this plan:"),
-      ...activePlans.map((plan) => {
-        const bits = [plan?.name || "Plan"];
-        if (plan?.kind) bits.push(plan.kind);
-        if (plan?.targetEventDate) bits.push(`target ${plan.targetEventDate}`);
-        return `- ${bits.join(" · ")}`;
-      }),
-      "",
-      "I will use this as the baseline for training advice.",
     ].join("\n");
   }
 
