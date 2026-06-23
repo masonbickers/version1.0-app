@@ -1991,6 +1991,10 @@ export function __coachChatLocalFallbackForTest(message, context) {
   return buildLocalCoachFallbackReply(message, context);
 }
 
+export function __coachChatRouteFallbackForTest(message, context, error = null) {
+  return buildCoachChatFallbackResponse(message, context, error);
+}
+
 function safeStringify(value, maxChars = 16000) {
   try {
     const json = JSON.stringify(value, null, 2);
@@ -2802,6 +2806,57 @@ function buildLocalCoachFallbackReply(message, context) {
   ].join("\n");
 }
 
+function buildCoachChatFallbackResponse(message, context, error = null) {
+  const reply = buildLocalCoachFallbackReply(message, context);
+  return {
+    reply,
+    updatedPlan: null,
+    nutritionDraft: null,
+    coachActions: [],
+    raw: JSON.stringify({
+      reply,
+      updatedPlan: null,
+      nutritionDraft: null,
+      coachActions: [],
+      source: "local_fallback",
+      error: error ? openAIErrorInfo(error) : null,
+    }),
+  };
+}
+
+function fallbackMessageFromRequestBody(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  const trimmedMessages = messages
+    .filter(
+      (message) =>
+        (message?.role === "user" || message?.role === "assistant") &&
+        typeof message?.content === "string" &&
+        message.content.trim()
+    )
+    .slice(-30)
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content || "").trim(),
+    }));
+  return latestUserMessage(trimmedMessages);
+}
+
+function fallbackContextFromRequestBody(body) {
+  const context = body?.context && typeof body.context === "object" ? body.context : {};
+  const nutrition = body?.nutrition && typeof body.nutrition === "object" ? body.nutrition : null;
+  let planSummary = null;
+  try {
+    planSummary = summarisePlan(body?.plan);
+  } catch {
+    planSummary = null;
+  }
+  return {
+    ...context,
+    ...(nutrition ? { nutrition } : {}),
+    ...(planSummary ? { activePlanSummary: planSummary } : {}),
+  };
+}
+
 function extractJsonObject(raw = "") {
   const text = String(raw || "").trim();
   if (!text) return null;
@@ -2850,12 +2905,6 @@ export default function coachChatRoute(openai) {
 
   router.post("/", async (req, res) => {
     try {
-      if (!openai) {
-        return res.status(500).json({
-          error: "OpenAI client not configured on the server.",
-        });
-      }
-
       const { messages, plan, nutrition, context } = req.body || {};
 
       if (!Array.isArray(messages) || messages.length === 0) {
@@ -2895,6 +2944,12 @@ export default function coachChatRoute(openai) {
         ...(planSummary ? { activePlanSummary: planSummary } : {}),
       };
       const latestUserText = latestUserMessage(trimmedMessages);
+
+      if (!openai) {
+        console.warn("[coach-chat] OpenAI client not configured; returning local fallback.");
+        return res.json(buildCoachChatFallbackResponse(latestUserText, mergedContext));
+      }
+
       const latestUserWithAttachment = [...trimmedMessages]
         .reverse()
         .find((m) => m.role === "user" && Array.isArray(m.attachments) && m.attachments.length);
@@ -3195,6 +3250,16 @@ Allowed coachActions types:
       }
     } catch (err) {
       console.error("[coach-chat] error:", err);
+      const fallbackMessage = fallbackMessageFromRequestBody(req.body || {});
+      if (fallbackMessage) {
+        const fallbackContext = fallbackContextFromRequestBody(req.body || {});
+        const payload = buildCoachChatFallbackResponse(fallbackMessage, fallbackContext, err);
+        console.warn("[coach-chat] returning route-level local fallback after error", {
+          error: openAIErrorInfo(err),
+          fallbackBytes: byteSize(payload.reply),
+        });
+        return res.json(payload);
+      }
       return res.status(500).json({
         error: "Something went wrong in coach-chat.",
         details: err?.message || String(err),

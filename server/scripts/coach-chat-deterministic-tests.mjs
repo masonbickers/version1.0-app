@@ -3,6 +3,7 @@ import {
   __coachChatDeterministicReplyForTest,
   __coachChatLocalFallbackForTest,
   __coachChatLatestPriorityForTest,
+  __coachChatRouteFallbackForTest,
 } from "../routes/coach-chat.js";
 
 const completedPushContext = {
@@ -455,6 +456,44 @@ for (const prompt of generalTrainingAdvicePrompts) {
     );
   }
 }
+
+const forcedAiFailureFallback = __coachChatRouteFallbackForTest(
+  "How can I improve my 5K time?",
+  activePlanContext,
+  new Error("forced OpenAI failure")
+);
+assert.equal(
+  forcedAiFailureFallback.updatedPlan,
+  null,
+  "forced AI failure fallback should not update the plan"
+);
+assert.equal(
+  forcedAiFailureFallback.nutritionDraft,
+  null,
+  "forced AI failure fallback should not create nutrition draft"
+);
+assert.ok(
+  forcedAiFailureFallback.reply.includes("To improve your 5K"),
+  `forced AI failure fallback should answer the 5K question:\n${forcedAiFailureFallback.reply}`
+);
+assert.ok(
+  forcedAiFailureFallback.reply.includes("easy runs"),
+  `forced AI failure fallback should mention easy volume:\n${forcedAiFailureFallback.reply}`
+);
+assert.ok(
+  forcedAiFailureFallback.reply.includes("speed or interval"),
+  `forced AI failure fallback should mention interval work:\n${forcedAiFailureFallback.reply}`
+);
+assert.equal(
+  forcedAiFailureFallback.reply.includes("I'm having trouble connecting"),
+  false,
+  `forced AI failure fallback must not be generic connection copy:\n${forcedAiFailureFallback.reply}`
+);
+assert.equal(
+  forcedAiFailureFallback.coachActions.length,
+  0,
+  "forced AI failure fallback should not create action cards"
+);
 
 const weeklyOverviewPrompts = [
   "What sessions do I have this week?",
