@@ -219,6 +219,39 @@ const NUTRITION_ESTIMATES = [
     notes: "Estimated from a typical whey protein shake mixed with water.",
   },
   {
+    title: "Oats",
+    pluralTitle: "oats",
+    aliases: ["oats", "porridge"],
+    calories: 190,
+    protein: 6,
+    carbs: 32,
+    fat: 4,
+    servingText: "1 bowl",
+    notes: "Estimated from a typical bowl of oats.",
+  },
+  {
+    title: "Berries",
+    pluralTitle: "berries",
+    aliases: ["berries", "mixed berries"],
+    calories: 60,
+    protein: 1,
+    carbs: 14,
+    fat: 0.5,
+    servingText: "1 handful",
+    notes: "Estimated from a handful of mixed berries.",
+  },
+  {
+    title: "Greek yoghurt",
+    pluralTitle: "Greek yoghurt servings",
+    aliases: ["greek yoghurt", "greek yogurt"],
+    calories: 130,
+    protein: 15,
+    carbs: 8,
+    fat: 4,
+    servingText: "1 serving",
+    notes: "Estimated from a serving of plain Greek yoghurt.",
+  },
+  {
     title: "Grilled chicken breast burger with chips",
     pluralTitle: "grilled chicken breast burgers with chips",
     aliases: [
@@ -239,6 +272,7 @@ const NUTRITION_ESTIMATES = [
 const NUTRITION_COMPONENT_ESTIMATES = [
   {
     aliases: ["chips", "fries"],
+    title: "Chips",
     calories: 330,
     protein: 4,
     carbs: 45,
@@ -246,6 +280,7 @@ const NUTRITION_COMPONENT_ESTIMATES = [
   },
   {
     aliases: ["chicken breast", "grilled chicken", "chicken"],
+    title: "Chicken",
     calories: 220,
     protein: 36,
     carbs: 0,
@@ -253,6 +288,7 @@ const NUTRITION_COMPONENT_ESTIMATES = [
   },
   {
     aliases: ["burger"],
+    title: "Burger",
     calories: 390,
     protein: 22,
     carbs: 36,
@@ -260,6 +296,7 @@ const NUTRITION_COMPONENT_ESTIMATES = [
   },
   {
     aliases: ["wrap"],
+    title: "Wrap",
     calories: 280,
     protein: 12,
     carbs: 36,
@@ -267,6 +304,7 @@ const NUTRITION_COMPONENT_ESTIMATES = [
   },
   {
     aliases: ["sandwich"],
+    title: "Sandwich",
     calories: 330,
     protein: 16,
     carbs: 42,
@@ -274,13 +312,23 @@ const NUTRITION_COMPONENT_ESTIMATES = [
   },
   {
     aliases: ["rice"],
+    title: "Rice",
     calories: 240,
     protein: 5,
     carbs: 52,
     fat: 1,
   },
   {
+    aliases: ["veg", "vegetables", "mixed veg", "mixed vegetables"],
+    title: "Veg",
+    calories: 80,
+    protein: 3,
+    carbs: 14,
+    fat: 1,
+  },
+  {
     aliases: ["pasta"],
+    title: "Pasta",
     calories: 360,
     protein: 12,
     carbs: 68,
@@ -288,6 +336,7 @@ const NUTRITION_COMPONENT_ESTIMATES = [
   },
   {
     aliases: ["salad"],
+    title: "Salad",
     calories: 180,
     protein: 8,
     carbs: 14,
@@ -304,7 +353,11 @@ const NUTRITION_FOOD_KEYWORDS = [
   "coffee",
   "egg",
   "fries",
+  "berries",
+  "greek yoghurt",
+  "greek yogurt",
   "latte",
+  "oats",
   "pasta",
   "pizza",
   "porridge",
@@ -314,6 +367,8 @@ const NUTRITION_FOOD_KEYWORDS = [
   "shake",
   "smoothie",
   "toast",
+  "veg",
+  "vegetables",
   "wrap",
   "yoghurt",
   "yogurt",
@@ -410,6 +465,127 @@ function findNutritionEstimate(itemText) {
   );
 }
 
+function findExactNutritionEstimate(itemText) {
+  const clean = normaliseNutritionSearchText(itemText)
+    .replace(/^(\d+(?:\.\d+)?|two|three|couple)\s+/, "")
+    .replace(/^(?:a|an|one|some)\s+/, "")
+    .trim();
+  if (!clean) return null;
+
+  return (
+    NUTRITION_ESTIMATES.find((estimate) =>
+      estimate.aliases.some((alias) => clean === normaliseNutritionSearchText(alias))
+    ) || null
+  );
+}
+
+function findNutritionAliasMatch(clean, alias) {
+  const cleanAlias = normaliseNutritionSearchText(alias);
+  if (!clean || !cleanAlias) return null;
+  const start = clean.indexOf(cleanAlias);
+  if (start < 0) return null;
+  const end = start + cleanAlias.length;
+  const beforeOk = start === 0 || /\s/.test(clean[start - 1]);
+  const afterOk = end === clean.length || /\s/.test(clean[end]);
+  return beforeOk && afterOk ? { start, end, alias: cleanAlias } : null;
+}
+
+function collectNutritionItemMatches(itemText) {
+  const clean = normaliseNutritionSearchText(itemText)
+    .replace(/^(\d+(?:\.\d+)?|two|three|couple)\s+/, "")
+    .replace(/^(?:a|an|one|some)\s+/, "")
+    .trim();
+  if (!clean || !isLikelyStandaloneNutritionItem(clean)) return [];
+
+  const candidates = [];
+  NUTRITION_ESTIMATES.forEach((estimate) => {
+    estimate.aliases.forEach((alias) => {
+      const match = findNutritionAliasMatch(clean, alias);
+      if (!match) return;
+      candidates.push({
+        ...match,
+        title: estimate.title,
+        calories: estimate.calories,
+        protein: estimate.protein,
+        carbs: estimate.carbs,
+        fat: estimate.fat,
+        source: "estimate",
+      });
+    });
+  });
+  NUTRITION_COMPONENT_ESTIMATES.forEach((component) => {
+    component.aliases.forEach((alias) => {
+      const match = findNutritionAliasMatch(clean, alias);
+      if (!match) return;
+      candidates.push({
+        ...match,
+        title: component.title || titleCaseNutritionItem(match.alias),
+        calories: component.calories,
+        protein: component.protein,
+        carbs: component.carbs,
+        fat: component.fat,
+        source: "component",
+      });
+    });
+  });
+
+  const selected = [];
+  const seenTitles = new Set();
+  candidates
+    .sort((a, b) => a.start - b.start || b.end - b.start - (a.end - a.start))
+    .forEach((candidate) => {
+      const overlaps = selected.some(
+        (item) => candidate.start < item.end && candidate.end > item.start
+      );
+      const titleKey = normaliseNutritionSearchText(candidate.title);
+      if (overlaps || seenTitles.has(titleKey)) return;
+      selected.push(candidate);
+      seenTitles.add(titleKey);
+    });
+
+  return selected.sort((a, b) => a.start - b.start);
+}
+
+function joinNutritionTitles(titles) {
+  return titles
+    .map((title, index) => {
+      const text = String(title || "").trim();
+      if (index === 0) return text;
+      return text ? text[0].toLowerCase() + text.slice(1) : text;
+    })
+    .filter(Boolean)
+    .join(" + ");
+}
+
+function createCombinedNutritionEstimate(itemText) {
+  const matches = collectNutritionItemMatches(itemText);
+  if (matches.length < 2) return null;
+
+  const totals = matches.reduce(
+    (sum, item) => ({
+      calories: sum.calories + item.calories,
+      protein: sum.protein + item.protein,
+      carbs: sum.carbs + item.carbs,
+      fat: sum.fat + item.fat,
+    }),
+    { calories: 0, protein: 0, carbs: 0, fat: 0 }
+  );
+  const titles = matches.map((item) => item.title);
+
+  return {
+    title: joinNutritionTitles(titles),
+    pluralTitle: joinNutritionTitles(titles),
+    aliases: [normaliseNutritionSearchText(itemText)],
+    calories: totals.calories,
+    protein: totals.protein,
+    carbs: totals.carbs,
+    fat: totals.fat,
+    servingText: `${matches.length} estimated items`,
+    notes: `Estimated from: ${titles.join(", ")}. Review the numbers before adding.`,
+    combinedItems: titles,
+  };
+}
+
 function createComponentNutritionEstimate(itemText) {
   const clean = normaliseNutritionSearchText(itemText);
   if (!clean || !isLikelyStandaloneNutritionItem(clean)) return null;
@@ -453,11 +629,16 @@ function createNutritionDraftFromText(message) {
   const itemText = extractNutritionItemText(message);
   if (!itemText) return null;
 
-  const estimate = findNutritionEstimate(itemText) || createComponentNutritionEstimate(itemText);
+  const estimate =
+    findExactNutritionEstimate(itemText) ||
+    createCombinedNutritionEstimate(itemText) ||
+    findNutritionEstimate(itemText) ||
+    createComponentNutritionEstimate(itemText);
   if (!estimate) return null;
 
   const quantity = parseNutritionQuantity(itemText);
-  const multiplier = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+  const isCombined = Array.isArray(estimate.combinedItems) && estimate.combinedItems.length > 1;
+  const multiplier = !isCombined && Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
   const title =
     multiplier > 1
       ? `${multiplier} ${estimate.pluralTitle || `${estimate.title.toLowerCase()}s`}`
@@ -1993,6 +2174,10 @@ export function __coachChatLocalFallbackForTest(message, context) {
 
 export function __coachChatRouteFallbackForTest(message, context, error = null) {
   return buildCoachChatFallbackResponse(message, context, error);
+}
+
+export function __coachChatNutritionDraftForTest(message) {
+  return createNutritionDraftFromText(message);
 }
 
 function safeStringify(value, maxChars = 16000) {

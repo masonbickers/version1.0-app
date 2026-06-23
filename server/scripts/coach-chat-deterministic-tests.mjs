@@ -4,6 +4,7 @@ import {
   __coachChatLocalFallbackForTest,
   __coachChatLatestPriorityForTest,
   __coachChatRouteFallbackForTest,
+  __coachChatNutritionDraftForTest,
 } from "../routes/coach-chat.js";
 
 const completedPushContext = {
@@ -271,6 +272,63 @@ const cases = [
     includes: "No — if you've already completed today's planned session, don't repeat it.",
   },
 ];
+
+const nutritionDraftCases = [
+  {
+    prompt: "Log a banana and protein shake",
+    includes: ["banana", "protein shake"],
+  },
+  {
+    prompt: "Log chicken, rice and veg for dinner",
+    includes: ["chicken", "rice", "veg"],
+    mealType: "Dinner",
+  },
+  {
+    prompt: "Log oats, berries and Greek yoghurt",
+    includes: ["oats", "berries", "greek yoghurt"],
+  },
+];
+
+for (const testCase of nutritionDraftCases) {
+  const draft = __coachChatNutritionDraftForTest(testCase.prompt);
+  assert.ok(draft, `${testCase.prompt}: expected a nutrition draft`);
+  const searchableDraft = [
+    draft.title,
+    draft.servingText,
+    draft.notes,
+    ...(Array.isArray(draft.combinedItems) ? draft.combinedItems : []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  for (const item of testCase.includes) {
+    assert.ok(
+      searchableDraft.includes(item),
+      `${testCase.prompt}: expected draft to include ${item}, got:\n${JSON.stringify(
+        draft,
+        null,
+        2
+      )}`
+    );
+  }
+
+  assert.ok(
+    Number(draft.calories) > 0,
+    `${testCase.prompt}: expected positive calorie estimate`
+  );
+  assert.notEqual(
+    draft.title.toLowerCase(),
+    "banana",
+    `${testCase.prompt}: should not silently keep only the first item`
+  );
+  if (testCase.mealType) {
+    assert.equal(
+      draft.mealType,
+      testCase.mealType,
+      `${testCase.prompt}: expected meal type ${testCase.mealType}`
+    );
+  }
+}
 
 function countOccurrences(text, pattern) {
   return (text.match(pattern) || []).length;
