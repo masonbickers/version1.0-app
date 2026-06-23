@@ -657,6 +657,94 @@ function createNutritionDraftFromText(message) {
   };
 }
 
+function sentenceCaseMemoryText(value) {
+  const text = cleanCoachText(value);
+  if (!text) return "";
+  return text[0].toUpperCase() + text.slice(1);
+}
+
+function extractMemorySaveText(message) {
+  const raw = String(message || "").trim();
+  if (!raw) return "";
+  const clean = normaliseText(raw);
+  const patterns = [
+    /^(?:please\s+)?remember(?:\s+(?:that|this|my))?\s+(.+)$/,
+    /^(?:please\s+)?save(?:\s+(?:that|this|my))?\s+(.+)$/,
+    /^(?:please\s+)?note(?:\s+(?:that|this|my))?\s+(.+)$/,
+    /^(?:please\s+)?keep in mind(?:\s+that)?\s+(.+)$/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = clean.match(pattern);
+    if (!match?.[1]) continue;
+    return sentenceCaseMemoryText(
+      match[1]
+        .replace(/^(?:that|this|my)\s+/, "")
+        .replace(/[.!?]+$/g, "")
+    );
+  }
+
+  return "";
+}
+
+function memorySaveCategory(memoryText) {
+  const clean = normaliseText(memoryText);
+  if (
+    clean.includes("pain") ||
+    clean.includes("sore") ||
+    clean.includes("injury") ||
+    clean.includes("niggle") ||
+    clean.includes("knee") ||
+    clean.includes("ankle") ||
+    clean.includes("back") ||
+    clean.includes("shoulder")
+  ) {
+    return "injury";
+  }
+  if (
+    clean.includes("prefer") ||
+    clean.includes("hate") ||
+    clean.includes("like") ||
+    clean.includes("better") ||
+    clean.includes("morning") ||
+    clean.includes("treadmill") ||
+    clean.includes("breakfast")
+  ) {
+    return "preference";
+  }
+  return "general";
+}
+
+function buildMemorySaveResponse(message) {
+  const memoryText = extractMemorySaveText(message);
+  if (!memoryText) return null;
+  const category = memorySaveCategory(memoryText);
+  const reply = `I can save this as a coach note: ${memoryText[0].toLowerCase()}${memoryText.slice(1)}.`;
+  const coachActions = [
+    {
+      id: "memory-save-1",
+      type: "memory_save",
+      status: "pending",
+      title: "Save to coach memory?",
+      summary: memoryText,
+      reason: "Saving this helps the coach personalise future training advice.",
+      payload: {
+        text: memoryText,
+        category,
+        source: "coach_chat",
+      },
+    },
+  ];
+
+  return {
+    reply,
+    updatedPlan: null,
+    nutritionDraft: null,
+    coachActions,
+    raw: JSON.stringify({ reply, updatedPlan: null, nutritionDraft: null, coachActions }),
+  };
+}
+
 function cleanCoachText(value) {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -2180,6 +2268,10 @@ export function __coachChatNutritionDraftForTest(message) {
   return createNutritionDraftFromText(message);
 }
 
+export function __coachChatMemorySaveForTest(message) {
+  return buildMemorySaveResponse(message);
+}
+
 function safeStringify(value, maxChars = 16000) {
   try {
     const json = JSON.stringify(value, null, 2);
@@ -2251,6 +2343,10 @@ function compactPlanForCoach(plan, planSummary = null) {
 
 function latestUserIntentHint(text) {
   const clean = normaliseText(text);
+  if (extractMemorySaveText(clean)) {
+    return "memory_save";
+  }
+
   const mentionsSessionOrWorkout =
     clean.includes("session") ||
     clean.includes("workout") ||
@@ -2417,6 +2513,13 @@ function latestUserPriorityInstruction(latestUserText) {
       "- This is a nutrition question. Answer with food/fuelling guidance first.",
       "- Do not provide a timed mobility, recovery, or workout plan unless the user asks for activity.",
       "- Use training context only to personalise the nutrition advice."
+    );
+  }
+
+  if (intent === "memory_save") {
+    lines.push(
+      "- This is an explicit memory-save request. Do not answer with generic coaching advice.",
+      "- Return a memory_save coachAction with the note text and ask the user to approve saving it."
     );
   }
 
@@ -3129,6 +3232,11 @@ export default function coachChatRoute(openai) {
         ...(planSummary ? { activePlanSummary: planSummary } : {}),
       };
       const latestUserText = latestUserMessage(trimmedMessages);
+
+      const memorySaveResponse = buildMemorySaveResponse(latestUserText);
+      if (memorySaveResponse) {
+        return res.json(memorySaveResponse);
+      }
 
       if (!openai) {
         console.warn("[coach-chat] OpenAI client not configured; returning local fallback.");

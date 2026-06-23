@@ -5,6 +5,7 @@ import {
   __coachChatLatestPriorityForTest,
   __coachChatRouteFallbackForTest,
   __coachChatNutritionDraftForTest,
+  __coachChatMemorySaveForTest,
 } from "../routes/coach-chat.js";
 
 const completedPushContext = {
@@ -328,6 +329,83 @@ for (const testCase of nutritionDraftCases) {
       `${testCase.prompt}: expected meal type ${testCase.mealType}`
     );
   }
+}
+
+const memorySaveCases = [
+  {
+    prompt: "Remember that my knee gets sore after hills",
+    includes: "Knee gets sore after hills",
+    category: "injury",
+  },
+  {
+    prompt: "Remember that I prefer morning workouts",
+    includes: "I prefer morning workouts",
+    category: "preference",
+  },
+  {
+    prompt: "Note that I hate treadmill runs",
+    includes: "I hate treadmill runs",
+    category: "preference",
+  },
+];
+
+for (const testCase of memorySaveCases) {
+  const response = __coachChatMemorySaveForTest(testCase.prompt);
+  assert.ok(response, `${testCase.prompt}: expected a memory-save response`);
+  assert.equal(
+    response.nutritionDraft,
+    null,
+    `${testCase.prompt}: memory requests should not create nutrition drafts`
+  );
+  assert.equal(
+    response.updatedPlan,
+    null,
+    `${testCase.prompt}: memory requests should not update the plan`
+  );
+  assert.ok(
+    response.reply.includes("coach note"),
+    `${testCase.prompt}: should tell the user a coach note can be saved:\n${response.reply}`
+  );
+  assert.equal(
+    response.reply.includes("Use your current plan as the baseline"),
+    false,
+    `${testCase.prompt}: should not return generic coaching fallback:\n${response.reply}`
+  );
+  assert.equal(
+    response.coachActions.length,
+    1,
+    `${testCase.prompt}: expected one memory_save action`
+  );
+
+  const action = response.coachActions[0];
+  assert.equal(action.type, "memory_save", `${testCase.prompt}: expected memory_save action`);
+  assert.equal(action.status, "pending", `${testCase.prompt}: expected pending action`);
+  assert.ok(
+    action.summary.includes(testCase.includes),
+    `${testCase.prompt}: expected action summary to include ${testCase.includes}, got ${action.summary}`
+  );
+  assert.ok(
+    String(action.payload?.text || "").includes(testCase.includes),
+    `${testCase.prompt}: expected payload text to include ${testCase.includes}, got ${JSON.stringify(
+      action.payload
+    )}`
+  );
+  assert.equal(
+    action.payload?.category,
+    testCase.category,
+    `${testCase.prompt}: expected category ${testCase.category}`
+  );
+
+  const priority = __coachChatLatestPriorityForTest([{ role: "user", content: testCase.prompt }]);
+  assert.equal(
+    priority.intent,
+    "memory_save",
+    `${testCase.prompt}: expected memory_save latest-message intent`
+  );
+  assert.ok(
+    priority.instruction.includes("explicit memory-save request"),
+    `${testCase.prompt}: latest-priority instruction should identify memory save intent`
+  );
 }
 
 function countOccurrences(text, pattern) {
