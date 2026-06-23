@@ -357,6 +357,14 @@ for (const prompt of scheduleMovePrompts) {
     priority.instruction.includes("Do not claim the plan has been changed"),
     `${prompt}: instruction should prevent auto-changing plan`
   );
+  assert.ok(
+    priority.instruction.includes("at least two practical options"),
+    `${prompt}: instruction should require options, not a single generic recommendation`
+  );
+  assert.ok(
+    priority.instruction.includes("Want me to move it?"),
+    `${prompt}: instruction should ask for confirmation when appropriate`
+  );
 }
 
 const duplicateReply = __coachChatDeterministicReplyForTest(

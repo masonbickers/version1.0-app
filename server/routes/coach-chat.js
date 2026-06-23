@@ -2014,6 +2014,8 @@ function latestUserPriorityInstruction(latestUserText) {
       "- Check tomorrow's planned session from USER_CONTEXT_JSON.training.currentWeekSchedule, todaySchedule, exactSchedule, and LIVE_CONTEXT_FACTS where available.",
       "- If tomorrow already has a hard session, warn against stacking both sessions on the same day.",
       "- Suggest sensible options: do a shorter controlled version today, move today's session to the next easier/rest day, or keep tomorrow's hard session as priority.",
+      "- You must include at least two practical options, not only one recommendation.",
+      "- If tomorrow has a hard session, the preferred option should usually be moving today's session to the next easier/rest day rather than stacking it tomorrow.",
       "- Do not simply tell the user to complete today as scheduled.",
       "- Do not claim the plan has been changed unless an action card is returned and the user confirms.",
       "- If a change seems reasonable but needs confirmation, ask a concise confirmation question such as 'Want me to move it?'"
