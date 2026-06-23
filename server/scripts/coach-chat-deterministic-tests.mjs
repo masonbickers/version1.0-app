@@ -342,7 +342,7 @@ for (const prompt of weeklyOverviewPrompts) {
   );
 }
 
-const questionStatusVariants = ["?", "❔", "❓", "�", "？"];
+const questionStatusVariants = ["?", "❔", "❔️", "❓", "�", "？"];
 
 for (const variant of questionStatusVariants) {
   const reply = __coachChatDeterministicReplyForTest("What sessions do I have this week?", {
@@ -375,6 +375,34 @@ for (const variant of questionStatusVariants) {
     /[?❔❓�？]/.test(reply),
     false,
     `variant ${variant}: should strip placeholder question statuses from weekly overview:\n${reply}`
+  );
+}
+
+for (const status of ["active", "started", "in_progress", "planned", "fresh", "pending"]) {
+  const reply = __coachChatDeterministicReplyForTest("What sessions do I have this week?", {
+    clock: weeklyOverviewContext.clock,
+    training: {
+      currentWeekSchedule: [
+        {
+          dateLabel: "Mon 22 Jun",
+          dayIndex: 0,
+          title: "Upper 1 - Power + Performance",
+          planKind: "strength",
+          durationMin: 45,
+          status,
+        },
+      ],
+    },
+  });
+
+  assert.ok(
+    reply.includes("Upper 1 - Power + Performance · 45 min"),
+    `status ${status}: should keep session title and metric:\n${reply}`
+  );
+  assert.equal(
+    reply.includes(`45 min ·`),
+    false,
+    `status ${status}: should not append non-allowed weekly status markers:\n${reply}`
   );
 }
 

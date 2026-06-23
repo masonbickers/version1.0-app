@@ -580,7 +580,11 @@ const COMPACT_WEEK_PLACEHOLDER_STATUSES = new Set([
 function isCompactWeekPlaceholderStatus(value) {
   const text = String(value || "").trim();
   if (!text) return true;
-  return COMPACT_WEEK_PLACEHOLDER_STATUSES.has(text.toLowerCase()) || /^[?❔❓�？]+$/.test(text);
+  const withoutVariationSelectors = text.replace(/\uFE0F/g, "");
+  return (
+    COMPACT_WEEK_PLACEHOLDER_STATUSES.has(withoutVariationSelectors.toLowerCase()) ||
+    /^[?❔❓�？]+$/.test(withoutVariationSelectors)
+  );
 }
 
 function compactStatusMarker(session) {
@@ -593,9 +597,6 @@ function compactStatusMarker(session) {
   if (status === "completed") return "✅";
   if (status === "skipped") return "skipped";
   if (status === "moved") return "moved";
-  if (status === "in_progress") return "in progress";
-  if (status === "due") return "";
-  if (status === "unknown") return "";
   return "";
 }
 
@@ -607,10 +608,10 @@ function displayableCompactWeekPart(value) {
 
 function sanitiseCompactWeekOverview(text) {
   return String(text || "")
-    .replace(/\s*·\s*[?❔❓�？]+(?=\s*(?:\/|\n|$))/g, "")
-    .replace(/\s*\([?❔❓�？]+\)(?=\s*(?:\/|\n|$))/g, "")
-    .replace(/(\s—\s*)[?❔❓�？]+(?=\s*(?:\/|\n|$))/g, "$1")
-    .replace(/(^|\n)[?❔❓�？]+\s*(?=\n|$)/g, "$1")
+    .replace(/\s*·\s*(?:[?❔❓�？]\uFE0F*)+(?=\s*(?:\/|\n|$))/g, "")
+    .replace(/\s*\((?:[?❔❓�？]\uFE0F*)+\)(?=\s*(?:\/|\n|$))/g, "")
+    .replace(/(\s—\s*)(?:[?❔❓�？]\uFE0F*)+(?=\s*(?:\/|\n|$))/g, "$1")
+    .replace(/(^|\n)(?:[?❔❓�？]\uFE0F*)+\s*(?=\n|$)/g, "$1")
     .replace(/[ \t]+$/gm, "")
     .trim();
 }
