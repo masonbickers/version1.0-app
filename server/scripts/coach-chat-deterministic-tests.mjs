@@ -136,6 +136,9 @@ const weeklyOverviewContext = {
         planKind: "strength",
         durationMin: 45,
         status: "?",
+        statusLabel: "?",
+        sessionStatus: "?",
+        matchStatus: "?",
       },
       {
         dateLabel: "Wed 24",
@@ -322,6 +325,16 @@ for (const prompt of weeklyOverviewPrompts) {
     reply.includes(" · ?"),
     false,
     `${prompt}: should not render unknown placeholder status:\n${reply}`
+  );
+  assert.equal(
+    reply.includes("(?)"),
+    false,
+    `${prompt}: should not render parenthesised unknown placeholder status:\n${reply}`
+  );
+  assert.equal(
+    reply.includes("?"),
+    false,
+    `${prompt}: weekly overview should not contain any placeholder question marks:\n${reply}`
   );
   assert.ok(
     reply.split("\n").filter(Boolean).length <= 10,

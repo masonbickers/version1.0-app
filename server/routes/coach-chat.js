@@ -587,6 +587,16 @@ function displayableCompactWeekPart(value) {
   return text;
 }
 
+function sanitiseCompactWeekOverview(text) {
+  return String(text || "")
+    .replace(/\s*·\s*\?(?=\s*(?:\/|\n|$))/g, "")
+    .replace(/\s*\(\?\)(?=\s*(?:\/|\n|$))/g, "")
+    .replace(/(\s—\s*)\?(?=\s*(?:\/|\n|$))/g, "$1")
+    .replace(/(^|\n)\?\s*(?=\n|$)/g, "$1")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
+}
+
 function compactWeekDateLabel(session) {
   const label = firstNonEmptyString([
     session?.dateLabel,
@@ -647,7 +657,7 @@ function buildCompactWeekOverview(currentWeekSchedule, clock) {
     grouped[indexByLabel.get(label)].sessions.push(session);
   });
 
-  return [
+  return sanitiseCompactWeekOverview([
     "Here's your week:",
     "",
     ...grouped.map((group) => {
@@ -656,7 +666,7 @@ function buildCompactWeekOverview(currentWeekSchedule, clock) {
     }),
     "",
     "Main focus: keep the quality high and don't chase extra volume.",
-  ].join("\n");
+  ].join("\n"));
 }
 
 function formatCompletedSessionFact(session) {
