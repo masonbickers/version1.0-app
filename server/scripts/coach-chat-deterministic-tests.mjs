@@ -130,6 +130,14 @@ const weeklyOverviewContext = {
         status: "planned",
       },
       {
+        dateLabel: "Tue 23",
+        dayIndex: 1,
+        title: "Upper 1 - Power + Performance",
+        planKind: "strength",
+        durationMin: 45,
+        status: "?",
+      },
+      {
         dateLabel: "Wed 24",
         dayIndex: 2,
         title: "Speed: 5 x 1200m",
@@ -292,6 +300,10 @@ for (const prompt of weeklyOverviewPrompts) {
   assert.ok(reply.includes("Mon 22"), `${prompt}: should include day/date`);
   assert.ok(reply.includes("Easy Run"), `${prompt}: should include session title`);
   assert.ok(reply.includes("Upper 1"), `${prompt}: should group multiple sessions on one day`);
+  assert.ok(
+    reply.includes("Upper 1 - Power + Performance · 45 min"),
+    `${prompt}: should show unknown-status sessions without a ? marker`
+  );
   assert.ok(reply.includes("✅"), `${prompt}: should include completed status marker`);
   assert.ok(reply.includes("skipped"), `${prompt}: should include skipped status where available`);
   assert.ok(reply.includes("moved"), `${prompt}: should include moved status where available`);
@@ -305,6 +317,11 @@ for (const prompt of weeklyOverviewPrompts) {
     reply.includes("because recent missed sessions"),
     false,
     `${prompt}: should not dump full session descriptions:\n${reply}`
+  );
+  assert.equal(
+    reply.includes(" · ?"),
+    false,
+    `${prompt}: should not render unknown placeholder status:\n${reply}`
   );
   assert.ok(
     reply.split("\n").filter(Boolean).length <= 10,

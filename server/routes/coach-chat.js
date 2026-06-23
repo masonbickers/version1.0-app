@@ -565,6 +565,11 @@ function compactSessionMetric(session) {
 }
 
 function compactStatusMarker(session) {
+  const rawStatus = statusTextForSession(session);
+  if (!rawStatus || ["?", "unknown", "n/a", "na", "none", "--"].includes(rawStatus)) {
+    return "";
+  }
+
   const status = classifySessionStatus(session);
   if (status === "completed") return "✅";
   if (status === "skipped") return "skipped";
@@ -573,6 +578,13 @@ function compactStatusMarker(session) {
   if (status === "due") return "";
   if (status === "unknown") return "";
   return "";
+}
+
+function displayableCompactWeekPart(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (["?", "unknown", "n/a", "na", "none", "--"].includes(text.toLowerCase())) return "";
+  return text;
 }
 
 function compactWeekDateLabel(session) {
@@ -611,7 +623,7 @@ function compactWeekSessionText(session) {
   );
   const metric = compactSessionMetric(session);
   const status = compactStatusMarker(session);
-  return [title, metric, status].filter(Boolean).join(" · ");
+  return [title, metric, status].map(displayableCompactWeekPart).filter(Boolean).join(" · ");
 }
 
 function buildCompactWeekOverview(currentWeekSchedule, clock) {
