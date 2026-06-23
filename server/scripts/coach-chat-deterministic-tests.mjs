@@ -415,6 +415,52 @@ for (const prompt of weeklyFocusPrompts) {
   );
 }
 
+const generalTrainingAdvicePrompts = [
+  "How can I improve my 5K time?",
+  "How do I run faster?",
+  "How can I build endurance?",
+  "How do I get stronger?",
+];
+
+for (const prompt of generalTrainingAdvicePrompts) {
+  const deterministicReply = __coachChatDeterministicReplyForTest(prompt, activePlanContext);
+  assert.equal(
+    deterministicReply,
+    null,
+    `${prompt}: general coaching advice should be AI-led, not deterministic`
+  );
+
+  const priority = __coachChatLatestPriorityForTest([{ role: "user", content: prompt }]);
+  assert.equal(
+    priority.intent,
+    "general_training_advice",
+    `${prompt}: expected general_training_advice intent`
+  );
+  assert.ok(
+    priority.instruction.includes("general coaching question"),
+    `${prompt}: instruction should identify the latest ask as general coaching:\n${priority.instruction}`
+  );
+  assert.ok(
+    priority.instruction.includes("Use the active plan only as background context"),
+    `${prompt}: instruction should keep plan context secondary:\n${priority.instruction}`
+  );
+  assert.ok(
+    priority.instruction.includes("Do not simply describe today's session"),
+    `${prompt}: instruction should prevent today's session summary:\n${priority.instruction}`
+  );
+
+  if (prompt.includes("5K") || prompt.includes("run faster")) {
+    assert.ok(
+      priority.instruction.includes("speed/interval work"),
+      `${prompt}: running improvement instruction should mention speed work:\n${priority.instruction}`
+    );
+    assert.ok(
+      priority.instruction.includes("tempo or threshold work"),
+      `${prompt}: running improvement instruction should mention threshold work:\n${priority.instruction}`
+    );
+  }
+}
+
 const weeklyOverviewPrompts = [
   "What sessions do I have this week?",
   "Show me this week’s plan",

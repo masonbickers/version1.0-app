@@ -722,6 +722,29 @@ function isWeeklyFocusQuestion(text) {
   );
 }
 
+function isGeneralTrainingAdviceQuestion(text) {
+  return (
+    text.includes("how can i improve my 5k") ||
+    text.includes("how do i improve my 5k") ||
+    text.includes("improve my 5k time") ||
+    text.includes("improve my 5 k time") ||
+    text.includes("get better at 5k") ||
+    text.includes("run a faster 5k") ||
+    text.includes("how do i run faster") ||
+    text.includes("how can i run faster") ||
+    text.includes("how can i build endurance") ||
+    text.includes("how do i build endurance") ||
+    text.includes("build endurance") ||
+    text.includes("build my endurance") ||
+    text.includes("how do i get stronger") ||
+    text.includes("how can i get stronger") ||
+    text.includes("get stronger") ||
+    text.includes("improve my pace") ||
+    text.includes("improve my running") ||
+    text.includes("become a better runner")
+  );
+}
+
 function titleForActivePlan(plan) {
   return firstNonEmptyString([
     plan?.name,
@@ -2158,6 +2181,10 @@ function latestUserIntentHint(text) {
     return "weekly_focus";
   }
 
+  if (isGeneralTrainingAdviceQuestion(clean)) {
+    return "general_training_advice";
+  }
+
   if (
     clean.includes("tired") ||
     clean.includes("slept badly") ||
@@ -2265,6 +2292,17 @@ function latestUserPriorityInstruction(latestUserText) {
       "- Highlight the key sessions from this week if available, such as speed work, HM pace, and long run.",
       "- Do not list every session in detail.",
       "- Mention recovery, sleep, and fuelling briefly as supports."
+    );
+  }
+
+  if (intent === "general_training_advice") {
+    lines.push(
+      "- This is a general coaching question. Answer the coaching question directly.",
+      "- Use the active plan only as background context, not as the main answer.",
+      "- Do not simply describe today's session.",
+      "- If the user asks about improving 5K or running faster, cover speed/interval work, tempo or threshold work, easy aerobic volume, consistency, strength training, recovery, and pacing.",
+      "- If the user asks about endurance, cover easy aerobic volume, gradual progression, long easy work, recovery, and consistency.",
+      "- If the user asks about strength, cover progressive overload, good technique, key compound lifts, enough protein, and recovery."
     );
   }
 
