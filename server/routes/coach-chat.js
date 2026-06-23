@@ -547,6 +547,106 @@ function formatSessionCoachLine(session, { includeDate = false } = {}) {
   return cleanCoachText(effort ? `${main}. ${effort}` : main);
 }
 
+function compactSessionMetric(session) {
+  const distanceKm = meaningfulSessionDistanceKm(session);
+  if (distanceKm != null) return `${distanceKm} km`;
+
+  const durationMin = meaningfulSessionDurationMin(session);
+  if (durationMin != null) return `${durationMin} min`;
+
+  const target = firstNonEmptyString([
+    session?.target,
+    session?.mainSet,
+    session?.prescription,
+    session?.summary,
+  ]);
+  if (!target) return "";
+  return cleanCoachText(target).replace(/\bconsistency edit\b.*$/i, "").trim();
+}
+
+function compactStatusMarker(session) {
+  const status = classifySessionStatus(session);
+  if (status === "completed") return "✅";
+  if (status === "skipped") return "skipped";
+  if (status === "moved") return "moved";
+  if (status === "in_progress") return "in progress";
+  if (status === "due") return "";
+  if (status === "unknown") return "";
+  return "";
+}
+
+function compactWeekDateLabel(session) {
+  const label = firstNonEmptyString([
+    session?.dateLabel,
+    session?.dayLabel,
+    session?.displayDate,
+    session?.date,
+    session?.isoDate,
+  ]);
+  if (label) {
+    return label.replace(/\b2026\b/g, "").replace(/\s+/g, " ").trim();
+  }
+
+  const dayName = firstNonEmptyString([session?.day, session?.weekday, session?.name]);
+  if (dayName) return dayName;
+
+  const dayIndex = Number(session?.dayIndex);
+  if (Number.isInteger(dayIndex) && dayIndex >= 0 && dayIndex <= 6) {
+    const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    return labels[dayIndex];
+  }
+
+  return "Day";
+}
+
+function compactWeekSessionText(session) {
+  const title = cleanCoachText(
+    session?.title ||
+      session?.name ||
+      session?.sessionName ||
+      session?.sessionTitle ||
+      session?.type ||
+      session?.sessionType ||
+      "Session"
+  );
+  const metric = compactSessionMetric(session);
+  const status = compactStatusMarker(session);
+  return [title, metric, status].filter(Boolean).join(" · ");
+}
+
+function buildCompactWeekOverview(currentWeekSchedule, clock) {
+  const sessions = (Array.isArray(currentWeekSchedule) ? currentWeekSchedule : []).filter(Boolean);
+  if (!sessions.length) {
+    return [
+      `This week starts from ${clock?.todayLabel || "today"}.`,
+      "",
+      "I do not have any scheduled sessions loaded for this week.",
+    ].join("\n");
+  }
+
+  const grouped = [];
+  const indexByLabel = new Map();
+  sessions.forEach((session) => {
+    const label = compactWeekDateLabel(session);
+    if (!indexByLabel.has(label)) {
+      indexByLabel.set(label, grouped.length);
+      grouped.push({ label, sessions: [] });
+    }
+    grouped[indexByLabel.get(label)].sessions.push(session);
+  });
+
+  return [
+    "Here's your week:",
+    "",
+    ...grouped.map((group) => {
+      const items = group.sessions.map(compactWeekSessionText).filter(Boolean);
+      return `${group.label} — ${items.join(" / ")}`;
+    }),
+    "",
+    "Main focus: keep the quality high and don't chase extra volume.",
+  ].join("\n");
+}
+
 function formatCompletedSessionFact(session) {
   if (!session) return null;
 
@@ -1616,30 +1716,20 @@ function tryDeterministicCoachReply(message, context) {
   }
 
   const asksThisWeek =
-    text.includes("this week") &&
-    (text.includes("session") ||
-      text.includes("workout") ||
-      text.includes("training") ||
-      text.includes("plan") ||
-      text.includes("have"));
+    (text.includes("this week") &&
+      (text.includes("session") ||
+        text.includes("workout") ||
+        text.includes("training") ||
+        text.includes("plan") ||
+        text.includes("have") ||
+        text.includes("show"))) ||
+    text.includes("sessions do i have this week") ||
+    text.includes("week looking like") ||
+    text.includes("weekly plan") ||
+    text.includes("week's plan");
 
   if (asksThisWeek && clock) {
-    if (!currentWeekSchedule.length) {
-      return [
-        `This week starts from ${clock.todayLabel}.`,
-        "",
-        "I do not have any scheduled sessions loaded for this week.",
-      ].join("\n");
-    }
-
-    return [
-      "Here is your week at a glance:",
-      ...currentWeekSchedule.map(
-        (item) => `- ${formatSessionCoachLine(item, { includeDate: true })}`
-      ),
-      "",
-      "The main job is to hit the planned work without chasing extra volume.",
-    ].join("\n");
+    return buildCompactWeekOverview(currentWeekSchedule, clock);
   }
 
   const weekdayMatch = Object.keys(WEEKDAY_INDEX).find((day) => text.includes(day));

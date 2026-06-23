@@ -94,6 +94,77 @@ const duplicateLoggedPushContext = {
   },
 };
 
+const weeklyOverviewContext = {
+  clock: {
+    todayIso: "2026-06-23",
+    todayLabel: "Tuesday, 23 June 2026",
+  },
+  training: {
+    currentWeekSchedule: [
+      {
+        dateLabel: "Mon 22",
+        dayIndex: 0,
+        title: "Easy Run",
+        planKind: "run",
+        distanceKm: 8,
+        status: "completed",
+        notes:
+          "Consistency edit: reduced slightly because recent missed sessions put the plan behind target. Keep controlled.",
+      },
+      {
+        dateLabel: "Mon 22",
+        dayIndex: 0,
+        title: "Upper 1",
+        planKind: "strength",
+        durationMin: 44,
+        status: "completed",
+        description:
+          "Consistency edit: reduced slightly because recent missed sessions put the plan behind target.",
+      },
+      {
+        dateLabel: "Tue 23",
+        dayIndex: 1,
+        title: "Lower 1",
+        planKind: "strength",
+        durationMin: 41,
+        status: "planned",
+      },
+      {
+        dateLabel: "Wed 24",
+        dayIndex: 2,
+        title: "Speed: 5 x 1200m",
+        planKind: "run",
+        distanceKm: 9,
+        status: "planned",
+      },
+      {
+        dateLabel: "Thu 25",
+        dayIndex: 3,
+        title: "Upper 2",
+        planKind: "strength",
+        durationMin: 38,
+        status: "skipped",
+      },
+      {
+        dateLabel: "Fri 26",
+        dayIndex: 4,
+        title: "HM Pace",
+        planKind: "run",
+        distanceKm: 10,
+        status: "moved",
+      },
+      {
+        dateLabel: "Sun 28",
+        dayIndex: 6,
+        title: "Long Run",
+        planKind: "run",
+        distanceKm: 13.5,
+        status: "planned",
+      },
+    ],
+  },
+};
+
 const missedSessionCases = [
   "I missed today's session, what should I do?",
   "I missed my workout today",
@@ -205,6 +276,39 @@ for (const prompt of missedSessionCases) {
     reply.includes("\nCompleted:"),
     false,
     `${prompt}: should not dump completed session section:\n${reply}`
+  );
+}
+
+const weeklyOverviewPrompts = [
+  "What sessions do I have this week?",
+  "Show me this week’s plan",
+  "What is my week looking like?",
+];
+
+for (const prompt of weeklyOverviewPrompts) {
+  const reply = __coachChatDeterministicReplyForTest(prompt, weeklyOverviewContext);
+  assert.ok(reply, `${prompt}: expected deterministic weekly overview reply`);
+  assert.ok(reply.includes("Here's your week:"), `${prompt}: should include compact heading`);
+  assert.ok(reply.includes("Mon 22"), `${prompt}: should include day/date`);
+  assert.ok(reply.includes("Easy Run"), `${prompt}: should include session title`);
+  assert.ok(reply.includes("Upper 1"), `${prompt}: should group multiple sessions on one day`);
+  assert.ok(reply.includes("✅"), `${prompt}: should include completed status marker`);
+  assert.ok(reply.includes("skipped"), `${prompt}: should include skipped status where available`);
+  assert.ok(reply.includes("moved"), `${prompt}: should include moved status where available`);
+  assert.ok(reply.includes("Main focus:"), `${prompt}: should end with weekly focus`);
+  assert.equal(
+    reply.includes("Consistency edit"),
+    false,
+    `${prompt}: should not include verbose consistency edit text:\n${reply}`
+  );
+  assert.equal(
+    reply.includes("because recent missed sessions"),
+    false,
+    `${prompt}: should not dump full session descriptions:\n${reply}`
+  );
+  assert.ok(
+    reply.split("\n").filter(Boolean).length <= 10,
+    `${prompt}: weekly overview should be concise:\n${reply}`
   );
 }
 
