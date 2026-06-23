@@ -1567,6 +1567,10 @@ function tryDeterministicCoachReply(message, context) {
     return lines.filter(Boolean).join("\n");
   }
 
+  if (latestUserIntentHint(text) === "schedule_reschedule") {
+    return null;
+  }
+
   const asksAlreadyTrainedToday =
     text.includes("already trained") ||
     text.includes("already completed") ||
@@ -1798,6 +1802,40 @@ function compactPlanForCoach(plan, planSummary = null) {
 
 function latestUserIntentHint(text) {
   const clean = normaliseText(text);
+  const mentionsSessionOrWorkout =
+    clean.includes("session") ||
+    clean.includes("workout") ||
+    clean.includes("run") ||
+    clean.includes("training") ||
+    clean.includes("it");
+  if (
+    clean.includes("move today's session") ||
+    clean.includes("move todays session") ||
+    clean.includes("move my session") ||
+    clean.includes("move workout") ||
+    clean.includes("move my workout") ||
+    clean.includes("move my run") ||
+    clean.includes("reschedule") ||
+    clean.includes("shift session") ||
+    clean.includes("shift my session") ||
+    clean.includes("shift workout") ||
+    clean.includes("shift my run") ||
+    clean.includes("do today's workout tomorrow") ||
+    clean.includes("do todays workout tomorrow") ||
+    clean.includes("do today's session tomorrow") ||
+    clean.includes("do todays session tomorrow") ||
+    (mentionsSessionOrWorkout && clean.includes("instead") && clean.includes("tomorrow")) ||
+    (mentionsSessionOrWorkout && clean.includes("to friday")) ||
+    (mentionsSessionOrWorkout && clean.includes("to monday")) ||
+    (mentionsSessionOrWorkout && clean.includes("to tuesday")) ||
+    (mentionsSessionOrWorkout && clean.includes("to wednesday")) ||
+    (mentionsSessionOrWorkout && clean.includes("to thursday")) ||
+    (mentionsSessionOrWorkout && clean.includes("to saturday")) ||
+    (mentionsSessionOrWorkout && clean.includes("to sunday"))
+  ) {
+    return "schedule_reschedule";
+  }
+
   if (
     clean.includes("lose fat") ||
     clean.includes("fat loss") ||
@@ -1878,10 +1916,6 @@ function latestUserIntentHint(text) {
     clean.includes("sore")
   ) {
     return "readiness_recovery";
-  }
-
-  if (clean.includes("move") || clean.includes("reschedule") || clean.includes("tomorrow")) {
-    return "reschedule";
   }
 
   return "general";
@@ -1971,6 +2005,18 @@ function latestUserPriorityInstruction(latestUserText) {
   if (intent === "limited_time") {
     lines.push(
       "- This is a time-constraint question. Give a practical time-boxed training or recovery structure first."
+    );
+  }
+
+  if (intent === "schedule_reschedule") {
+    lines.push(
+      "- This is a schedule movement/rescheduling question. Answer whether moving it is sensible before describing today's session.",
+      "- Check tomorrow's planned session from USER_CONTEXT_JSON.training.currentWeekSchedule, todaySchedule, exactSchedule, and LIVE_CONTEXT_FACTS where available.",
+      "- If tomorrow already has a hard session, warn against stacking both sessions on the same day.",
+      "- Suggest sensible options: do a shorter controlled version today, move today's session to the next easier/rest day, or keep tomorrow's hard session as priority.",
+      "- Do not simply tell the user to complete today as scheduled.",
+      "- Do not claim the plan has been changed unless an action card is returned and the user confirms.",
+      "- If a change seems reasonable but needs confirmation, ask a concise confirmation question such as 'Want me to move it?'"
     );
   }
 

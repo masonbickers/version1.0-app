@@ -219,6 +219,8 @@ const aiLedAdjustmentPrompts = [
   "How do I hit my protein?",
   "How should I approach this week?",
   "Can I move today's session to tomorrow?",
+  "Can I do today’s workout tomorrow instead?",
+  "Move my run to Friday",
   "I want to lose fat but keep performance, what should I do?",
 ];
 
@@ -319,6 +321,43 @@ assert.ok(
   fatLossAfterPostTrainingPriority.instruction.includes("not a post-training meal question"),
   "fat-loss/performance instruction should prevent post-training meal continuation"
 );
+
+const scheduleMovePrompts = [
+  "Can I move today's session to tomorrow?",
+  "Can I do today’s workout tomorrow instead?",
+  "Move my run to Friday",
+];
+
+for (const prompt of scheduleMovePrompts) {
+  const priority = __coachChatLatestPriorityForTest([
+    {
+      role: "user",
+      content: prompt,
+    },
+  ]);
+
+  assert.equal(
+    priority.intent,
+    "schedule_reschedule",
+    `${prompt}: expected schedule reschedule intent`
+  );
+  assert.ok(
+    priority.instruction.includes("Check tomorrow's planned session"),
+    `${prompt}: instruction should tell model to check tomorrow where available`
+  );
+  assert.ok(
+    priority.instruction.includes("warn against stacking"),
+    `${prompt}: instruction should warn against stacking hard sessions`
+  );
+  assert.ok(
+    priority.instruction.includes("Do not simply tell the user to complete today as scheduled"),
+    `${prompt}: instruction should prevent generic today-plan answer`
+  );
+  assert.ok(
+    priority.instruction.includes("Do not claim the plan has been changed"),
+    `${prompt}: instruction should prevent auto-changing plan`
+  );
+}
 
 const duplicateReply = __coachChatDeterministicReplyForTest(
   "What should I train today?",
