@@ -1432,9 +1432,6 @@ function buildLiveContextFacts(context) {
   const lines = [];
   const clock = context?.clock || null;
   const training = context?.training || {};
-  const activePlans = Array.isArray(training?.activePlans)
-    ? training.activePlans.filter(Boolean)
-    : [];
   const todaySchedule = Array.isArray(training?.todaySchedule)
     ? training.todaySchedule.filter(Boolean)
     : [];
@@ -1815,11 +1812,6 @@ function tryDeterministicCoachReply(message, context) {
     return URGENT_TRAINING_SAFETY_REPLY;
   }
 
-  const injuryReply = commonTrainingInjuryReply(text);
-  if (injuryReply) {
-    return injuryReply;
-  }
-
   const clock = context?.clock || null;
   const training = context?.training || {};
   const activePlans = Array.isArray(training?.activePlans)
@@ -1831,10 +1823,6 @@ function tryDeterministicCoachReply(message, context) {
   const currentWeekSchedule = Array.isArray(training?.currentWeekSchedule)
     ? training.currentWeekSchedule.filter(Boolean)
     : [];
-
-  if (isMissedSessionPrompt(text)) {
-    return buildMissedSessionAdvice({ clock: clock || {}, training, todaySchedule });
-  }
 
   const asksDay =
     text.includes("what day is it") ||
@@ -1898,18 +1886,21 @@ function tryDeterministicCoachReply(message, context) {
   }
 
   const asksTodayPlan =
-    (text.includes("today") &&
-      (text.includes("session") ||
-        text.includes("workout") ||
-        text.includes("training") ||
-        text.includes("train") ||
-        text.includes("plan") ||
-        text.includes("have") ||
-        text.includes("still do"))) ||
     text.includes("what should i train") ||
     text.includes("what do i have today") ||
-    text.includes("what should i do today") ||
-    text.includes("what's on today");
+    text.includes("what training do i have today") ||
+    text.includes("what workout do i have today") ||
+    text.includes("what session do i have today") ||
+    text.includes("what is today's session") ||
+    text.includes("what's today's session") ||
+    text.includes("what is todays session") ||
+    text.includes("what's todays session") ||
+    text.includes("what is today's workout") ||
+    text.includes("what's today's workout") ||
+    text.includes("what is todays workout") ||
+    text.includes("what's todays workout") ||
+    text.includes("what's on today") ||
+    text.includes("what is on today");
 
   if (asksTodayPlan) {
     return buildTodayPlanReply({ text, clock: clock || {}, training, todaySchedule });
@@ -2698,9 +2689,50 @@ function buildLocalCoachFallbackReply(message, context) {
   const text = normaliseText(message);
   const sessionName = firstTodaySessionName(context);
   const todayPhrase = sessionName ? `today's ${sessionName} session` : "today's planned session";
+  const injuryReply = commonTrainingInjuryReply(text);
+
+  if (injuryReply) {
+    return injuryReply;
+  }
 
   if (isWeeklyFocusQuestion(text)) {
     return buildWeeklyFocusFallbackReply(context);
+  }
+
+  if (isGeneralTrainingAdviceQuestion(text)) {
+    if (text.includes("5k") || text.includes("run faster") || text.includes("pace")) {
+      return [
+        "To improve your 5K, build the basics consistently.",
+        "",
+        "- Keep easy runs genuinely easy to build aerobic volume",
+        "- Do one quality speed or interval session each week",
+        "- Add tempo or threshold work for sustained pace",
+        "- Keep strength training consistent for durability",
+        "- Recover well so the quality sessions are actually high quality",
+      ].join("\n");
+    }
+
+    if (text.includes("endurance")) {
+      return [
+        "Build endurance with steady consistency, not big jumps.",
+        "",
+        "- Increase easy aerobic volume gradually",
+        "- Keep one longer easy session most weeks",
+        "- Avoid turning every run into a hard run",
+        "- Sleep, fuel, and recover enough to absorb the work",
+      ].join("\n");
+    }
+
+    if (text.includes("stronger")) {
+      return [
+        "Get stronger by progressing the basics consistently.",
+        "",
+        "- Use good technique on key compound lifts",
+        "- Add load, reps, or sets gradually",
+        "- Keep enough protein in your day",
+        "- Recover well between hard sessions",
+      ].join("\n");
+    }
   }
 
   if (/\b\d+\s*(?:min|mins|minute|minutes)\b/.test(text) || text.includes("only have")) {
@@ -2913,6 +2945,13 @@ Behave more like ChatGPT than a generic app bot:
 - keep replies concise by default
 - write for mobile reading, not desktop reading
 - sound like a coach in conversation, not a notification or template
+
+AI-FIRST ROUTING:
+- For normal fitness, training, nutrition, recovery, plan advice, and general coaching questions, answer naturally using the AI model.
+- Use the user's plan, today, week, nutrition, and profile context to personalise the answer, not to replace the answer.
+- Do not simply describe today's session unless the latest user message explicitly asks what today's session/workout/training is.
+- For broad questions, give principles plus practical next steps.
+- For plan changes, explain options and ask for confirmation before claiming anything changed.
 
 STYLE RULES:
 - Do not answer in one dense paragraph unless the user explicitly asks for that format.

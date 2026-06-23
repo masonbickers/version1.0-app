@@ -216,6 +216,22 @@ const missedSessionCases = [
   "I skipped today's session",
 ];
 
+const broadAiLedPrompts = [
+  ...missedSessionCases,
+  "My knee hurts when I run, what should I do?",
+  "My ankle hurts when I run",
+  "My back hurts during deadlifts",
+  "How can I improve my 5K time?",
+  "How do I run faster?",
+  "How can I build endurance?",
+  "What should I eat after training?",
+  "I want to lose fat but keep performance",
+  "I'm tired today, should I train?",
+  "I only have 30 minutes today",
+  "Can I move today's session to tomorrow?",
+  "How should I approach this week?",
+];
+
 const cases = [
   {
     name: "urgent chest pain dizziness prompt bypasses AI",
@@ -228,24 +244,6 @@ const cases = [
     prompt: "I have severe shortness of breath during exercise, should I continue?",
     context: unknownPushContext,
     includes: "Do not continue the workout.",
-  },
-  {
-    name: "knee running pain prompt bypasses AI",
-    prompt: "My knee hurts when I run, what should I do?",
-    context: unknownPushContext,
-    includes: "Don't push through knee pain.",
-  },
-  {
-    name: "ankle running pain prompt bypasses AI",
-    prompt: "My ankle hurts when I run",
-    context: unknownPushContext,
-    includes: "Don't push through ankle pain.",
-  },
-  {
-    name: "back deadlift pain prompt bypasses AI",
-    prompt: "My back hurts during deadlifts",
-    context: unknownPushContext,
-    includes: "Don't push through back pain during lifting.",
   },
   {
     name: "already trained today uses completed-status branch",
@@ -301,26 +299,23 @@ for (const testCase of cases) {
   );
 }
 
-for (const prompt of missedSessionCases) {
-  const reply = __coachChatDeterministicReplyForTest(prompt, completedPushContext);
-  assert.ok(reply, `${prompt}: expected short adaptive missed-session reply`);
-  assert.ok(
-    reply.includes("marked as completed"),
-    `${prompt}: expected completed status acknowledgement, got:\n${reply}`
-  );
-  assert.ok(
-    reply.includes("don't double up aggressively"),
-    `${prompt}: expected conservative no-doubling advice, got:\n${reply}`
-  );
+for (const prompt of broadAiLedPrompts) {
+  const reply = __coachChatDeterministicReplyForTest(prompt, activePlanContext);
   assert.equal(
-    reply.includes("Today's planned training is already complete."),
-    false,
-    `${prompt}: should not return generic completed-plan block:\n${reply}`
+    reply,
+    null,
+    `${prompt}: broad coaching prompts should go to the AI route, got deterministic reply:\n${reply}`
   );
-  assert.equal(
-    reply.includes("\nCompleted:"),
-    false,
-    `${prompt}: should not dump completed session section:\n${reply}`
+
+  const priority = __coachChatLatestPriorityForTest([{ role: "user", content: prompt }]);
+  assert.notEqual(
+    priority.intent,
+    "",
+    `${prompt}: expected a latest-message intent for AI routing`
+  );
+  assert.ok(
+    priority.instruction.includes("Answer the latest user message directly"),
+    `${prompt}: latest user message should be prioritised:\n${priority.instruction}`
   );
 }
 
