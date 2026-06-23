@@ -307,7 +307,12 @@ for (const prompt of weeklyOverviewPrompts) {
     reply.includes("Upper 1 - Power + Performance · 45 min"),
     `${prompt}: should show unknown-status sessions without a ? marker`
   );
-  assert.ok(reply.includes("✅"), `${prompt}: should include completed status marker`);
+  assert.ok(reply.includes("completed"), `${prompt}: should include completed status text`);
+  assert.equal(
+    reply.includes("✅"),
+    false,
+    `${prompt}: weekly overview should not include emoji status markers:\n${reply}`
+  );
   assert.ok(reply.includes("skipped"), `${prompt}: should include skipped status where available`);
   assert.ok(reply.includes("moved"), `${prompt}: should include moved status where available`);
   assert.ok(reply.includes("Main focus:"), `${prompt}: should end with weekly focus`);

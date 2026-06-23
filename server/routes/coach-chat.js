@@ -594,7 +594,7 @@ function compactStatusMarker(session) {
   }
 
   const status = classifySessionStatus(session);
-  if (status === "completed") return "✅";
+  if (status === "completed") return "completed";
   if (status === "skipped") return "skipped";
   if (status === "moved") return "moved";
   return "";
