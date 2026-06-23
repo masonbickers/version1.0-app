@@ -1409,6 +1409,9 @@ function buildLiveContextFacts(context) {
   const lines = [];
   const clock = context?.clock || null;
   const training = context?.training || {};
+  const activePlans = Array.isArray(training?.activePlans)
+    ? training.activePlans.filter(Boolean)
+    : [];
   const todaySchedule = Array.isArray(training?.todaySchedule)
     ? training.todaySchedule.filter(Boolean)
     : [];
