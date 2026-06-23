@@ -342,6 +342,42 @@ for (const prompt of weeklyOverviewPrompts) {
   );
 }
 
+const questionStatusVariants = ["?", "❔", "❓", "�", "？"];
+
+for (const variant of questionStatusVariants) {
+  const reply = __coachChatDeterministicReplyForTest("What sessions do I have this week?", {
+    clock: weeklyOverviewContext.clock,
+    training: {
+      currentWeekSchedule: [
+        {
+          dateLabel: "Mon 22 Jun",
+          dayIndex: 0,
+          title: "Upper 1 - Power + Performance",
+          planKind: "strength",
+          durationMin: 45,
+          status: variant,
+          statusLabel: variant,
+          sessionStatus: variant,
+          state: variant,
+          logStatus: variant,
+          completionStatus: variant,
+          matchStatus: variant,
+        },
+      ],
+    },
+  });
+
+  assert.ok(
+    reply.includes("Upper 1 - Power + Performance · 45 min"),
+    `variant ${variant}: should keep session title and metric:\n${reply}`
+  );
+  assert.equal(
+    /[?❔❓�？]/.test(reply),
+    false,
+    `variant ${variant}: should strip placeholder question statuses from weekly overview:\n${reply}`
+  );
+}
+
 const aiLedAdjustmentPrompts = [
   "I only have 30 minutes today",
   "What should I do if I'm short on time?",

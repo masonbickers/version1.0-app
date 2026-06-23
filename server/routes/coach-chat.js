@@ -564,9 +564,28 @@ function compactSessionMetric(session) {
   return cleanCoachText(target).replace(/\bconsistency edit\b.*$/i, "").trim();
 }
 
+const COMPACT_WEEK_PLACEHOLDER_STATUSES = new Set([
+  "?",
+  "❔",
+  "❓",
+  "�",
+  "？",
+  "unknown",
+  "n/a",
+  "na",
+  "none",
+  "--",
+]);
+
+function isCompactWeekPlaceholderStatus(value) {
+  const text = String(value || "").trim();
+  if (!text) return true;
+  return COMPACT_WEEK_PLACEHOLDER_STATUSES.has(text.toLowerCase()) || /^[?❔❓�？]+$/.test(text);
+}
+
 function compactStatusMarker(session) {
   const rawStatus = statusTextForSession(session);
-  if (!rawStatus || ["?", "unknown", "n/a", "na", "none", "--"].includes(rawStatus)) {
+  if (isCompactWeekPlaceholderStatus(rawStatus)) {
     return "";
   }
 
@@ -582,17 +601,16 @@ function compactStatusMarker(session) {
 
 function displayableCompactWeekPart(value) {
   const text = String(value || "").trim();
-  if (!text) return "";
-  if (["?", "unknown", "n/a", "na", "none", "--"].includes(text.toLowerCase())) return "";
+  if (isCompactWeekPlaceholderStatus(text)) return "";
   return text;
 }
 
 function sanitiseCompactWeekOverview(text) {
   return String(text || "")
-    .replace(/\s*·\s*\?(?=\s*(?:\/|\n|$))/g, "")
-    .replace(/\s*\(\?\)(?=\s*(?:\/|\n|$))/g, "")
-    .replace(/(\s—\s*)\?(?=\s*(?:\/|\n|$))/g, "$1")
-    .replace(/(^|\n)\?\s*(?=\n|$)/g, "$1")
+    .replace(/\s*·\s*[?❔❓�？]+(?=\s*(?:\/|\n|$))/g, "")
+    .replace(/\s*\([?❔❓�？]+\)(?=\s*(?:\/|\n|$))/g, "")
+    .replace(/(\s—\s*)[?❔❓�？]+(?=\s*(?:\/|\n|$))/g, "$1")
+    .replace(/(^|\n)[?❔❓�？]+\s*(?=\n|$)/g, "$1")
     .replace(/[ \t]+$/gm, "")
     .trim();
 }
