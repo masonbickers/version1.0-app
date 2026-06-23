@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   __coachChatDeterministicReplyForTest,
+  __coachChatLocalFallbackForTest,
   __coachChatLatestPriorityForTest,
 } from "../routes/coach-chat.js";
 
@@ -361,6 +362,56 @@ for (const prompt of activePlanPrompts) {
   assert.ok(
     reply.split("\n").filter(Boolean).length <= 5,
     `${prompt}: active-plan reply should stay concise:\n${reply}`
+  );
+}
+
+const weeklyFocusPrompts = [
+  "What should I focus on this week?",
+  "How should I approach this week?",
+  "What is the main goal this week?",
+  "What should I prioritise this week?",
+];
+
+for (const prompt of weeklyFocusPrompts) {
+  const deterministicReply = __coachChatDeterministicReplyForTest(prompt, activePlanContext);
+  assert.equal(
+    deterministicReply,
+    null,
+    `${prompt}: weekly focus should remain AI-led before fallback`
+  );
+
+  const priority = __coachChatLatestPriorityForTest([{ role: "user", content: prompt }]);
+  assert.equal(priority.intent, "weekly_focus", `${prompt}: expected weekly_focus intent`);
+  assert.ok(
+    priority.instruction.includes("strategic weekly focus"),
+    `${prompt}: AI instruction should prioritise weekly strategy:\n${priority.instruction}`
+  );
+
+  const fallback = __coachChatLocalFallbackForTest(prompt, activePlanContext);
+  assert.ok(
+    fallback.includes("consistency and quality"),
+    `${prompt}: fallback should mention consistency and quality:\n${fallback}`
+  );
+  assert.ok(
+    fallback.includes("Speed: 5 x 1200m"),
+    `${prompt}: fallback should highlight key speed session:\n${fallback}`
+  );
+  assert.ok(
+    fallback.includes("HM Pace"),
+    `${prompt}: fallback should highlight HM pace session:\n${fallback}`
+  );
+  assert.ok(
+    fallback.includes("Long Run"),
+    `${prompt}: fallback should highlight long run:\n${fallback}`
+  );
+  assert.ok(
+    fallback.includes("recovery, sleep, and fuelling"),
+    `${prompt}: fallback should mention recovery supports:\n${fallback}`
+  );
+  assert.equal(
+    fallback.includes("I'm having trouble connecting"),
+    false,
+    `${prompt}: fallback must not be the generic connection error:\n${fallback}`
   );
 }
 

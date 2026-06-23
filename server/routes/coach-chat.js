@@ -703,6 +703,25 @@ function isActivePlanQuestion(text) {
   );
 }
 
+function isWeeklyFocusQuestion(text) {
+  return (
+    text.includes("what should i focus on this week") ||
+    text.includes("how should i approach this week") ||
+    text.includes("what is the main goal this week") ||
+    text.includes("what's the main goal this week") ||
+    text.includes("what should i prioritise this week") ||
+    text.includes("what should i prioritize this week") ||
+    text.includes("weekly focus") ||
+    (text.includes("this week") &&
+      (text.includes("focus") ||
+        text.includes("approach") ||
+        text.includes("main goal") ||
+        text.includes("priority") ||
+        text.includes("prioritise") ||
+        text.includes("prioritize")))
+  );
+}
+
 function titleForActivePlan(plan) {
   return firstNonEmptyString([
     plan?.name,
@@ -1951,6 +1970,10 @@ export function __coachChatLatestPriorityForTest(messages) {
   };
 }
 
+export function __coachChatLocalFallbackForTest(message, context) {
+  return buildLocalCoachFallbackReply(message, context);
+}
+
 function safeStringify(value, maxChars = 16000) {
   try {
     const json = JSON.stringify(value, null, 2);
@@ -2128,6 +2151,10 @@ function latestUserIntentHint(text) {
     return "limited_time";
   }
 
+  if (isWeeklyFocusQuestion(clean)) {
+    return "weekly_focus";
+  }
+
   if (
     clean.includes("tired") ||
     clean.includes("slept badly") ||
@@ -2225,6 +2252,16 @@ function latestUserPriorityInstruction(latestUserText) {
   if (intent === "limited_time") {
     lines.push(
       "- This is a time-constraint question. Give a practical time-boxed training or recovery structure first."
+    );
+  }
+
+  if (intent === "weekly_focus") {
+    lines.push(
+      "- This is a weekly strategy/focus question. Give the strategic weekly focus first.",
+      "- Mention consistency and quality before extra volume.",
+      "- Highlight the key sessions from this week if available, such as speed work, HM pace, and long run.",
+      "- Do not list every session in detail.",
+      "- Mention recovery, sleep, and fuelling briefly as supports."
     );
   }
 
@@ -2553,10 +2590,77 @@ function firstTodaySessionName(context) {
   return first ? sessionDisplayName(first) : "";
 }
 
+function keyWeeklySessionNames(context) {
+  const training = context?.training || {};
+  const sessions = normaliseList(training?.currentWeekSchedule);
+  const keySessions = [];
+  const seen = new Set();
+
+  for (const session of sessions) {
+    const title = cleanCoachText(
+      session?.title ||
+        session?.name ||
+        session?.sessionName ||
+        session?.sessionTitle ||
+        session?.type ||
+        session?.sessionType ||
+        ""
+    );
+    if (!title) continue;
+
+    const text = normaliseText(
+      [
+        title,
+        session?.kind,
+        session?.planKind,
+        session?.sessionType,
+        session?.type,
+        session?.workout?.kind,
+      ].join(" ")
+    );
+    const isKey =
+      text.includes("speed") ||
+      text.includes("interval") ||
+      text.includes("tempo") ||
+      text.includes("threshold") ||
+      text.includes("hm pace") ||
+      text.includes("half marathon pace") ||
+      text.includes("long run") ||
+      text.includes("long");
+
+    if (!isKey) continue;
+    const key = title.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    keySessions.push(title);
+    if (keySessions.length >= 3) break;
+  }
+
+  return keySessions;
+}
+
+function buildWeeklyFocusFallbackReply(context) {
+  const keySessions = keyWeeklySessionNames(context);
+  const keyLine = keySessions.length
+    ? `Protect the key sessions: ${keySessions.join(", ")}.`
+    : "Protect the key sessions and keep the easy work genuinely easy.";
+
+  return [
+    "This week, focus on consistency and quality rather than extra volume.",
+    "",
+    keyLine,
+    "Keep strength work controlled, avoid chasing soreness, and use recovery, sleep, and fuelling to stay fresh.",
+  ].join("\n");
+}
+
 function buildLocalCoachFallbackReply(message, context) {
   const text = normaliseText(message);
   const sessionName = firstTodaySessionName(context);
   const todayPhrase = sessionName ? `today's ${sessionName} session` : "today's planned session";
+
+  if (isWeeklyFocusQuestion(text)) {
+    return buildWeeklyFocusFallbackReply(context);
+  }
 
   if (/\b\d+\s*(?:min|mins|minute|minutes)\b/.test(text) || text.includes("only have")) {
     return [
