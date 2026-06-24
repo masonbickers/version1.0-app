@@ -6,6 +6,7 @@ import {
   __coachChatRouteFallbackForTest,
   __coachChatNutritionDraftForTest,
   __coachChatMemorySaveForTest,
+  __coachChatResponseDiagnosticsForTest,
 } from "../routes/coach-chat.js";
 
 const completedPushContext = {
@@ -210,6 +211,20 @@ const activePlanContext = {
       },
     ],
     currentWeekSchedule: weeklyOverviewContext.training.currentWeekSchedule,
+  },
+};
+
+const activePlanWithMemoryContext = {
+  ...activePlanContext,
+  athleteProfile: {
+    coachMemory: [
+      {
+        id: "memory-knee-hills",
+        text: "Knee gets sore after hills",
+        category: "injury",
+        source: "coach_chat",
+      },
+    ],
   },
 };
 
@@ -455,6 +470,89 @@ for (const prompt of broadAiLedPrompts) {
     `${prompt}: latest user message should be prioritised:\n${priority.instruction}`
   );
 }
+
+const aiFirstCategoryPrompts = [
+  { prompt: "How can I improve my 5K time?", intent: "general_training_advice" },
+  { prompt: "What should I eat after training?", intent: "post_training_nutrition" },
+  { prompt: "I want to lose fat but keep performance", intent: "fat_loss_performance" },
+  { prompt: "I'm tired today, should I train?", intent: "readiness_recovery" },
+  { prompt: "Can I move today's session to tomorrow?", intent: "schedule_reschedule" },
+  { prompt: "How should I approach this week?", intent: "weekly_focus" },
+];
+
+for (const testCase of aiFirstCategoryPrompts) {
+  const deterministicReply = __coachChatDeterministicReplyForTest(
+    testCase.prompt,
+    activePlanWithMemoryContext
+  );
+  assert.equal(
+    deterministicReply,
+    null,
+    `${testCase.prompt}: normal coaching categories should stay AI-first, got:\n${deterministicReply}`
+  );
+
+  const priority = __coachChatLatestPriorityForTest([
+    { role: "assistant", content: "Earlier we were talking about post-training meals." },
+    { role: "user", content: testCase.prompt },
+  ]);
+  assert.equal(
+    priority.intent,
+    testCase.intent,
+    `${testCase.prompt}: latest message should drive intent`
+  );
+  assert.ok(
+    priority.instruction.includes("Answer the latest user message directly"),
+    `${testCase.prompt}: latest-message priority instruction missing`
+  );
+}
+
+const fallback5k = __coachChatLocalFallbackForTest(
+  "How can I improve my 5K time?",
+  activePlanWithMemoryContext
+);
+assert.ok(fallback5k.includes("To improve your 5K"), `5K fallback should answer directly:\n${fallback5k}`);
+assert.ok(
+  fallback5k.includes("Relevant saved note: Knee gets sore after hills."),
+  `5K fallback should use saved memory when relevant context is present:\n${fallback5k}`
+);
+assert.equal(
+  fallback5k.includes("Use your current plan as the baseline"),
+  false,
+  `5K fallback should not use the old generic template:\n${fallback5k}`
+);
+
+const fallbackNutrition = __coachChatLocalFallbackForTest(
+  "What should I eat after training?",
+  activePlanWithMemoryContext
+);
+assert.ok(
+  fallbackNutrition.includes("Protein") || fallbackNutrition.includes("protein"),
+  `nutrition fallback should answer nutrition directly:\n${fallbackNutrition}`
+);
+assert.equal(
+  fallbackNutrition.includes("Use your current plan as the baseline"),
+  false,
+  `nutrition fallback should not use the old generic template:\n${fallbackNutrition}`
+);
+
+const diagnostics = __coachChatResponseDiagnosticsForTest({
+  responseSource: "ai_primary",
+  latestUserText: "How can I improve my 5K time?",
+  context: activePlanWithMemoryContext,
+});
+assert.equal(diagnostics.responseSource, "ai_primary", "diagnostics should include responseSource");
+assert.equal(
+  diagnostics.detectedIntent,
+  "general_training_advice",
+  "diagnostics should include detected intent"
+);
+assert.equal(diagnostics.coachMemoryIncluded, true, "diagnostics should detect coach memory");
+assert.equal(diagnostics.activePlanIncluded, true, "diagnostics should detect active plan");
+assert.equal(
+  diagnostics.latestMessagePrioritised,
+  true,
+  "diagnostics should mark latest message priority"
+);
 
 const activePlanPrompts = [
   "What plan am I currently on?",

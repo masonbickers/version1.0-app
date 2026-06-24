@@ -1707,6 +1707,9 @@ function buildLiveContextFacts(context) {
   const currentWeekSchedule = Array.isArray(training?.currentWeekSchedule)
     ? training.currentWeekSchedule.filter(Boolean)
     : [];
+  const activePlans = Array.isArray(training?.activePlans)
+    ? training.activePlans.filter(Boolean)
+    : [];
   const garminActivities = training?.garminActivities || null;
   const lastCompletedSession = training?.lastCompletedSession || null;
   const recentCompletedSessions = Array.isArray(training?.recentCompletedSessions)
@@ -2226,6 +2229,45 @@ function tryDeterministicCoachReply(message, context) {
   return null;
 }
 
+function deterministicResponseSource(message) {
+  const text = normaliseText(message);
+  if (isUrgentTrainingSafetyPrompt(text)) return "deterministic_safety";
+  if (
+    text.includes("already trained") ||
+    text.includes("already completed") ||
+    text.includes("completed today") ||
+    text.includes("done today") ||
+    text.includes("did i train today") ||
+    text.includes("have i trained today") ||
+    text.includes("have i already trained") ||
+    text.includes("have i already completed") ||
+    text.includes("should i still") ||
+    text.includes("still do today") ||
+    text.includes("do today's workout") ||
+    text.includes("do todays workout") ||
+    text.includes("repeat today") ||
+    userStatesCompletedPremise(text) ||
+    text.includes("what should i train") ||
+    text.includes("what do i have today") ||
+    text.includes("what training do i have today") ||
+    text.includes("what workout do i have today") ||
+    text.includes("what session do i have today") ||
+    text.includes("what is today's session") ||
+    text.includes("what's today's session") ||
+    text.includes("what is todays session") ||
+    text.includes("what's todays session") ||
+    text.includes("what is today's workout") ||
+    text.includes("what's today's workout") ||
+    text.includes("what is todays workout") ||
+    text.includes("what's todays workout") ||
+    text.includes("what's on today") ||
+    text.includes("what is on today")
+  ) {
+    return "deterministic_status";
+  }
+  return "deterministic_summary";
+}
+
 export function __coachChatDeterministicReplyForTest(message, context) {
   return tryDeterministicCoachReply(message, context);
 }
@@ -2272,6 +2314,20 @@ export function __coachChatMemorySaveForTest(message) {
   return buildMemorySaveResponse(message);
 }
 
+export function __coachChatResponseDiagnosticsForTest({
+  responseSource,
+  latestUserText,
+  context,
+  openAiError = null,
+}) {
+  return coachResponseDiagnostics({
+    responseSource,
+    latestUserText,
+    context,
+    openAiError,
+  });
+}
+
 function safeStringify(value, maxChars = 16000) {
   try {
     const json = JSON.stringify(value, null, 2);
@@ -2301,6 +2357,83 @@ function openAIErrorInfo(error) {
     code: error?.code || error?.error?.code || null,
     type: error?.type || error?.error?.type || null,
   };
+}
+
+function hasCoachMemoryContext(context) {
+  const memory = context?.athleteProfile?.coachMemory;
+  return Array.isArray(memory)
+    ? memory.some((item) => item?.text || item?.category)
+    : !!memory;
+}
+
+function hasActivePlanContext(context) {
+  const training = context?.training || {};
+  return !!(
+    context?.activePlanSummary ||
+    training?.activePlan ||
+    (Array.isArray(training?.activePlans) && training.activePlans.length)
+  );
+}
+
+function coachResponseDiagnostics({
+  responseSource,
+  latestUserText,
+  context,
+  openAiError = null,
+}) {
+  return {
+    responseSource,
+    detectedIntent: latestUserIntentHint(latestUserText),
+    coachMemoryIncluded: hasCoachMemoryContext(context),
+    activePlanIncluded: hasActivePlanContext(context),
+    latestMessagePrioritised: true,
+    openAiFailed: !!openAiError,
+    openAiError: openAiError ? openAIErrorInfo(openAiError) : null,
+  };
+}
+
+function logCoachResponse(diagnostics) {
+  console.info("[coach-chat] response", diagnostics);
+}
+
+function withCoachResponseMetadata(payload, diagnostics) {
+  const base = payload && typeof payload === "object" ? payload : {};
+  let rawObject = null;
+  if (typeof base.raw === "string" && base.raw.trim()) {
+    try {
+      rawObject = JSON.parse(base.raw);
+    } catch {
+      rawObject = { raw: base.raw };
+    }
+  }
+  const enrichedRaw = {
+    ...(rawObject || {
+      reply: base.reply || "",
+      updatedPlan: base.updatedPlan || null,
+      nutritionDraft: base.nutritionDraft || null,
+      coachActions: base.coachActions || [],
+    }),
+    responseSource: diagnostics.responseSource,
+    detectedIntent: diagnostics.detectedIntent,
+    coachMemoryIncluded: diagnostics.coachMemoryIncluded,
+    activePlanIncluded: diagnostics.activePlanIncluded,
+    latestMessagePrioritised: diagnostics.latestMessagePrioritised,
+    openAiFailed: diagnostics.openAiFailed,
+    openAiError: diagnostics.openAiError,
+  };
+
+  return {
+    ...base,
+    responseSource: diagnostics.responseSource,
+    detectedIntent: diagnostics.detectedIntent,
+    raw: JSON.stringify(enrichedRaw),
+  };
+}
+
+function sendCoachResponse(res, payload, diagnosticsInput) {
+  const diagnostics = coachResponseDiagnostics(diagnosticsInput);
+  logCoachResponse(diagnostics);
+  return res.json(withCoachResponseMetadata(payload, diagnostics));
 }
 
 function compactCoachContext(context, planSummary = null) {
@@ -2876,7 +3009,10 @@ async function createCoachChatCompletionWithRetry({
         status: "ok",
         outputBytes: byteSize(completionContent(completion)),
       });
-      return completion;
+      return {
+        completion,
+        responseSource: attempt.reason.startsWith("initial") ? "ai_primary" : "ai_retry",
+      };
     } catch (error) {
       lastError = error;
       console.warn("[coach-chat] OpenAI request failed", {
@@ -2887,7 +3023,7 @@ async function createCoachChatCompletionWithRetry({
   }
 
   try {
-    return await createCoachChatResponsesFetchFallback({
+    const completion = await createCoachChatResponsesFetchFallback({
       model: fallbackModel || primaryModel,
       systemPrompt,
       mergedContext,
@@ -2896,6 +3032,10 @@ async function createCoachChatCompletionWithRetry({
       planSummary,
       trimmedMessages,
     });
+    return {
+      completion,
+      responseSource: "ai_responses_fallback",
+    };
   } catch (error) {
     lastError = error;
     console.warn("[coach-chat] OpenAI direct responses fallback failed", {
@@ -2963,6 +3103,35 @@ function keyWeeklySessionNames(context) {
   return keySessions;
 }
 
+function coachMemorySnippets(context, limit = 3) {
+  const memory = context?.athleteProfile?.coachMemory;
+  if (!Array.isArray(memory)) return [];
+  return memory
+    .map((item) => cleanCoachText(item?.text || item?.category || ""))
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function activePlanLabel(context) {
+  const training = context?.training || {};
+  return cleanCoachText(
+    context?.activePlanSummary?.name ||
+      training?.activePlan?.name ||
+      training?.activePlan?.title ||
+      normaliseList(training?.activePlans)[0]?.name ||
+      normaliseList(training?.activePlans)[0]?.title ||
+      ""
+  );
+}
+
+function appendMemoryContextLine(lines, context) {
+  const snippets = coachMemorySnippets(context);
+  if (snippets.length) {
+    lines.push("", `Relevant saved note: ${snippets.join(" | ")}.`);
+  }
+  return lines;
+}
+
 function buildWeeklyFocusFallbackReply(context) {
   const keySessions = keyWeeklySessionNames(context);
   const keyLine = keySessions.length
@@ -2979,56 +3148,108 @@ function buildWeeklyFocusFallbackReply(context) {
 
 function buildLocalCoachFallbackReply(message, context) {
   const text = normaliseText(message);
+  const intent = latestUserIntentHint(text);
   const sessionName = firstTodaySessionName(context);
   const todayPhrase = sessionName ? `today's ${sessionName} session` : "today's planned session";
+  const planName = activePlanLabel(context);
   const injuryReply = commonTrainingInjuryReply(text);
 
   if (injuryReply) {
-    return injuryReply;
+    return appendMemoryContextLine([injuryReply], context).join("\n");
   }
 
   if (isWeeklyFocusQuestion(text)) {
     return buildWeeklyFocusFallbackReply(context);
   }
 
+  if (intent === "fat_loss_performance") {
+    return appendMemoryContextLine(
+      [
+        "Aim for fat loss without letting training quality collapse.",
+        "",
+        "- Use a small calorie deficit, not an aggressive cut",
+        "- Keep protein high across the day",
+        "- Put most carbs around harder sessions",
+        "- Keep strength work consistent",
+        "- Track weekly weight trend, measurements, recovery, and performance",
+        "- If performance drops hard, bring calories or carbs back up slightly",
+      ],
+      context
+    ).join("\n");
+  }
+
+  if (intent === "post_training_nutrition" || intent === "general_nutrition") {
+    return [
+      "Prioritise simple fuelling first.",
+      "",
+      "- Protein: aim for a solid serving",
+      "- Carbs: add more if the session was hard, long, or you have quality work soon",
+      "- Fluids: rehydrate and add electrolytes if you sweated heavily",
+      "",
+      "Good options: Greek yoghurt with fruit, eggs on toast, chicken/rice/veg, a tuna wrap, or a protein shake plus banana.",
+    ].join("\n");
+  }
+
+  if (intent === "pre_run_fuelling") {
+    return [
+      "Fuel the run without making your stomach work too hard.",
+      "",
+      "- 2-3 hours before: a normal carb-based meal with some protein",
+      "- 30-60 minutes before: a small easy-carb snack if needed",
+      "- Avoid heavy, high-fat foods right before running",
+      "",
+      "Examples: toast and banana, oats, rice with lean protein, or a small cereal bar before shorter runs.",
+    ].join("\n");
+  }
+
   if (isGeneralTrainingAdviceQuestion(text)) {
     if (text.includes("5k") || text.includes("run faster") || text.includes("pace")) {
-      return [
-        "To improve your 5K, build the basics consistently.",
-        "",
-        "- Keep easy runs genuinely easy to build aerobic volume",
-        "- Do one quality speed or interval session each week",
-        "- Add tempo or threshold work for sustained pace",
-        "- Keep strength training consistent for durability",
-        "- Recover well so the quality sessions are actually high quality",
-      ].join("\n");
+      return appendMemoryContextLine(
+        [
+          "To improve your 5K, build the basics consistently.",
+          "",
+          "- Keep easy runs genuinely easy to build aerobic volume",
+          "- Do one quality speed or interval session each week",
+          "- Add tempo or threshold work for sustained pace",
+          "- Keep strength training consistent for durability",
+          "- Recover well so the quality sessions are actually high quality",
+        ],
+        context
+      ).join("\n");
     }
 
     if (text.includes("endurance")) {
-      return [
-        "Build endurance with steady consistency, not big jumps.",
-        "",
-        "- Increase easy aerobic volume gradually",
-        "- Keep one longer easy session most weeks",
-        "- Avoid turning every run into a hard run",
-        "- Sleep, fuel, and recover enough to absorb the work",
-      ].join("\n");
+      return appendMemoryContextLine(
+        [
+          "Build endurance with steady consistency, not big jumps.",
+          "",
+          "- Increase easy aerobic volume gradually",
+          "- Keep one longer easy session most weeks",
+          "- Avoid turning every run into a hard run",
+          "- Sleep, fuel, and recover enough to absorb the work",
+        ],
+        context
+      ).join("\n");
     }
 
     if (text.includes("stronger")) {
-      return [
-        "Get stronger by progressing the basics consistently.",
-        "",
-        "- Use good technique on key compound lifts",
-        "- Add load, reps, or sets gradually",
-        "- Keep enough protein in your day",
-        "- Recover well between hard sessions",
-      ].join("\n");
+      return appendMemoryContextLine(
+        [
+          "Get stronger by progressing the basics consistently.",
+          "",
+          "- Use good technique on key compound lifts",
+          "- Add load, reps, or sets gradually",
+          "- Keep enough protein in your day",
+          "- Recover well between hard sessions",
+        ],
+        context
+      ).join("\n");
     }
   }
 
   if (/\b\d+\s*(?:min|mins|minute|minutes)\b/.test(text) || text.includes("only have")) {
-    return [
+    return appendMemoryContextLine(
+      [
       "Use the time you have and keep it controlled.",
       "",
       `If ${todayPhrase} is still planned, do the highest-value part rather than rushing the whole thing:`,
@@ -3037,7 +3258,9 @@ function buildLocalCoachFallbackReply(message, context) {
       "- 5 min easy cooldown or mobility",
       "",
       "Skip accessories or extra volume today. Do not try to cram the full session into 30 minutes.",
-    ].join("\n");
+      ],
+      context
+    ).join("\n");
   }
 
   if (
@@ -3047,25 +3270,15 @@ function buildLocalCoachFallbackReply(message, context) {
     text.includes("bad sleep") ||
     text.includes("poor sleep")
   ) {
-    return [
+    return appendMemoryContextLine(
+      [
       "Adjust down rather than forcing it.",
       "",
       `If ${todayPhrase} is still planned, keep it easy-to-moderate, reduce volume, and avoid chasing intensity.`,
       "If you feel worse during the warm-up, switch to mobility, walking, or recovery.",
-    ].join("\n");
-  }
-
-  if (text.includes("eat") || text.includes("nutrition") || text.includes("meal") || text.includes("food")) {
-    return [
-      "After training, prioritise recovery basics.",
-      "",
-      "- Get a protein serving in",
-      "- Add carbs if the session was hard or long",
-      "- Rehydrate",
-      "- Keep the meal simple and repeatable",
-      "",
-      "A good default is lean protein plus rice, potatoes, pasta, oats, fruit, or bread.",
-    ].join("\n");
+      ],
+      context
+    ).join("\n");
   }
 
   if (text.includes("move") || text.includes("reschedule") || text.includes("tomorrow")) {
@@ -3087,11 +3300,18 @@ function buildLocalCoachFallbackReply(message, context) {
     ].join("\n");
   }
 
-  return [
-    "Use your current plan as the baseline and keep the next step conservative.",
-    "",
-    "If recovery is good, do the planned work. If time, sleep, soreness, or stress is limiting you, reduce volume first and keep the quality controlled.",
-  ].join("\n");
+  return appendMemoryContextLine(
+    [
+      "Answer the latest question directly and keep the next step practical.",
+      "",
+      planName
+        ? `Use ${planName} as context, but do not let it override what the user just asked.`
+        : "Use the available training context, but do not invent missing plan details.",
+      `For today, ${sessionName ? `${sessionName} is the key loaded session context` : "I do not have a specific loaded session name"}.`,
+      "If the user is asking for advice, give one conservative next step and one adjustment option.",
+    ],
+    context
+  ).join("\n");
 }
 
 function buildCoachChatFallbackResponse(message, context, error = null) {
@@ -3235,12 +3455,25 @@ export default function coachChatRoute(openai) {
 
       const memorySaveResponse = buildMemorySaveResponse(latestUserText);
       if (memorySaveResponse) {
-        return res.json(memorySaveResponse);
+        return sendCoachResponse(res, memorySaveResponse, {
+          responseSource: "action_card",
+          latestUserText,
+          context: mergedContext,
+        });
       }
 
       if (!openai) {
         console.warn("[coach-chat] OpenAI client not configured; returning local fallback.");
-        return res.json(buildCoachChatFallbackResponse(latestUserText, mergedContext));
+        return sendCoachResponse(
+          res,
+          buildCoachChatFallbackResponse(latestUserText, mergedContext),
+          {
+            responseSource: "local_fallback",
+            latestUserText,
+            context: mergedContext,
+            openAiError: new Error("OpenAI client not configured"),
+          }
+        );
       }
 
       const latestUserWithAttachment = [...trimmedMessages]
@@ -3249,24 +3482,40 @@ export default function coachChatRoute(openai) {
       if (latestUserWithAttachment) {
         const reply =
           "I've attached the image, but image analysis is not enabled yet. Describe what you want me to look at and I'll help from there.";
-        return res.json({
-          reply,
-          updatedPlan: null,
-          nutritionDraft: null,
-          coachActions: [],
-          raw: JSON.stringify({ reply, updatedPlan: null, nutritionDraft: null, coachActions: [] }),
-        });
+        return sendCoachResponse(
+          res,
+          {
+            reply,
+            updatedPlan: null,
+            nutritionDraft: null,
+            coachActions: [],
+            raw: JSON.stringify({ reply, updatedPlan: null, nutritionDraft: null, coachActions: [] }),
+          },
+          {
+            responseSource: "deterministic_summary",
+            latestUserText,
+            context: mergedContext,
+          }
+        );
       }
       const localNutritionDraft = createNutritionDraftFromText(latestUserText);
       if (localNutritionDraft) {
         const reply = `I prepared an estimate for ${localNutritionDraft.title}. Review it before adding it to today.`;
-        return res.json({
-          reply,
-          updatedPlan: null,
-          nutritionDraft: localNutritionDraft,
-          coachActions: [],
-          raw: JSON.stringify({ reply, updatedPlan: null, nutritionDraft: localNutritionDraft }),
-        });
+        return sendCoachResponse(
+          res,
+          {
+            reply,
+            updatedPlan: null,
+            nutritionDraft: localNutritionDraft,
+            coachActions: [],
+            raw: JSON.stringify({ reply, updatedPlan: null, nutritionDraft: localNutritionDraft }),
+          },
+          {
+            responseSource: "action_card",
+            latestUserText,
+            context: mergedContext,
+          }
+        );
       }
 
       const deterministicReply = tryDeterministicCoachReply(
@@ -3275,13 +3524,21 @@ export default function coachChatRoute(openai) {
       );
 
       if (deterministicReply) {
-        return res.json({
-          reply: deterministicReply,
-          updatedPlan: null,
-          nutritionDraft: null,
-          coachActions: [],
-          raw: JSON.stringify({ reply: deterministicReply, updatedPlan: null, nutritionDraft: null }),
-        });
+        return sendCoachResponse(
+          res,
+          {
+            reply: deterministicReply,
+            updatedPlan: null,
+            nutritionDraft: null,
+            coachActions: [],
+            raw: JSON.stringify({ reply: deterministicReply, updatedPlan: null, nutritionDraft: null }),
+          },
+          {
+            responseSource: deterministicResponseSource(latestUserText),
+            latestUserText,
+            context: mergedContext,
+          }
+        );
       }
 
       const systemPrompt = `
@@ -3477,7 +3734,7 @@ Allowed coachActions types:
       const liveContextFacts = buildLiveContextFacts(mergedContext);
       const openAiRequestStartedAt = Date.now();
       try {
-        const completion = await createCoachChatCompletionWithRetry({
+        const { completion, responseSource } = await createCoachChatCompletionWithRetry({
           openai,
           primaryModel: coachChatModel,
           fallbackModel: OPENAI_FALLBACK_MODEL,
@@ -3509,14 +3766,22 @@ Allowed coachActions types:
           ? parsed.coachActions.filter((action) => action && typeof action === "object")
           : [];
 
-        return res.json({
-          reply,
-          updatedPlan: updatedPlan && typeof updatedPlan === "object" ? updatedPlan : null,
-          nutritionDraft:
-            nutritionDraft && typeof nutritionDraft === "object" ? nutritionDraft : null,
-          coachActions,
-          raw,
-        });
+        return sendCoachResponse(
+          res,
+          {
+            reply,
+            updatedPlan: updatedPlan && typeof updatedPlan === "object" ? updatedPlan : null,
+            nutritionDraft:
+              nutritionDraft && typeof nutritionDraft === "object" ? nutritionDraft : null,
+            coachActions,
+            raw,
+          },
+          {
+            responseSource,
+            latestUserText,
+            context: mergedContext,
+          }
+        );
       } catch (openAiError) {
         const reply = buildLocalCoachFallbackReply(latestUserText, mergedContext);
         const raw = JSON.stringify({
@@ -3533,13 +3798,22 @@ Allowed coachActions types:
           fallbackBytes: byteSize(reply),
         });
 
-        return res.json({
-          reply,
-          updatedPlan: null,
-          nutritionDraft: null,
-          coachActions: [],
-          raw,
-        });
+        return sendCoachResponse(
+          res,
+          {
+            reply,
+            updatedPlan: null,
+            nutritionDraft: null,
+            coachActions: [],
+            raw,
+          },
+          {
+            responseSource: "local_fallback",
+            latestUserText,
+            context: mergedContext,
+            openAiError,
+          }
+        );
       }
     } catch (err) {
       console.error("[coach-chat] error:", err);
@@ -3551,7 +3825,12 @@ Allowed coachActions types:
           error: openAIErrorInfo(err),
           fallbackBytes: byteSize(payload.reply),
         });
-        return res.json(payload);
+        return sendCoachResponse(res, payload, {
+          responseSource: "local_fallback",
+          latestUserText: fallbackMessage,
+          context: fallbackContext,
+          openAiError: err,
+        });
       }
       return res.status(500).json({
         error: "Something went wrong in coach-chat.",
