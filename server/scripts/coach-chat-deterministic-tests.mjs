@@ -7,6 +7,8 @@ import {
   __coachChatNutritionDraftForTest,
   __coachChatMemorySaveForTest,
   __coachChatResponseDiagnosticsForTest,
+  __coachChatLiveContextFactsForTest,
+  __coachChatForegroundsTodayForTest,
 } from "../routes/coach-chat.js";
 
 const completedPushContext = {
@@ -473,6 +475,8 @@ for (const prompt of broadAiLedPrompts) {
 
 const aiFirstCategoryPrompts = [
   { prompt: "How can I improve my 5K time?", intent: "general_training_advice" },
+  { prompt: "How do I improve my running form?", intent: "general_training_advice" },
+  { prompt: "How should I structure strength training?", intent: "general_training_advice" },
   { prompt: "What should I eat after training?", intent: "post_training_nutrition" },
   { prompt: "I want to lose fat but keep performance", intent: "fat_loss_performance" },
   { prompt: "I'm tired today, should I train?", intent: "readiness_recovery" },
@@ -504,7 +508,54 @@ for (const testCase of aiFirstCategoryPrompts) {
     priority.instruction.includes("Answer the latest user message directly"),
     `${testCase.prompt}: latest-message priority instruction missing`
   );
+
+  if (
+    [
+      "general_training_advice",
+      "post_training_nutrition",
+      "fat_loss_performance",
+      "weekly_focus",
+    ].includes(testCase.intent)
+  ) {
+    assert.equal(
+      __coachChatForegroundsTodayForTest(testCase.prompt),
+      false,
+      `${testCase.prompt}: broad advice should not foreground today's session`
+    );
+    assert.ok(
+      priority.instruction.includes("Treat today's session as background context only"),
+      `${testCase.prompt}: should explicitly keep today's session in background:\n${priority.instruction}`
+    );
+  }
 }
+
+const liveFactsBroad = __coachChatLiveContextFactsForTest(
+  activePlanContext,
+  "How can I improve my 5K time?"
+);
+assert.equal(
+  liveFactsBroad.includes("Today's sessions:"),
+  false,
+  `broad live facts should not foreground today's sessions:\n${liveFactsBroad}`
+);
+assert.ok(
+  liveFactsBroad.includes("background only"),
+  `broad live facts should mark today/session context as background:\n${liveFactsBroad}`
+);
+
+const liveFactsToday = __coachChatLiveContextFactsForTest(
+  activePlanContext,
+  "What should I train today?"
+);
+assert.ok(
+  liveFactsToday.includes("Today's sessions:"),
+  `today-plan live facts should foreground today's sessions:\n${liveFactsToday}`
+);
+assert.equal(
+  __coachChatForegroundsTodayForTest("What should I train today?"),
+  true,
+  "direct today questions should foreground today's session"
+);
 
 const fallback5k = __coachChatLocalFallbackForTest(
   "How can I improve my 5K time?",

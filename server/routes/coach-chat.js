@@ -992,7 +992,34 @@ function isWeeklyFocusQuestion(text) {
 }
 
 function isGeneralTrainingAdviceQuestion(text) {
+  const asksHowOrAdvice =
+    text.includes("how ") ||
+    text.includes("how can") ||
+    text.includes("how do") ||
+    text.includes("what is the best way") ||
+    text.includes("tips") ||
+    text.includes("advice") ||
+    text.includes("structure") ||
+    text.includes("program");
+  const trainingTopic =
+    text.includes("running form") ||
+    text.includes("run form") ||
+    text.includes("running technique") ||
+    text.includes("technique") ||
+    text.includes("strength training") ||
+    text.includes("lifting") ||
+    text.includes("gym") ||
+    text.includes("mobility") ||
+    text.includes("conditioning") ||
+    text.includes("fitness") ||
+    text.includes("endurance") ||
+    text.includes("speed") ||
+    text.includes("pace") ||
+    text.includes("5k") ||
+    text.includes("stronger");
+
   return (
+    (asksHowOrAdvice && trainingTopic) ||
     text.includes("how can i improve my 5k") ||
     text.includes("how do i improve my 5k") ||
     text.includes("improve my 5k time") ||
@@ -1697,10 +1724,37 @@ function buildTodayPlanReply({ text, clock, training, todaySchedule }) {
   ].join("\n");
 }
 
-function buildLiveContextFacts(context) {
+function shouldForegroundTodayContext(message) {
+  const text = normaliseText(message);
+  if (!text) return false;
+  const intent = latestUserIntentHint(text);
+  if (["limited_time", "readiness_recovery", "schedule_reschedule"].includes(intent)) {
+    return true;
+  }
+  if (
+    text.includes("today") ||
+    text.includes("tonight") ||
+    text.includes("this morning") ||
+    text.includes("this afternoon") ||
+    text.includes("current session") ||
+    text.includes("current workout") ||
+    text.includes("today's session") ||
+    text.includes("todays session") ||
+    text.includes("today's workout") ||
+    text.includes("todays workout") ||
+    text.includes("what should i train") ||
+    text.includes("what do i have")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function buildLiveContextFacts(context, latestUserText = "") {
   const lines = [];
   const clock = context?.clock || null;
   const training = context?.training || {};
+  const foregroundToday = shouldForegroundTodayContext(latestUserText);
   const todaySchedule = Array.isArray(training?.todaySchedule)
     ? training.todaySchedule.filter(Boolean)
     : [];
@@ -1744,11 +1798,15 @@ function buildLiveContextFacts(context) {
     );
   }
 
-  if (todaySchedule.length) {
+  if (todaySchedule.length && foregroundToday) {
     const completedToday = todayCompletedSessions(training, clock);
     const { rows } = buildTodaySessionState(todaySchedule, completedToday);
     lines.push(`Today's sessions: ${rows.map(formatTodayRow).join(" | ")}`);
-  } else if (clock?.todayLabel) {
+  } else if (todaySchedule.length) {
+    lines.push(
+      "Today/session context exists in USER_CONTEXT_JSON but is background only for this latest question; do not open with today's session unless directly relevant."
+    );
+  } else if (clock?.todayLabel && foregroundToday) {
     lines.push("Today's sessions: none scheduled in the loaded plan.");
   }
 
@@ -2328,6 +2386,14 @@ export function __coachChatResponseDiagnosticsForTest({
   });
 }
 
+export function __coachChatLiveContextFactsForTest(context, latestUserText = "") {
+  return buildLiveContextFacts(context, latestUserText);
+}
+
+export function __coachChatForegroundsTodayForTest(message) {
+  return shouldForegroundTodayContext(message);
+}
+
 function safeStringify(value, maxChars = 16000) {
   try {
     const json = JSON.stringify(value, null, 2);
@@ -2625,6 +2691,7 @@ function buildRecentConversationContext(trimmedMessages, latestUserText, limit =
 
 function latestUserPriorityInstruction(latestUserText) {
   const intent = latestUserIntentHint(latestUserText);
+  const foregroundToday = shouldForegroundTodayContext(latestUserText);
   const isNutritionIntent = [
     "post_training_nutrition",
     "fat_loss_performance",
@@ -2640,6 +2707,14 @@ function latestUserPriorityInstruction(latestUserText) {
     "- Answer the latest user intent. Do not reuse the format, topic, or recommendation from the previous assistant reply unless the latest message asks for a follow-up.",
     `- Latest user intent hint: ${intent}.`,
   ];
+
+  if (!foregroundToday) {
+    lines.push(
+      "- The latest message is not primarily asking about today's session. Treat today's session as background context only.",
+      "- Do not start by describing today's workout/session.",
+      "- Mention today's session only if it genuinely improves the answer after answering the user's actual question."
+    );
+  }
 
   if (isNutritionIntent) {
     lines.push(
@@ -3152,6 +3227,7 @@ function buildLocalCoachFallbackReply(message, context) {
   const sessionName = firstTodaySessionName(context);
   const todayPhrase = sessionName ? `today's ${sessionName} session` : "today's planned session";
   const planName = activePlanLabel(context);
+  const foregroundToday = shouldForegroundTodayContext(text);
   const injuryReply = commonTrainingInjuryReply(text);
 
   if (injuryReply) {
@@ -3307,9 +3383,11 @@ function buildLocalCoachFallbackReply(message, context) {
       planName
         ? `Use ${planName} as context, but do not let it override what the user just asked.`
         : "Use the available training context, but do not invent missing plan details.",
-      `For today, ${sessionName ? `${sessionName} is the key loaded session context` : "I do not have a specific loaded session name"}.`,
+      foregroundToday && sessionName
+        ? `For today, ${sessionName} is the key loaded session context.`
+        : null,
       "If the user is asking for advice, give one conservative next step and one adjustment option.",
-    ],
+    ].filter(Boolean),
     context
   ).join("\n");
 }
@@ -3731,7 +3809,7 @@ Allowed coachActions types:
 - memory_save: proposed coach memory. Payload must include text and category.
       `.trim();
 
-      const liveContextFacts = buildLiveContextFacts(mergedContext);
+      const liveContextFacts = buildLiveContextFacts(mergedContext, latestUserText);
       const openAiRequestStartedAt = Date.now();
       try {
         const { completion, responseSource } = await createCoachChatCompletionWithRetry({
