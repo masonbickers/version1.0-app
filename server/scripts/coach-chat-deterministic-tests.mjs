@@ -356,6 +356,11 @@ const memorySaveCases = [
     category: "injury",
   },
   {
+    prompt: "Save that my knee gets sore after hills",
+    includes: "Knee gets sore after hills",
+    category: "injury",
+  },
+  {
     prompt: "Remember that I prefer morning workouts",
     includes: "I prefer morning workouts",
     category: "preference",
@@ -363,6 +368,11 @@ const memorySaveCases = [
   {
     prompt: "Note that I hate treadmill runs",
     includes: "I hate treadmill runs",
+    category: "preference",
+  },
+  {
+    prompt: "Keep in mind that I train better after breakfast",
+    includes: "I train better after breakfast",
     category: "preference",
   },
 ];
@@ -381,8 +391,12 @@ for (const testCase of memorySaveCases) {
     `${testCase.prompt}: memory requests should not update the plan`
   );
   assert.ok(
-    response.reply.includes("coach note"),
-    `${testCase.prompt}: should tell the user a coach note can be saved:\n${response.reply}`
+    response.reply.startsWith("Saved"),
+    `${testCase.prompt}: should confirm the coach note was saved:\n${response.reply}`
+  );
+  assert.ok(
+    response.reply.includes(testCase.includes[0].toLowerCase() + testCase.includes.slice(1)),
+    `${testCase.prompt}: confirmation should include saved memory text:\n${response.reply}`
   );
   assert.equal(
     response.reply.includes("Use your current plan as the baseline"),
@@ -397,7 +411,9 @@ for (const testCase of memorySaveCases) {
 
   const action = response.coachActions[0];
   assert.equal(action.type, "memory_save", `${testCase.prompt}: expected memory_save action`);
-  assert.equal(action.status, "pending", `${testCase.prompt}: expected pending action`);
+  assert.equal(action.status, "pending", `${testCase.prompt}: backend should mark action pending until the app write succeeds`);
+  assert.equal(action.autoApply, true, `${testCase.prompt}: explicit memory command should auto-apply`);
+  assert.equal(action.title, "Coach memory saved", `${testCase.prompt}: expected saved-memory action title`);
   assert.ok(
     action.summary.includes(testCase.includes),
     `${testCase.prompt}: expected action summary to include ${testCase.includes}, got ${action.summary}`
@@ -421,8 +437,29 @@ for (const testCase of memorySaveCases) {
     `${testCase.prompt}: expected memory_save latest-message intent`
   );
   assert.ok(
-    priority.instruction.includes("explicit memory-save request"),
-    `${testCase.prompt}: latest-priority instruction should identify memory save intent`
+    priority.instruction.includes("autoApply true"),
+    `${testCase.prompt}: latest-priority instruction should identify auto-save intent`
+  );
+}
+
+const casualMemoryLikePrompts = [
+  "I usually train better in the morning",
+  "My knee gets sore after hills",
+  "I hate treadmill runs",
+];
+
+for (const prompt of casualMemoryLikePrompts) {
+  const response = __coachChatMemorySaveForTest(prompt);
+  assert.equal(
+    response,
+    null,
+    `${prompt}: casual memory-like statements should not auto-save without explicit remember/save/note language`
+  );
+  const priority = __coachChatLatestPriorityForTest([{ role: "user", content: prompt }]);
+  assert.notEqual(
+    priority.intent,
+    "memory_save",
+    `${prompt}: casual memory-like statements should not be classified as memory_save`
   );
 }
 
@@ -620,6 +657,30 @@ assert.ok(
 assert.ok(
   Array.isArray(broadRunningContext.training?.activePlans),
   "broad advice should keep active plan background"
+);
+
+const futureMemoryContext = __coachChatContextForLatestMessageForTest(
+  {
+    ...activePlanContext,
+    athleteProfile: {
+      coachMemory: [
+        {
+          id: "saved-memory-morning",
+          text: "I prefer morning workouts",
+          category: "preference",
+          source: "coach_chat",
+          active: true,
+        },
+      ],
+    },
+  },
+  "How should I structure my week?"
+);
+assert.ok(
+  futureMemoryContext.athleteProfile?.coachMemory?.some((memory) =>
+    String(memory?.text || "").includes("I prefer morning workouts")
+  ),
+  "saved coach memory should remain available in future coach context"
 );
 
 const nutritionContext = __coachChatContextForLatestMessageForTest(

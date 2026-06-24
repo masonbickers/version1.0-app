@@ -719,13 +719,14 @@ function buildMemorySaveResponse(message) {
   const memoryText = extractMemorySaveText(message);
   if (!memoryText) return null;
   const category = memorySaveCategory(memoryText);
-  const reply = `I can save this as a coach note: ${memoryText[0].toLowerCase()}${memoryText.slice(1)}.`;
+  const reply = `Saved — I'll remember that ${memoryText[0].toLowerCase()}${memoryText.slice(1)}.`;
   const coachActions = [
     {
       id: "memory-save-1",
       type: "memory_save",
       status: "pending",
-      title: "Save to coach memory?",
+      autoApply: true,
+      title: "Coach memory saved",
       summary: memoryText,
       reason: "Saving this helps the coach personalise future training advice.",
       payload: {
@@ -2921,7 +2922,7 @@ function latestUserPriorityInstruction(latestUserText) {
   if (intent === "memory_save") {
     lines.push(
       "- This is an explicit memory-save request. Do not answer with generic coaching advice.",
-      "- Return a memory_save coachAction with the note text and ask the user to approve saving it."
+      "- Return a memory_save coachAction with autoApply true so the app saves it immediately."
     );
   }
 
