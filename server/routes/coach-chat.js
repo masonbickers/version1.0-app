@@ -1755,11 +1755,18 @@ function shouldForegroundTodayContext(message) {
   return false;
 }
 
+function shouldUseBroadAdviceContext(message) {
+  const text = normaliseText(message);
+  if (!text) return false;
+  return latestUserIntentHint(text) === "general_training_advice" && !shouldForegroundTodayContext(text);
+}
+
 function buildLiveContextFacts(context, latestUserText = "") {
   const lines = [];
   const clock = context?.clock || null;
   const training = context?.training || {};
   const foregroundToday = shouldForegroundTodayContext(latestUserText);
+  const broadAdviceContext = shouldUseBroadAdviceContext(latestUserText);
   const todaySchedule = Array.isArray(training?.todaySchedule)
     ? training.todaySchedule.filter(Boolean)
     : [];
@@ -1801,6 +1808,13 @@ function buildLiveContextFacts(context, latestUserText = "") {
         )
         .join(" | ")}`
     );
+  }
+
+  if (broadAdviceContext) {
+    lines.push(
+      "Broad advice mode: answer the user's training topic directly. Today, tomorrow, week schedule, recent sessions, and nutrition context are intentionally not foregrounded."
+    );
+    return lines.join("\n");
   }
 
   if (todaySchedule.length && foregroundToday) {
@@ -2454,15 +2468,67 @@ function hasActivePlanContext(context) {
   );
 }
 
+function hasNutritionContext(context) {
+  return !!context?.nutrition;
+}
+
+function hasTodaySessionContext(context) {
+  const training = context?.training || {};
+  return !!(
+    training?.todaySession ||
+    (Array.isArray(training?.todaySchedule) && training.todaySchedule.length)
+  );
+}
+
+function addDaysIso(isoDate, days) {
+  if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate))) return null;
+  const date = new Date(`${isoDate}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function sessionMatchesIsoDate(session, isoDate) {
+  if (!session || !isoDate) return false;
+  return [
+    session?.isoDate,
+    session?.date,
+    session?.dateKey,
+    session?.scheduledDate,
+    session?.startDate,
+  ].some((value) => String(value || "").slice(0, 10) === isoDate);
+}
+
+function hasTomorrowSessionContext(context) {
+  const training = context?.training || {};
+  const tomorrowIso = addDaysIso(context?.clock?.todayIso, 1);
+  if (
+    training?.tomorrowSession ||
+    (Array.isArray(training?.tomorrowSchedule) && training.tomorrowSchedule.length)
+  ) {
+    return true;
+  }
+  return ["currentWeekSchedule", "exactSchedule", "upcomingSessions"].some((key) =>
+    Array.isArray(training?.[key])
+      ? training[key].some((session) => sessionMatchesIsoDate(session, tomorrowIso))
+      : false
+  );
+}
+
 function coachResponseDiagnostics({
   responseSource,
   latestUserText,
   context,
   openAiError = null,
 }) {
+  const highPriorityContext = contextForLatestMessage(context, null, latestUserText, false);
   return {
     responseSource,
     detectedIntent: latestUserIntentHint(latestUserText),
+    foregroundTodayContext: shouldForegroundTodayContext(latestUserText),
+    nutritionContextIncluded: hasNutritionContext(highPriorityContext),
+    todaySessionIncludedInHighPriorityContext: hasTodaySessionContext(highPriorityContext),
+    tomorrowSessionIncludedInHighPriorityContext: hasTomorrowSessionContext(highPriorityContext),
     coachMemoryIncluded: hasCoachMemoryContext(context),
     activePlanIncluded: hasActivePlanContext(context),
     latestMessagePrioritised: true,
@@ -2494,6 +2560,12 @@ function withCoachResponseMetadata(payload, diagnostics) {
     }),
     responseSource: diagnostics.responseSource,
     detectedIntent: diagnostics.detectedIntent,
+    foregroundTodayContext: diagnostics.foregroundTodayContext,
+    nutritionContextIncluded: diagnostics.nutritionContextIncluded,
+    todaySessionIncludedInHighPriorityContext:
+      diagnostics.todaySessionIncludedInHighPriorityContext,
+    tomorrowSessionIncludedInHighPriorityContext:
+      diagnostics.tomorrowSessionIncludedInHighPriorityContext,
     coachMemoryIncluded: diagnostics.coachMemoryIncluded,
     activePlanIncluded: diagnostics.activePlanIncluded,
     latestMessagePrioritised: diagnostics.latestMessagePrioritised,
@@ -2564,21 +2636,28 @@ function isNutritionIntentHint(intent) {
 }
 
 function contextForLatestMessage(context, planSummary = null, latestUserText = "", compact = false) {
-  const intent = latestUserIntentHint(latestUserText);
   const base = compact ? compactCoachContext(context, planSummary) : clonePlainObject(context || {});
   const shaped = clonePlainObject(base || {});
 
-  if (intent === "general_training_advice") {
-    if (shaped?.training && !shouldForegroundTodayContext(latestUserText)) {
-      delete shaped.training.todaySession;
-      delete shaped.training.todaySchedule;
+  if (shouldUseBroadAdviceContext(latestUserText)) {
+    const training = shaped?.training || {};
+    const activePlanBackground = {};
+    if (training?.activePlan) activePlanBackground.activePlan = training.activePlan;
+    if (Array.isArray(training?.activePlans) && training.activePlans.length) {
+      activePlanBackground.activePlans = training.activePlans.slice(0, 3);
     }
-    if (!isNutritionIntentHint(intent)) {
-      delete shaped.nutrition;
-    }
+    shaped.training = activePlanBackground;
+    delete shaped.nutrition;
   }
 
   return shaped;
+}
+
+function planForLatestMessage(plan, planSummary = null, latestUserText = "", compact = false) {
+  if (compact || shouldUseBroadAdviceContext(latestUserText)) {
+    return compactPlanForCoach(plan, planSummary);
+  }
+  return plan;
 }
 
 function compactPlanForCoach(plan, planSummary = null) {
@@ -2879,7 +2958,7 @@ function buildCoachChatMessages({
     latestUserText,
     compact
   );
-  const planForModel = compact ? compactPlanForCoach(plan, planSummary) : plan;
+  const planForModel = planForLatestMessage(plan, planSummary, latestUserText, compact);
   const contextLimit = compact ? 5500 : 14000;
   const planLimit = compact ? 4500 : 18000;
   const messageLimit = compact ? 8 : 20;

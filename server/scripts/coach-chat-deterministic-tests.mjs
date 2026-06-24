@@ -533,6 +533,17 @@ for (const testCase of aiFirstCategoryPrompts) {
 
 const broadAdviceContext = {
   ...activePlanWithMemoryContext,
+  training: {
+    ...activePlanWithMemoryContext.training,
+    todaySession: { title: "Speed Run - 6 x 800m", type: "run" },
+    tomorrowSession: { title: "Upper 2 - Strength", durationMin: 38 },
+    tomorrowSchedule: [{ title: "Upper 2 - Strength", durationMin: 38 }],
+    exactSchedule: [
+      { isoDate: "2026-06-23", title: "Lower 1 - Strength + Run Durability" },
+      { isoDate: "2026-06-24", title: "Upper 2 - Strength" },
+    ],
+    upcomingSessions: [{ isoDate: "2026-06-24", title: "Upper 2 - Strength" }],
+  },
   nutrition: {
     targets: { calories: 2800, proteinG: 170 },
     today: { calories: 1600, proteinG: 95, carbsG: 180, fatG: 45 },
@@ -575,6 +586,31 @@ assert.equal(
   false,
   "broad non-nutrition advice should remove nutrition from high-priority model context"
 );
+assert.equal(
+  Boolean(broadRunningContext.training?.tomorrowSession),
+  false,
+  "broad running advice should remove tomorrowSession from high-priority model context"
+);
+assert.equal(
+  Boolean(broadRunningContext.training?.tomorrowSchedule),
+  false,
+  "broad running advice should remove tomorrowSchedule from high-priority model context"
+);
+assert.equal(
+  Boolean(broadRunningContext.training?.currentWeekSchedule),
+  false,
+  "broad running advice should remove week schedule from high-priority model context"
+);
+assert.equal(
+  Boolean(broadRunningContext.training?.exactSchedule),
+  false,
+  "broad running advice should remove exact schedule from high-priority model context"
+);
+assert.equal(
+  Boolean(broadRunningContext.training?.upcomingSessions),
+  false,
+  "broad running advice should remove upcoming sessions from high-priority model context"
+);
 assert.ok(
   broadRunningContext.athleteProfile?.coachMemory?.some((memory) =>
     String(memory?.text || "").toLowerCase().includes("knee gets sore after hills")
@@ -582,8 +618,8 @@ assert.ok(
   "broad advice should keep saved memory available for relevant personalisation"
 );
 assert.ok(
-  Array.isArray(broadRunningContext.training?.currentWeekSchedule),
-  "broad advice should keep active/week plan context as background"
+  Array.isArray(broadRunningContext.training?.activePlans),
+  "broad advice should keep active plan background"
 );
 
 const nutritionContext = __coachChatContextForLatestMessageForTest(
@@ -599,6 +635,26 @@ assert.ok(
   "nutrition prompts can keep today context for personalisation"
 );
 
+const liveFactsBroadRunning = __coachChatLiveContextFactsForTest(
+  broadAdviceContext,
+  "How should I get better at hill running?"
+);
+assert.equal(
+  liveFactsBroadRunning.includes("Today's sessions:"),
+  false,
+  `broad running live facts should not include today sessions:\n${liveFactsBroadRunning}`
+);
+assert.equal(
+  liveFactsBroadRunning.includes("This week:"),
+  false,
+  `broad running live facts should not include week/tomorrow session details:\n${liveFactsBroadRunning}`
+);
+assert.equal(
+  /Upper 2|Speed Run|6 x 800m/i.test(liveFactsBroadRunning),
+  false,
+  `broad running live facts should not include specific today/tomorrow sessions:\n${liveFactsBroadRunning}`
+);
+
 const liveFactsBroad = __coachChatLiveContextFactsForTest(
   activePlanContext,
   "How can I improve my 5K time?"
@@ -609,7 +665,7 @@ assert.equal(
   `broad live facts should not foreground today's sessions:\n${liveFactsBroad}`
 );
 assert.ok(
-  liveFactsBroad.includes("background only"),
+  liveFactsBroad.includes("intentionally not foregrounded"),
   `broad live facts should mark today/session context as background:\n${liveFactsBroad}`
 );
 
