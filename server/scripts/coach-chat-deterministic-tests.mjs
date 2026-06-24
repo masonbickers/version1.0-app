@@ -730,6 +730,25 @@ assert.equal(
   true,
   "diagnostics should mark latest message priority"
 );
+assert.equal(
+  diagnostics.nutritionContextIncluded,
+  false,
+  "diagnostics should show nutrition excluded for non-nutrition broad advice"
+);
+
+const nonNutritionContext = __coachChatContextForLatestMessageForTest(
+  broadAdviceContext,
+  "I'm tired today, should I train?"
+);
+assert.equal(
+  Boolean(nonNutritionContext.nutrition),
+  false,
+  "non-nutrition adaptation prompts should omit nutrition from high-priority model context"
+);
+assert.ok(
+  nonNutritionContext.training?.todaySchedule,
+  "today adaptation prompts should keep today schedule context"
+);
 
 const activePlanPrompts = [
   "What plan am I currently on?",
@@ -824,6 +843,8 @@ for (const prompt of weeklyFocusPrompts) {
 
 const generalTrainingAdvicePrompts = [
   "How can I improve my 5K time?",
+  "How can I improve my running form?",
+  "How should I get better at hill running?",
   "How do I run faster?",
   "How can I build endurance?",
   "How do I get stronger?",
@@ -867,6 +888,38 @@ for (const prompt of generalTrainingAdvicePrompts) {
     );
   }
 }
+
+const fallbackRunningForm = __coachChatLocalFallbackForTest(
+  "How can I improve my running form?",
+  activePlanWithMemoryContext
+);
+assert.ok(
+  fallbackRunningForm.includes("Improve running form"),
+  `running-form fallback should answer directly:\n${fallbackRunningForm}`
+);
+assert.equal(
+  fallbackRunningForm.includes("today's"),
+  false,
+  `running-form fallback should not foreground today's session:\n${fallbackRunningForm}`
+);
+
+const fallbackHillRunning = __coachChatLocalFallbackForTest(
+  "How should I get better at hill running?",
+  activePlanWithMemoryContext
+);
+assert.ok(
+  fallbackHillRunning.includes("Get better at hills"),
+  `hill-running fallback should answer directly:\n${fallbackHillRunning}`
+);
+assert.ok(
+  fallbackHillRunning.includes("Relevant saved note: Knee gets sore after hills."),
+  `hill-running fallback should include relevant saved memory:\n${fallbackHillRunning}`
+);
+assert.equal(
+  fallbackHillRunning.includes("nutrition"),
+  false,
+  `hill-running fallback should not introduce nutrition:\n${fallbackHillRunning}`
+);
 
 const forcedAiFailureFallback = __coachChatRouteFallbackForTest(
   "How can I improve my 5K time?",

@@ -75,6 +75,30 @@ Required environment:
 - Test user can sign in and receive a Firebase ID token.
 - Firebase Storage rules allow authenticated image upload/read for chat attachments.
 
+## Repeatable Prompt Harness
+
+Run deterministic/static Coach Chat checks:
+
+```bash
+node server/scripts/coach-chat-deterministic-tests.mjs
+```
+
+Run the category prompt harness in offline fallback/diagnostic mode:
+
+```bash
+node server/scripts/coach-chat-live-prompt-tests.mjs
+```
+
+Run the same category harness against an authenticated `/coach-chat` endpoint:
+
+```bash
+COACH_CHAT_URL=http://localhost:3000/coach-chat \
+COACH_CHAT_AUTH_TOKEN=<firebase-id-token> \
+node server/scripts/coach-chat-live-prompt-tests.mjs
+```
+
+The harness prints each prompt, response source, detected intent, route path, whether today/nutrition/memory context was included, a reply preview, and pass/fail notes.
+
 Preferred devices:
 
 - iOS Simulator or physical iPhone for primary UI checks.

@@ -2650,9 +2650,17 @@ function isNutritionIntentHint(intent) {
   ].includes(intent);
 }
 
+function shouldIncludeNutritionContext(latestUserText) {
+  return isNutritionIntentHint(latestUserIntentHint(latestUserText));
+}
+
 function contextForLatestMessage(context, planSummary = null, latestUserText = "", compact = false) {
   const base = compact ? compactCoachContext(context, planSummary) : clonePlainObject(context || {});
   const shaped = clonePlainObject(base || {});
+
+  if (!shouldIncludeNutritionContext(latestUserText)) {
+    delete shaped.nutrition;
+  }
 
   if (shouldUseBroadAdviceContext(latestUserText)) {
     const training = shaped?.training || {};
@@ -2662,7 +2670,6 @@ function contextForLatestMessage(context, planSummary = null, latestUserText = "
       activePlanBackground.activePlans = training.activePlans.slice(0, 3);
     }
     shaped.training = activePlanBackground;
-    delete shaped.nutrition;
   }
 
   return shaped;
@@ -2831,6 +2838,38 @@ function buildRecentConversationContext(trimmedMessages, latestUserText, limit =
     }));
 
   return priorMessages;
+}
+
+function contextBoundaryInstruction(latestUserText) {
+  const intent = latestUserIntentHint(latestUserText);
+  const includeNutrition = shouldIncludeNutritionContext(latestUserText);
+  const foregroundToday = shouldForegroundTodayContext(latestUserText);
+  const lines = [
+    "CONTEXT_BOUNDARIES:",
+    "- The final user message is the task. Other context can personalise the answer, but must not become the answer.",
+  ];
+
+  if (!includeNutrition) {
+    lines.push(
+      "- Nutrition context has been omitted or should be ignored because the latest message is not asking about food, fuelling, macros, body composition, or diet.",
+      "- Do not add nutrition, calories, protein, carbs, hydration, or meal advice unless it directly answers the latest message."
+    );
+  }
+
+  if (!foregroundToday) {
+    lines.push(
+      "- Today/session context is background only for this latest message.",
+      "- Do not open with today's session or turn broad coaching advice into today's workout summary."
+    );
+  }
+
+  if (intent === "general_training_advice") {
+    lines.push(
+      "- For broad training advice, lead with the training principle and practical drills/progression for the requested topic."
+    );
+  }
+
+  return lines.join("\n");
 }
 
 function previousConversationHasLimitedTimePrompt(trimmedMessages, latestUserText) {
@@ -3028,6 +3067,10 @@ function buildCoachChatMessages({
           },
         ]
       : []),
+    {
+      role: "system",
+      content: contextBoundaryInstruction(latestUserText),
+    },
     {
       role: "system",
       content: latestUserPriorityInstruction(latestUserText),
@@ -3436,6 +3479,18 @@ function buildLocalCoachFallbackReply(message, context) {
     ].join("\n");
   }
 
+  if (intent === "protein_target") {
+    return [
+      "Hit protein by spreading it across the day instead of saving it all for dinner.",
+      "",
+      "- Aim for 3-5 protein servings across the day",
+      "- Use simple anchors: eggs, Greek yoghurt, chicken, fish, lean meat, tofu, beans, or whey",
+      "- Put 25-40g protein in main meals when possible",
+      "- Add an easy top-up snack if you are short: yoghurt, shake, cottage cheese, tuna, or jerky",
+      "- Keep carbs around training so performance does not suffer",
+    ].join("\n");
+  }
+
   if (intent === "pre_run_fuelling") {
     return [
       "Fuel the run without making your stomach work too hard.",
@@ -3449,6 +3504,38 @@ function buildLocalCoachFallbackReply(message, context) {
   }
 
   if (isGeneralTrainingAdviceQuestion(text)) {
+    if (text.includes("form") || text.includes("technique")) {
+      return appendMemoryContextLine(
+        [
+          "Improve running form by making it relaxed, quick, and repeatable.",
+          "",
+          "- Run tall with a slight forward lean from the ankles",
+          "- Keep your cadence light and avoid overstriding",
+          "- Let your arms swing back and forward, not across your body",
+          "- Add short strides after easy runs to practise smooth mechanics",
+          "- Use drills like A-skips, high knees, and fast feet in warm-ups",
+          "- Change one cue at a time so it becomes natural",
+        ],
+        context
+      ).join("\n");
+    }
+
+    if (text.includes("hill")) {
+      return appendMemoryContextLine(
+        [
+          "Get better at hills by combining technique, strength, and controlled exposure.",
+          "",
+          "- Shorten your stride and keep cadence quick on climbs",
+          "- Lean slightly from the ankles, not by folding at the waist",
+          "- Drive the arms to help rhythm without sprinting too early",
+          "- Start with short hill reps or rolling routes once a week",
+          "- Jog or walk down easy so the quality stays high",
+          "- Build gradually; do not turn every hilly run into a race",
+        ],
+        context
+      ).join("\n");
+    }
+
     if (text.includes("5k") || text.includes("run faster") || text.includes("pace")) {
       return appendMemoryContextLine(
         [
@@ -3491,6 +3578,19 @@ function buildLocalCoachFallbackReply(message, context) {
         context
       ).join("\n");
     }
+  }
+
+  if (text.includes("missed") || text.includes("skipped")) {
+    return appendMemoryContextLine(
+      [
+        "Do not try to make up a missed session by cramming extra hard work in.",
+        "",
+        `If ${todayPhrase} was missed, either move the key part to the next easy/rest day or continue with the next planned session.`,
+        "Keep the next hard workout high quality rather than stacking fatigue.",
+        "If missing sessions is becoming a pattern, reduce the week slightly instead of chasing the plan.",
+      ],
+      context
+    ).join("\n");
   }
 
   if (/\b\d+\s*(?:min|mins|minute|minutes)\b/.test(text) || text.includes("only have")) {
