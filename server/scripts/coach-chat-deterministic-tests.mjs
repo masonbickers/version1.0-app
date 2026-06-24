@@ -1383,6 +1383,86 @@ assert.equal(
   "previous memory-save turn should not be sent as active background conversation"
 );
 
+const speedSafelyPriority = __coachChatLatestPriorityForTest([
+  {
+    role: "user",
+    content: "How can I get faster without getting injured?",
+  },
+]);
+assert.equal(
+  speedSafelyPriority.intent,
+  "general_training_advice",
+  "broad speed plus injury-prevention question should be general training advice"
+);
+assert.ok(
+  speedSafelyPriority.instruction.includes("saved memory as a brief modifier only"),
+  "broad training instruction should keep saved memory as a modifier"
+);
+assert.ok(
+  speedSafelyPriority.instruction.includes("broad speed development plus injury prevention"),
+  "broad speed-safety instruction should cover the full performance topic"
+);
+
+const speedSafelyFallback = __coachChatLocalFallbackForTest(
+  "How can I get faster without getting injured?",
+  activePlanWithMemoryContext
+);
+assert.ok(
+  /Build speed|quality sessions|Progress/i.test(speedSafelyFallback),
+  `speed-safely fallback should answer broad performance first:\n${speedSafelyFallback}`
+);
+assert.ok(
+  /Brief modifier from saved memory: Knee gets sore after hills/i.test(speedSafelyFallback),
+  `speed-safely fallback should mention relevant memory briefly:\n${speedSafelyFallback}`
+);
+assert.ok(
+  /easy runs|quality sessions|strength training|deloads|Back off/i.test(speedSafelyFallback),
+  `speed-safely fallback should include broad injury-prevention and speed principles:\n${speedSafelyFallback}`
+);
+assert.ok(
+  (speedSafelyFallback.match(/\bknee\b|\bhill(?:s)?\b/gi) || []).length <= 2,
+  `speed-safely fallback should not be dominated by knee/hill memory:\n${speedSafelyFallback}`
+);
+assert.equal(
+  /protein|calorie|meal|nutrition/i.test(speedSafelyFallback),
+  false,
+  `speed-safely fallback should not introduce nutrition:\n${speedSafelyFallback}`
+);
+
+const heavyLegsPriority = __coachChatLatestPriorityForTest([
+  {
+    role: "user",
+    content: "What should I do if my legs feel heavy?",
+  },
+]);
+assert.equal(
+  heavyLegsPriority.intent,
+  "readiness_recovery",
+  "heavy-legs question should be readiness/recovery"
+);
+assert.ok(
+  heavyLegsPriority.instruction.includes("Do not open with today's workout/session"),
+  "readiness instruction should prevent opening with today's session"
+);
+assert.ok(
+  heavyLegsPriority.instruction.includes("warm up easily"),
+  "readiness instruction should start with assessment and downgrade logic"
+);
+
+const heavyLegsFallback = __coachChatLocalFallbackForTest(
+  "What should I do if my legs feel heavy?",
+  activePlanWithMemoryContext
+);
+assert.equal(
+  /^today|^speed|^if today's/i.test(heavyLegsFallback.trim()),
+  false,
+  `heavy-legs fallback should not start with today's session:\n${heavyLegsFallback}`
+);
+assert.ok(
+  /readiness|warm-up|downgrade|easy running|recovery|Reduce intensity/i.test(heavyLegsFallback),
+  `heavy-legs fallback should give downgrade/recovery advice:\n${heavyLegsFallback}`
+);
+
 const scheduleMovePrompts = [
   "Can I move today's session to tomorrow?",
   "Can I do today’s workout tomorrow instead?",

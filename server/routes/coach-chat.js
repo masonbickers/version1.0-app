@@ -1020,8 +1020,10 @@ function isGeneralTrainingAdviceQuestion(text) {
     text.includes("fitness") ||
     text.includes("endurance") ||
     text.includes("speed") ||
+    text.includes("faster") ||
     text.includes("pace") ||
     text.includes("5k") ||
+    text.includes("injured") ||
     text.includes("stronger");
 
   return (
@@ -1034,6 +1036,9 @@ function isGeneralTrainingAdviceQuestion(text) {
     text.includes("run a faster 5k") ||
     text.includes("how do i run faster") ||
     text.includes("how can i run faster") ||
+    text.includes("how do i get faster") ||
+    text.includes("how can i get faster") ||
+    text.includes("build speed safely") ||
     text.includes("how can i build endurance") ||
     text.includes("how do i build endurance") ||
     text.includes("build endurance") ||
@@ -2655,6 +2660,32 @@ function shouldIncludeNutritionContext(latestUserText) {
   return isNutritionIntentHint(latestUserIntentHint(latestUserText));
 }
 
+function isReadinessRecoveryPrompt(text) {
+  const clean = normaliseText(text);
+  if (!clean) return false;
+  return (
+    clean.includes("tired") ||
+    clean.includes("fatigued") ||
+    clean.includes("fatigue") ||
+    clean.includes("slept badly") ||
+    clean.includes("bad sleep") ||
+    clean.includes("poor sleep") ||
+    clean.includes("run down") ||
+    clean.includes("rundown") ||
+    clean.includes("feel flat") ||
+    clean.includes("feeling flat") ||
+    clean.includes("legs feel heavy") ||
+    clean.includes("heavy legs") ||
+    clean.includes("legs are heavy") ||
+    clean.includes("feel heavy") ||
+    clean.includes("low energy") ||
+    clean.includes("drained") ||
+    clean.includes("worn out") ||
+    clean.includes("beat up") ||
+    clean.includes("sore")
+  );
+}
+
 function shouldContinuePreviousTopic(latestUserText) {
   const clean = normaliseText(latestUserText);
   if (!clean) return false;
@@ -2846,18 +2877,12 @@ function latestUserIntentHint(text) {
     return "weekly_focus";
   }
 
-  if (isGeneralTrainingAdviceQuestion(clean)) {
-    return "general_training_advice";
+  if (isReadinessRecoveryPrompt(clean)) {
+    return "readiness_recovery";
   }
 
-  if (
-    clean.includes("tired") ||
-    clean.includes("slept badly") ||
-    clean.includes("bad sleep") ||
-    clean.includes("fatigued") ||
-    clean.includes("sore")
-  ) {
-    return "readiness_recovery";
+  if (isGeneralTrainingAdviceQuestion(clean)) {
+    return "general_training_advice";
   }
 
   return "general";
@@ -2921,7 +2946,17 @@ function contextBoundaryInstruction(latestUserText) {
 
   if (intent === "general_training_advice") {
     lines.push(
-      "- For broad training advice, lead with the training principle and practical drills/progression for the requested topic."
+      "- For broad training advice, lead with the training principle and practical drills/progression for the requested topic.",
+      "- Saved memory may personalise one short caveat, but must not dominate or change the topic unless the latest message specifically asks about that memory topic.",
+      "- Context priority: latest user goal/topic first, relevant plan context second, saved memory as a brief modifier, today/session context only if asked or genuinely needed."
+    );
+  }
+
+  if (intent === "readiness_recovery") {
+    lines.push(
+      "- This is a readiness/recovery question. Start with the user's current state, not today's planned session.",
+      "- Give conservative decision-making first: easy warm-up check, downgrade if symptoms persist, reduce intensity/volume, or recover.",
+      "- Today/session context may be mentioned only after the readiness advice, as a possible modification."
     );
   }
 
@@ -3035,6 +3070,16 @@ function latestUserPriorityInstruction(latestUserText) {
     );
   }
 
+  if (intent === "readiness_recovery") {
+    lines.push(
+      "- This is a readiness/recovery question. Answer the fatigue/readiness concern first.",
+      "- Do not open with today's workout/session.",
+      "- Start with assessment and downgrade logic: warm up easily, check whether the heaviness/fatigue improves, reduce intensity or volume if it does not, and choose recovery/easy work if needed.",
+      "- Today's session can be mentioned only after that, and only as something to modify or downgrade.",
+      "- Do not prescribe today's intervals or hard work as the default when the user reports heavy legs, feeling run down, tired, flat, or fatigued."
+    );
+  }
+
   if (intent === "weekly_focus") {
     lines.push(
       "- This is a weekly strategy/focus question. Give the strategic weekly focus first.",
@@ -3058,13 +3103,15 @@ function latestUserPriorityInstruction(latestUserText) {
   if (intent === "general_training_advice") {
     lines.push(
       "- This is a general coaching question. Answer the coaching question directly.",
-      "- Context priority for this answer: 1) latest user question, 2) relevant saved memory, 3) relevant active-plan context, 4) today's session only if the latest message asks about today or the current workout.",
+      "- Context priority for this answer: 1) latest user question, 2) relevant active-plan context, 3) saved memory as a brief modifier only, 4) today's session only if the latest message asks about today or the current workout.",
       "- Do not open with today's workout/session.",
       "- Use the active plan only as background context, not as the main answer.",
       "- Do not describe today's session unless the latest message explicitly asks about today's workout or the current session.",
       "- Do not introduce food, fuelling, hydration, calorie, macro, or diet advice unless the latest user message explicitly asks about food, fuelling, energy availability, recovery nutrition, body composition, or diet.",
       "- Use saved coach memory only when it is relevant to the specific training topic; do not change the topic because of memory.",
+      "- If saved memory is relevant, mention it briefly as one caveat or adjustment after the main answer. Do not make the whole answer about the memory unless the user specifically asks about that memory topic.",
       "- If the user asks about improving 5K or running faster, cover speed/interval work, tempo or threshold work, easy aerobic volume, consistency, strength training, recovery, and pacing.",
+      "- If the user asks how to get faster without getting injured or how to build speed safely, answer as broad speed development plus injury prevention: gradual progression, easy runs easy, one or two quality sessions, strength, recovery, deloads, and warning signs.",
       "- If the user asks about hill running or a running skill, answer that skill directly with practical technique and progression advice.",
       "- If the user asks about endurance, cover easy aerobic volume, gradual progression, long easy work, recovery, and consistency.",
       "- If the user asks about strength, cover progressive overload, good technique, key compound lifts, sensible load progression, and recovery."
@@ -3500,6 +3547,14 @@ function appendMemoryContextLine(lines, context) {
   return lines;
 }
 
+function appendBriefMemoryModifier(lines, context) {
+  const snippets = coachMemorySnippets(context, 1);
+  if (snippets.length) {
+    lines.push("", `Brief modifier from saved memory: ${snippets[0]}. Keep this in mind, but do not let it override the main training goal.`);
+  }
+  return lines;
+}
+
 function buildWeeklyFocusFallbackReply(context) {
   const keySessions = keyWeeklySessionNames(context);
   const keyLine = keySessions.length
@@ -3599,6 +3654,27 @@ function buildLocalCoachFallbackReply(message, context) {
   }
 
   if (isGeneralTrainingAdviceQuestion(text)) {
+    if (
+      text.includes("faster") ||
+      text.includes("speed safely") ||
+      text.includes("without getting injured") ||
+      text.includes("without injury")
+    ) {
+      return appendBriefMemoryModifier(
+        [
+          "Build speed by progressing the work you can recover from, not by forcing every run harder.",
+          "",
+          "- Keep easy runs genuinely easy so you can absorb the hard sessions",
+          "- Add one or two quality sessions per week, such as intervals and tempo or threshold work",
+          "- Progress volume or intensity gradually rather than both at once",
+          "- Keep strength training consistent for calves, hips, hamstrings, glutes, and trunk",
+          "- Use recovery weeks or deloads before niggles become injuries",
+          "- Back off if pain changes your stride, worsens during the run, or lingers into the next day",
+        ],
+        context
+      ).join("\n");
+    }
+
     if (text.includes("form") || text.includes("technique")) {
       return appendMemoryContextLine(
         [
@@ -3705,18 +3781,17 @@ function buildLocalCoachFallbackReply(message, context) {
   }
 
   if (
-    text.includes("tired") ||
-    text.includes("fatigued") ||
-    text.includes("slept badly") ||
-    text.includes("bad sleep") ||
-    text.includes("poor sleep")
+    isReadinessRecoveryPrompt(text)
   ) {
     return appendMemoryContextLine(
       [
-      "Adjust down rather than forcing it.",
-      "",
-      `If ${todayPhrase} is still planned, keep it easy-to-moderate, reduce volume, and avoid chasing intensity.`,
-      "If you feel worse during the warm-up, switch to mobility, walking, or recovery.",
+        "Treat heavy or flat legs as a readiness signal first.",
+        "",
+        "- Start with an easy 10-15 minute warm-up and reassess",
+        "- If your legs loosen up, keep the session controlled rather than forcing peak pace",
+        "- If they stay heavy, downgrade to easy running, mobility, walking, or recovery",
+        "- Reduce intensity or volume before you sacrifice the next key session",
+        `- If ${todayPhrase} is planned, modify it rather than treating the intervals as mandatory`,
       ],
       context
     ).join("\n");

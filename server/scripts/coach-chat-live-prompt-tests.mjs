@@ -118,6 +118,51 @@ const promptGroups = [
     expect: { aiFirst: true, noTodayFirst: true, noNutrition: true, direct: true },
   },
   {
+    name: "Performance/readiness boundaries",
+    cases: [
+      {
+        prompt: "How can I get faster without getting injured?",
+        expect: {
+          aiFirst: true,
+          direct: true,
+          noTodayFirst: true,
+          noNutrition: true,
+          shouldMentionKneeMemoryBriefly: true,
+        },
+      },
+      {
+        prompt: "What should I do if my legs feel heavy?",
+        expect: {
+          aiFirst: true,
+          direct: true,
+          noTodayFirst: true,
+          noNutrition: true,
+          readinessDowngrade: true,
+        },
+      },
+      {
+        prompt: "I feel run down today, should I change the plan?",
+        expect: {
+          aiFirst: true,
+          direct: true,
+          noTodayFirst: true,
+          noNutrition: true,
+          readinessDowngrade: true,
+        },
+      },
+      {
+        prompt: "How do I build speed safely?",
+        expect: {
+          aiFirst: true,
+          direct: true,
+          noTodayFirst: true,
+          noNutrition: true,
+          shouldMentionKneeMemoryBriefly: true,
+        },
+      },
+    ],
+  },
+  {
     name: "Plan/context",
     prompts: [
       "What plan am I currently on?",
@@ -237,10 +282,23 @@ function replyMentionsNutrition(reply) {
   return /\b(nutrition|protein|carb|calorie|meal|food|fuel|hydrate|fluids)\b/.test(text);
 }
 
+function replyMemoryTopicMentions(reply) {
+  return (normaliseText(reply).match(/\b(?:knee|hill|hills)\b/g) || []).length;
+}
+
+function replyHasReadinessDowngrade(reply) {
+  const text = normaliseText(reply);
+  const readinessTerms = ["warm-up", "warm up", "reassess", "easy", "downgrade", "reduce", "recovery", "rest"];
+  return readinessTerms.filter((term) => text.includes(term)).length >= 2;
+}
+
 function directTopicTerms(prompt) {
   const text = normaliseText(prompt);
   if (text.includes("running form")) return ["form", "cadence", "stride", "arms", "posture"];
   if (text.includes("hill")) return ["hill", "climb", "stride", "cadence", "arms"];
+  if (text.includes("get faster") || text.includes("speed safely")) {
+    return ["speed", "easy", "strength", "recovery", "progress"];
+  }
   if (text.includes("5k")) return ["5k", "interval", "tempo", "threshold", "pace"];
   if (text.includes("eat after")) return ["protein", "carb", "fluid", "meal"];
   if (text.includes("before a run")) return ["before", "2-3", "30-60", "carb"];
@@ -248,6 +306,9 @@ function directTopicTerms(prompt) {
   if (text.includes("protein")) return ["protein", "serving", "day"];
   if (text.includes("schedule") || text.includes("harder sessions")) {
     return ["schedule", "hard", "morning", "recover"];
+  }
+  if (text.includes("legs feel heavy") || text.includes("run down") || text.includes("feel flat")) {
+    return ["easy", "warm", "reduce", "recovery", "downgrade"];
   }
   if (text.includes("30 minutes")) return ["30", "minute", "warm-up"];
   if (text.includes("tired")) return ["tired", "reduce", "easy", "warm-up"];
@@ -384,6 +445,20 @@ function evaluate({ group, prompt, payload, expectOverride = null }) {
 
   if (expect.shouldMentionMemory && !/\bmorning\b/i.test(reply)) {
     notes.push("expected reply to use relevant morning workout memory");
+  }
+
+  if (expect.shouldMentionKneeMemoryBriefly) {
+    const memoryMentions = replyMemoryTopicMentions(reply);
+    if (memoryMentions === 0) {
+      notes.push("expected reply to mention relevant knee/hill memory briefly");
+    }
+    if (memoryMentions > 3) {
+      notes.push("saved knee/hill memory appears to dominate the reply");
+    }
+  }
+
+  if (expect.readinessDowngrade && !replyHasReadinessDowngrade(reply)) {
+    notes.push("readiness reply does not clearly give downgrade/recovery advice");
   }
 
   if (expect.direct) {
