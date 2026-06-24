@@ -1255,6 +1255,134 @@ assert.ok(
   "fat-loss/performance instruction should prevent post-training meal continuation"
 );
 
+const proteinToSchedulePriority = __coachChatLatestPriorityForTest([
+  {
+    role: "user",
+    content: "How do I hit my protein?",
+  },
+  {
+    role: "assistant",
+    content:
+      "To hit your protein target, spread protein across breakfast, lunch, dinner, and snacks.",
+  },
+  {
+    role: "user",
+    content: "When should I schedule my harder sessions?",
+  },
+]);
+
+assert.equal(
+  proteinToSchedulePriority.latestUserText,
+  "When should I schedule my harder sessions?",
+  "latest user message should be the scheduling question"
+);
+assert.equal(
+  proteinToSchedulePriority.intent,
+  "schedule_timing",
+  "harder-session timing should be detected as schedule_timing"
+);
+assert.ok(
+  proteinToSchedulePriority.instruction.includes("Do not continue a previous nutrition/protein answer"),
+  "schedule timing instruction should block previous nutrition continuation"
+);
+assert.equal(
+  proteinToSchedulePriority.previousConversationContext.some((message) =>
+    /protein|breakfast|lunch|dinner|snacks/i.test(message.content)
+  ),
+  false,
+  "previous nutrition topic should be stripped from schedule/timing high-priority context"
+);
+
+const scheduleFallback = __coachChatLocalFallbackForTest(
+  "When should I schedule my harder sessions?",
+  activePlanWithMemoryContext
+);
+assert.ok(
+  scheduleFallback.includes("Schedule harder sessions"),
+  `schedule fallback should answer scheduling directly:\n${scheduleFallback}`
+);
+assert.ok(
+  scheduleFallback.includes("Relevant saved note: Knee gets sore after hills."),
+  `schedule fallback should keep relevant saved memory available:\n${scheduleFallback}`
+);
+assert.equal(
+  /protein|calorie|meal|nutrition/i.test(scheduleFallback),
+  false,
+  `schedule fallback should not continue nutrition:\n${scheduleFallback}`
+);
+
+const nutritionToFormPriority = __coachChatLatestPriorityForTest([
+  { role: "user", content: "How do I hit my protein?" },
+  { role: "assistant", content: "Aim for 170g protein across the day." },
+  { role: "user", content: "How can I improve my running form?" },
+]);
+assert.equal(
+  nutritionToFormPriority.intent,
+  "general_training_advice",
+  "running form should override previous nutrition topic"
+);
+assert.equal(
+  nutritionToFormPriority.previousConversationContext.some((message) =>
+    /protein|170g/i.test(message.content)
+  ),
+  false,
+  "previous nutrition context should be stripped before running-form advice"
+);
+
+const weeklyToFatLossPriority = __coachChatLatestPriorityForTest([
+  { role: "user", content: "What sessions do I have this week?" },
+  { role: "assistant", content: "This week includes speed work and a long run." },
+  { role: "user", content: "I want to lose fat but keep performance, what should I do?" },
+]);
+assert.equal(
+  weeklyToFatLossPriority.intent,
+  "fat_loss_performance",
+  "fat-loss question should override previous weekly-plan topic"
+);
+assert.equal(
+  weeklyToFatLossPriority.previousConversationContext.some((message) =>
+    /speed work|long run|sessions/i.test(message.content)
+  ),
+  false,
+  "previous weekly-plan context should be stripped before fat-loss answer"
+);
+
+const timeToFoodPriority = __coachChatLatestPriorityForTest([
+  { role: "user", content: "I only have 30 minutes today, what should I do?" },
+  { role: "assistant", content: "Use 30 minutes for a shorter session and mobility." },
+  { role: "user", content: "What should I eat after training?" },
+]);
+assert.equal(
+  timeToFoodPriority.intent,
+  "post_training_nutrition",
+  "post-training food should override previous limited-time topic"
+);
+assert.equal(
+  timeToFoodPriority.previousConversationContext.some((message) =>
+    /30 minutes|mobility|shorter session/i.test(message.content)
+  ),
+  false,
+  "previous limited-time context should be stripped before nutrition answer"
+);
+
+const memoryToBroadAdvicePriority = __coachChatLatestPriorityForTest([
+  { role: "user", content: "Remember that I prefer morning workouts" },
+  { role: "assistant", content: "Saved — I'll remember that you prefer morning workouts." },
+  { role: "user", content: "How can I improve my 5K time?" },
+]);
+assert.equal(
+  memoryToBroadAdvicePriority.intent,
+  "general_training_advice",
+  "broad advice should override previous memory-save topic"
+);
+assert.equal(
+  memoryToBroadAdvicePriority.previousConversationContext.some((message) =>
+    /remember|saved/i.test(message.content)
+  ),
+  false,
+  "previous memory-save turn should not be sent as active background conversation"
+);
+
 const scheduleMovePrompts = [
   "Can I move today's session to tomorrow?",
   "Can I do today’s workout tomorrow instead?",

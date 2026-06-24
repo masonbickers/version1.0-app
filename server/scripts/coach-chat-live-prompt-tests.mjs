@@ -31,6 +31,12 @@ const sampleContext = {
         category: "injury",
         source: "coach_chat",
       },
+      {
+        id: "memory-morning-workouts",
+        text: "I prefer morning workouts",
+        category: "preference",
+        source: "coach_chat",
+      },
     ],
   },
   training: {
@@ -158,6 +164,55 @@ const promptGroups = [
     ],
     expect: { direct: true },
   },
+  {
+    name: "Topic switching",
+    cases: [
+      {
+        prompt: "When should I schedule my harder sessions?",
+        history: [
+          { role: "user", content: "How do I hit my protein?" },
+          {
+            role: "assistant",
+            content:
+              "To hit your protein target, spread protein across breakfast, lunch, dinner, and snacks.",
+          },
+        ],
+        expect: { aiFirst: true, direct: true, noNutrition: true, shouldMentionMemory: true },
+      },
+      {
+        prompt: "How can I improve my running form?",
+        history: [
+          { role: "user", content: "How do I hit my protein?" },
+          { role: "assistant", content: "Aim for 170g protein across the day." },
+        ],
+        expect: { aiFirst: true, direct: true, noNutrition: true },
+      },
+      {
+        prompt: "I want to lose fat but keep performance, what should I do?",
+        history: [
+          { role: "user", content: "What sessions do I have this week?" },
+          { role: "assistant", content: "This week includes speed work and a long run." },
+        ],
+        expect: { aiFirst: true, direct: true, nutritionFirst: true },
+      },
+      {
+        prompt: "What should I eat after training?",
+        history: [
+          { role: "user", content: "I only have 30 minutes today, what should I do?" },
+          { role: "assistant", content: "Use 30 minutes for a shorter session and mobility." },
+        ],
+        expect: { aiFirst: true, direct: true, nutritionFirst: true },
+      },
+      {
+        prompt: "How can I improve my 5K time?",
+        history: [
+          { role: "user", content: "Remember that I prefer morning workouts" },
+          { role: "assistant", content: "Saved — I'll remember that you prefer morning workouts." },
+        ],
+        expect: { aiFirst: true, direct: true, noNutrition: true },
+      },
+    ],
+  },
 ];
 
 function normaliseText(value) {
@@ -191,6 +246,9 @@ function directTopicTerms(prompt) {
   if (text.includes("before a run")) return ["before", "2-3", "30-60", "carb"];
   if (text.includes("lose fat")) return ["deficit", "protein", "performance", "strength"];
   if (text.includes("protein")) return ["protein", "serving", "day"];
+  if (text.includes("schedule") || text.includes("harder sessions")) {
+    return ["schedule", "hard", "morning", "recover"];
+  }
   if (text.includes("30 minutes")) return ["30", "minute", "warm-up"];
   if (text.includes("tired")) return ["tired", "reduce", "easy", "warm-up"];
   if (text.includes("move")) return ["move", "tomorrow", "option", "confirm"];
@@ -253,7 +311,7 @@ function offlineResponse(prompt) {
   };
 }
 
-async function httpResponse(prompt) {
+async function httpResponse(prompt, history = null) {
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -262,7 +320,9 @@ async function httpResponse(prompt) {
     },
     body: JSON.stringify({
       messages: [
-        { role: "assistant", content: "Earlier we talked about today's nutrition and schedule." },
+        ...(Array.isArray(history) && history.length
+          ? history
+          : [{ role: "assistant", content: "Earlier we talked about today's nutrition and schedule." }]),
         { role: "user", content: prompt },
       ],
       plan: samplePlan,
@@ -277,7 +337,7 @@ async function httpResponse(prompt) {
   return JSON.parse(text || "{}");
 }
 
-function evaluate({ group, prompt, payload }) {
+function evaluate({ group, prompt, payload, expectOverride = null }) {
   const reply = String(payload.reply || "");
   const responseSource = payload.responseSource || "unknown";
   const diagnostics = __coachChatResponseDiagnosticsForTest({
@@ -296,7 +356,7 @@ function evaluate({ group, prompt, payload }) {
     (Array.isArray(payload.coachActions) ? payload.coachActions.length : 0) +
     (payload.nutritionDraft ? 1 : 0);
   const notes = [];
-  const expect = group.expect || {};
+  const expect = expectOverride || group.expect || {};
 
   if (expect.aiFirst && path === "deterministic_or_action") {
     notes.push("expected AI/fallback route, got deterministic/action");
@@ -320,6 +380,10 @@ function evaluate({ group, prompt, payload }) {
 
   if (expect.actionCard && actionCount === 0) {
     notes.push("expected action card or nutrition draft");
+  }
+
+  if (expect.shouldMentionMemory && !/\bmorning\b/i.test(reply)) {
+    notes.push("expected reply to use relevant morning workout memory");
   }
 
   if (expect.direct) {
@@ -354,9 +418,21 @@ async function run() {
   const results = [];
   for (const group of promptGroups) {
     console.log(`\n## ${group.name}`);
-    for (const prompt of group.prompts) {
-      const payload = mode === "http" ? await httpResponse(prompt) : offlineResponse(prompt);
-      const result = evaluate({ group, prompt, payload });
+    const cases = Array.isArray(group.cases)
+      ? group.cases
+      : (group.prompts || []).map((prompt) => ({ prompt, expect: group.expect || null }));
+    for (const testCase of cases) {
+      const prompt = testCase.prompt;
+      const payload =
+        mode === "http"
+          ? await httpResponse(prompt, testCase.history)
+          : offlineResponse(prompt);
+      const result = evaluate({
+        group,
+        prompt,
+        payload,
+        expectOverride: testCase.expect || group.expect || null,
+      });
       results.push({ group: group.name, ...result });
       console.log(JSON.stringify({ group: group.name, ...result }, null, 2));
     }

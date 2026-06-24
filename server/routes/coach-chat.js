@@ -2655,6 +2655,25 @@ function shouldIncludeNutritionContext(latestUserText) {
   return isNutritionIntentHint(latestUserIntentHint(latestUserText));
 }
 
+function shouldContinuePreviousTopic(latestUserText) {
+  const clean = normaliseText(latestUserText);
+  if (!clean) return false;
+  return (
+    /\b(?:continue|carry on|same as above|same topic|what about that|what about it|that plan|that meal|that session|that workout|as above)\b/.test(clean) ||
+    /^(?:and|also|what about|how about)\b/.test(clean)
+  );
+}
+
+function intentTopicFamily(intent) {
+  if (isNutritionIntentHint(intent)) return "nutrition";
+  if (["schedule_reschedule", "schedule_timing", "weekly_focus", "limited_time"].includes(intent)) {
+    return "schedule";
+  }
+  if (["general_training_advice", "readiness_recovery"].includes(intent)) return "training";
+  if (intent === "memory_save") return "memory";
+  return "general";
+}
+
 function contextForLatestMessage(context, planSummary = null, latestUserText = "", compact = false) {
   const base = compact ? compactCoachContext(context, planSummary) : clonePlainObject(context || {});
   const shaped = clonePlainObject(base || {});
@@ -2730,6 +2749,25 @@ function latestUserIntentHint(text) {
     (mentionsSessionOrWorkout && clean.includes("to sunday"))
   ) {
     return "schedule_reschedule";
+  }
+
+  if (
+    clean.includes("when should i schedule") ||
+    clean.includes("when should i do") ||
+    clean.includes("when should i plan") ||
+    clean.includes("best time") ||
+    clean.includes("best day") ||
+    clean.includes("what time should") ||
+    clean.includes("what day should") ||
+    clean.includes("schedule my harder") ||
+    clean.includes("schedule hard") ||
+    clean.includes("harder sessions") ||
+    clean.includes("hard sessions") ||
+    clean.includes("quality sessions") ||
+    clean.includes("time my workouts") ||
+    clean.includes("time my sessions")
+  ) {
+    return "schedule_timing";
   }
 
   if (
@@ -2827,10 +2865,27 @@ function latestUserIntentHint(text) {
 
 function buildRecentConversationContext(trimmedMessages, latestUserText, limit = 8) {
   const latest = String(latestUserText || "").trim();
+  const latestIntent = latestUserIntentHint(latestUserText);
+  const latestFamily = intentTopicFamily(latestIntent);
+  const continuePrevious = shouldContinuePreviousTopic(latestUserText);
   const priorMessages = trimmedMessages
     .filter((message, index) => {
       if (index === trimmedMessages.length - 1 && message.role === "user") return false;
       return !(message.role === "user" && String(message.content || "").trim() === latest);
+    })
+    .filter((message) => {
+      if (continuePrevious) return true;
+      const content = String(message?.content || "").trim();
+      if (!content) return false;
+      const messageIntent = latestUserIntentHint(content);
+      const messageFamily = intentTopicFamily(messageIntent);
+
+      if (latestFamily !== "nutrition" && messageFamily === "nutrition") return false;
+      if (latestFamily !== "schedule" && messageFamily === "schedule") return false;
+      if (latestFamily !== "training" && messageFamily === "training") return false;
+      if (messageFamily === "memory") return false;
+
+      return messageFamily === latestFamily && messageFamily !== "general";
     })
     .slice(-limit)
     .map((message) => ({
@@ -2870,6 +2925,14 @@ function contextBoundaryInstruction(latestUserText) {
     );
   }
 
+  if (intent === "schedule_timing") {
+    lines.push(
+      "- This is a scheduling/timing question. Answer when to place harder sessions directly.",
+      "- Use relevant saved preferences, such as morning workout preference, when choosing timing.",
+      "- Do not answer a previous nutrition, protein, meal, or fuelling topic."
+    );
+  }
+
   return lines.join("\n");
 }
 
@@ -2896,6 +2959,7 @@ function latestUserPriorityInstruction(latestUserText) {
   const isNutritionIntent = isNutritionIntentHint(intent);
   const lines = [
     "LATEST_USER_MESSAGE_PRIORITY:",
+    "- HARD RULE: Answer only the latest user message. Do not continue a previous topic unless the latest message explicitly asks to continue it.",
     "- Answer the latest user message directly.",
     "- Conversation history is background context only; it must not override the latest ask.",
     "- Do not continue a previous topic unless the latest user message clearly asks to continue it.",
@@ -2978,6 +3042,16 @@ function latestUserPriorityInstruction(latestUserText) {
       "- Highlight the key sessions from this week if available, such as speed work, HM pace, and long run.",
       "- Do not list every session in detail.",
       "- Mention recovery, sleep, and fuelling briefly as supports."
+    );
+  }
+
+  if (intent === "schedule_timing") {
+    lines.push(
+      "- This is a scheduling/timing question. Answer the scheduling question directly.",
+      "- Recommend placing harder sessions when the user is most fresh and can recover well.",
+      "- If saved memory says the user prefers morning workouts, use that preference when relevant.",
+      "- Do not mention protein, calories, meals, macros, fuelling, or nutrition unless the latest message asks about nutrition.",
+      "- Do not continue a previous nutrition/protein answer."
     );
   }
 
@@ -3077,6 +3151,11 @@ function buildCoachChatMessages({
       content: latestUserPriorityInstruction(latestUserText),
     },
     {
+      role: "system",
+      content:
+        "FINAL_LATEST_MESSAGE_RULE: Answer only the latest user message below. Do not continue any previous topic unless the latest message explicitly asks to continue it.",
+    },
+    {
       role: "user",
       content: latestUserText,
     },
@@ -3146,7 +3225,7 @@ async function createCoachChatResponsesFetchFallback({
         content: [
           {
             type: "input_text",
-            text: `${systemPrompt}\n\n${latestUserPriorityInstruction(latestUserText)}\n\nReturn valid JSON only with keys reply, updatedPlan, nutritionDraft, and coachActions.`,
+            text: `${systemPrompt}\n\n${contextBoundaryInstruction(latestUserText)}\n\n${latestUserPriorityInstruction(latestUserText)}\n\nFINAL_LATEST_MESSAGE_RULE: Answer only the latest user message. Do not continue any previous topic unless the latest message explicitly asks to continue it.\n\nReturn valid JSON only with keys reply, updatedPlan, nutritionDraft, and coachActions.`,
           },
         ],
       },
@@ -3502,6 +3581,21 @@ function buildLocalCoachFallbackReply(message, context) {
       "",
       "Examples: toast and banana, oats, rice with lean protein, or a small cereal bar before shorter runs.",
     ].join("\n");
+  }
+
+  if (intent === "schedule_timing") {
+    return appendMemoryContextLine(
+      [
+        "Schedule harder sessions when you can be freshest and recover properly.",
+        "",
+        "- Put hard runs, intervals, heavy strength, or long efforts after easier/rest days",
+        "- Keep at least 24-48 hours between the hardest sessions where possible",
+        "- Use easier days for recovery, mobility, or low-intensity work",
+        "- If mornings suit you best, place key sessions in the morning and keep later training easier",
+        "- Avoid stacking hard sessions late in the day if it affects sleep or recovery",
+      ],
+      context
+    ).join("\n");
   }
 
   if (isGeneralTrainingAdviceQuestion(text)) {
