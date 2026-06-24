@@ -2519,10 +2519,12 @@ function coachResponseDiagnostics({
   responseSource,
   latestUserText,
   context,
+  previousConversationHas30MinPrompt = false,
   openAiError = null,
 }) {
   const highPriorityContext = contextForLatestMessage(context, null, latestUserText, false);
   return {
+    latestUserMessage: String(latestUserText || "").slice(0, 240),
     responseSource,
     detectedIntent: latestUserIntentHint(latestUserText),
     foregroundTodayContext: shouldForegroundTodayContext(latestUserText),
@@ -2530,6 +2532,12 @@ function coachResponseDiagnostics({
     todaySessionIncludedInHighPriorityContext: hasTodaySessionContext(highPriorityContext),
     tomorrowSessionIncludedInHighPriorityContext: hasTomorrowSessionContext(highPriorityContext),
     coachMemoryIncluded: hasCoachMemoryContext(context),
+    previousConversationHas30MinPrompt: !!previousConversationHas30MinPrompt,
+    responsePath: responseSource?.startsWith("ai")
+      ? "ai"
+      : responseSource === "local_fallback"
+        ? "fallback"
+        : "deterministic_or_action",
     activePlanIncluded: hasActivePlanContext(context),
     latestMessagePrioritised: true,
     openAiFailed: !!openAiError,
@@ -2560,6 +2568,7 @@ function withCoachResponseMetadata(payload, diagnostics) {
     }),
     responseSource: diagnostics.responseSource,
     detectedIntent: diagnostics.detectedIntent,
+    latestUserMessage: diagnostics.latestUserMessage,
     foregroundTodayContext: diagnostics.foregroundTodayContext,
     nutritionContextIncluded: diagnostics.nutritionContextIncluded,
     todaySessionIncludedInHighPriorityContext:
@@ -2567,6 +2576,8 @@ function withCoachResponseMetadata(payload, diagnostics) {
     tomorrowSessionIncludedInHighPriorityContext:
       diagnostics.tomorrowSessionIncludedInHighPriorityContext,
     coachMemoryIncluded: diagnostics.coachMemoryIncluded,
+    previousConversationHas30MinPrompt: diagnostics.previousConversationHas30MinPrompt,
+    responsePath: diagnostics.responsePath,
     activePlanIncluded: diagnostics.activePlanIncluded,
     latestMessagePrioritised: diagnostics.latestMessagePrioritised,
     openAiFailed: diagnostics.openAiFailed,
@@ -2583,8 +2594,12 @@ function withCoachResponseMetadata(payload, diagnostics) {
 
 function sendCoachResponse(res, payload, diagnosticsInput) {
   const diagnostics = coachResponseDiagnostics(diagnosticsInput);
-  logCoachResponse(diagnostics);
-  return res.json(withCoachResponseMetadata(payload, diagnostics));
+  const responsePayload = withCoachResponseMetadata(payload, diagnostics);
+  logCoachResponse({
+    ...diagnostics,
+    responsePreview: String(responsePayload?.reply || "").slice(0, 220),
+  });
+  return res.json(responsePayload);
 }
 
 function compactCoachContext(context, planSummary = null) {
@@ -2816,6 +2831,23 @@ function buildRecentConversationContext(trimmedMessages, latestUserText, limit =
     }));
 
   return priorMessages;
+}
+
+function previousConversationHasLimitedTimePrompt(trimmedMessages, latestUserText) {
+  const latest = String(latestUserText || "").trim();
+  return (Array.isArray(trimmedMessages) ? trimmedMessages : []).some((message, index) => {
+    if (index === trimmedMessages.length - 1 && message?.role === "user") return false;
+    const content = String(message?.content || "").trim();
+    if (!content || content === latest) return false;
+    const text = normaliseText(content);
+    return (
+      text.includes("30 minutes") ||
+      text.includes("30 mins") ||
+      text.includes("only have 30") ||
+      text.includes("short on time") ||
+      text.includes("limited time")
+    );
+  });
 }
 
 function latestUserPriorityInstruction(latestUserText) {
@@ -3668,13 +3700,21 @@ export default function coachChatRoute(openai) {
         ...(planSummary ? { activePlanSummary: planSummary } : {}),
       };
       const latestUserText = latestUserMessage(trimmedMessages);
+      const previousConversationHas30MinPrompt = previousConversationHasLimitedTimePrompt(
+        trimmedMessages,
+        latestUserText
+      );
+      const responseDiagnosticsBase = {
+        latestUserText,
+        context: mergedContext,
+        previousConversationHas30MinPrompt,
+      };
 
       const memorySaveResponse = buildMemorySaveResponse(latestUserText);
       if (memorySaveResponse) {
         return sendCoachResponse(res, memorySaveResponse, {
+          ...responseDiagnosticsBase,
           responseSource: "action_card",
-          latestUserText,
-          context: mergedContext,
         });
       }
 
@@ -3684,9 +3724,8 @@ export default function coachChatRoute(openai) {
           res,
           buildCoachChatFallbackResponse(latestUserText, mergedContext),
           {
+            ...responseDiagnosticsBase,
             responseSource: "local_fallback",
-            latestUserText,
-            context: mergedContext,
             openAiError: new Error("OpenAI client not configured"),
           }
         );
@@ -3708,9 +3747,8 @@ export default function coachChatRoute(openai) {
             raw: JSON.stringify({ reply, updatedPlan: null, nutritionDraft: null, coachActions: [] }),
           },
           {
+            ...responseDiagnosticsBase,
             responseSource: "deterministic_summary",
-            latestUserText,
-            context: mergedContext,
           }
         );
       }
@@ -3727,9 +3765,8 @@ export default function coachChatRoute(openai) {
             raw: JSON.stringify({ reply, updatedPlan: null, nutritionDraft: localNutritionDraft }),
           },
           {
+            ...responseDiagnosticsBase,
             responseSource: "action_card",
-            latestUserText,
-            context: mergedContext,
           }
         );
       }
@@ -3750,9 +3787,8 @@ export default function coachChatRoute(openai) {
             raw: JSON.stringify({ reply: deterministicReply, updatedPlan: null, nutritionDraft: null }),
           },
           {
+            ...responseDiagnosticsBase,
             responseSource: deterministicResponseSource(latestUserText),
-            latestUserText,
-            context: mergedContext,
           }
         );
       }
@@ -3993,9 +4029,8 @@ Allowed coachActions types:
             raw,
           },
           {
+            ...responseDiagnosticsBase,
             responseSource,
-            latestUserText,
-            context: mergedContext,
           }
         );
       } catch (openAiError) {
@@ -4024,9 +4059,8 @@ Allowed coachActions types:
             raw,
           },
           {
+            ...responseDiagnosticsBase,
             responseSource: "local_fallback",
-            latestUserText,
-            context: mergedContext,
             openAiError,
           }
         );
@@ -4045,6 +4079,10 @@ Allowed coachActions types:
           responseSource: "local_fallback",
           latestUserText: fallbackMessage,
           context: fallbackContext,
+          previousConversationHas30MinPrompt: previousConversationHasLimitedTimePrompt(
+            Array.isArray(req.body?.messages) ? req.body.messages : [],
+            fallbackMessage
+          ),
           openAiError: err,
         });
       }
