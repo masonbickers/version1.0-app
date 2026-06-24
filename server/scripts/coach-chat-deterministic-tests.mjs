@@ -232,6 +232,26 @@ const activePlanWithMemoryContext = {
   },
 };
 
+const activePlanWithMixedMemoryContext = {
+  ...activePlanContext,
+  athleteProfile: {
+    coachMemory: [
+      {
+        id: "memory-knee-hills",
+        text: "Knee gets sore after hills",
+        category: "injury",
+        source: "coach_chat",
+      },
+      {
+        id: "memory-morning",
+        text: "I prefer morning workouts",
+        category: "preference",
+        source: "coach_chat",
+      },
+    ],
+  },
+};
+
 const missedSessionCases = [
   "I missed today's session, what should I do?",
   "I missed my workout today",
@@ -464,6 +484,41 @@ for (const prompt of casualMemoryLikePrompts) {
   );
 }
 
+const casualMorningPrompt = "I usually feel better training in the morning";
+const casualMorningFallback = __coachChatLocalFallbackForTest(
+  casualMorningPrompt,
+  activePlanWithMemoryContext
+);
+assert.equal(
+  __coachChatMemorySaveForTest(casualMorningPrompt),
+  null,
+  "casual morning preference should not auto-save"
+);
+assert.ok(
+  /morning/i.test(casualMorningFallback),
+  `casual morning preference should be acknowledged:\n${casualMorningFallback}`
+);
+assert.equal(
+  /knee|hill|hills|downhill|uphill/i.test(casualMorningFallback),
+  false,
+  `casual morning preference should not mention unrelated knee/hill memory:\n${casualMorningFallback}`
+);
+assert.equal(
+  /Saved|memory_save|Coach memory saved/i.test(casualMorningFallback),
+  false,
+  `casual morning preference should not look like an auto-save reply:\n${casualMorningFallback}`
+);
+
+const casualMorningContextForModel = __coachChatContextForLatestMessageForTest(
+  activePlanWithMemoryContext,
+  casualMorningPrompt
+);
+assert.equal(
+  JSON.stringify(casualMorningContextForModel).toLowerCase().includes("knee gets sore after hills"),
+  false,
+  "casual morning prompt should filter unrelated knee/hill memory out of model context"
+);
+
 function countOccurrences(text, pattern) {
   return (text.match(pattern) || []).length;
 }
@@ -649,11 +704,24 @@ assert.equal(
   false,
   "broad running advice should remove upcoming sessions from high-priority model context"
 );
-assert.ok(
+assert.equal(
   broadRunningContext.athleteProfile?.coachMemory?.some((memory) =>
     String(memory?.text || "").toLowerCase().includes("knee gets sore after hills")
   ),
-  "broad advice should keep saved memory available for relevant personalisation"
+  true,
+  "hill-running advice should keep relevant knee/hill memory"
+);
+
+const runningFormContext = __coachChatContextForLatestMessageForTest(
+  broadAdviceContext,
+  "How can I improve my running form?"
+);
+assert.equal(
+  runningFormContext.athleteProfile?.coachMemory?.some((memory) =>
+    String(memory?.text || "").toLowerCase().includes("knee gets sore after hills")
+  ),
+  false,
+  "running-form advice should filter unrelated knee/hill memory"
 );
 assert.ok(
   Array.isArray(broadRunningContext.training?.activePlans),
@@ -675,13 +743,13 @@ const futureMemoryContext = __coachChatContextForLatestMessageForTest(
       ],
     },
   },
-  "How should I structure my week?"
+  "When should I schedule hard sessions?"
 );
 assert.ok(
   futureMemoryContext.athleteProfile?.coachMemory?.some((memory) =>
     String(memory?.text || "").includes("I prefer morning workouts")
   ),
-  "saved coach memory should remain available in future coach context"
+  "morning preference memory should remain available for scheduling prompts"
 );
 
 const nutritionContext = __coachChatContextForLatestMessageForTest(
@@ -750,9 +818,10 @@ const fallback5k = __coachChatLocalFallbackForTest(
   activePlanWithMemoryContext
 );
 assert.ok(fallback5k.includes("To improve your 5K"), `5K fallback should answer directly:\n${fallback5k}`);
-assert.ok(
+assert.equal(
   fallback5k.includes("Since your knee can get sore after hills"),
-  `5K fallback should use saved memory naturally when relevant context is present:\n${fallback5k}`
+  false,
+  `plain 5K fallback should not use unrelated knee/hill memory:\n${fallback5k}`
 );
 assert.equal(
   /Brief modifier|saved memory|saved note|policy|modifier|do not let it override|main training goal/i.test(fallback5k),
@@ -1317,6 +1386,34 @@ assert.equal(
   `schedule fallback should not continue nutrition:\n${scheduleFallback}`
 );
 
+const scheduleWithMorningMemoryFallback = __coachChatLocalFallbackForTest(
+  "When should I schedule hard sessions?",
+  activePlanWithMixedMemoryContext
+);
+assert.ok(
+  /morning/i.test(scheduleWithMorningMemoryFallback),
+  `schedule prompt should use morning preference naturally:\n${scheduleWithMorningMemoryFallback}`
+);
+assert.equal(
+  /knee|hill|hills|downhill|uphill/i.test(scheduleWithMorningMemoryFallback),
+  false,
+  `schedule prompt should not mention unrelated knee/hill memory:\n${scheduleWithMorningMemoryFallback}`
+);
+
+const hillRunsWithMemoryFallback = __coachChatLocalFallbackForTest(
+  "What should I be careful of on hill runs?",
+  activePlanWithMixedMemoryContext
+);
+assert.ok(
+  /knee|hill|hills/i.test(hillRunsWithMemoryFallback),
+  `hill-runs prompt should use knee/hill memory naturally:\n${hillRunsWithMemoryFallback}`
+);
+assert.equal(
+  /morning/i.test(hillRunsWithMemoryFallback),
+  false,
+  `hill-runs prompt should not mention unrelated morning preference:\n${hillRunsWithMemoryFallback}`
+);
+
 const nutritionToFormPriority = __coachChatLatestPriorityForTest([
   { role: "user", content: "How do I hit my protein?" },
   { role: "assistant", content: "Aim for 170g protein across the day." },
@@ -1523,6 +1620,26 @@ assert.equal(
   ),
   null,
   "policy guard should allow natural relevant memory wording"
+);
+
+assert.equal(
+  __coachChatReplyPolicyViolationForTest(
+    "Since your knee can get sore after hills, avoid hard hill work for now.",
+    casualMorningPrompt,
+    activePlanWithMemoryContext
+  ),
+  "reply_uses_irrelevant_injury_memory",
+  "policy guard should reject knee/hill memory on unrelated morning preference prompts"
+);
+
+assert.equal(
+  __coachChatReplyPolicyViolationForTest(
+    "That makes sense. Since mornings feel better, put harder sessions earlier where your schedule allows.",
+    casualMorningPrompt,
+    activePlanWithMemoryContext
+  ),
+  null,
+  "policy guard should allow natural morning-preference acknowledgement"
 );
 
 assert.equal(

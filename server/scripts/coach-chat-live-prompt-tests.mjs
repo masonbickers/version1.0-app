@@ -163,6 +163,41 @@ const promptGroups = [
     ],
   },
   {
+    name: "Memory relevance",
+    cases: [
+      {
+        prompt: "I usually feel better training in the morning",
+        expect: {
+          aiFirst: true,
+          direct: true,
+          shouldMentionMorning: true,
+          noKneeHillMemory: true,
+          noActionCard: true,
+          noNutrition: true,
+        },
+      },
+      {
+        prompt: "When should I schedule hard sessions?",
+        expect: {
+          aiFirst: true,
+          direct: true,
+          shouldMentionMorning: true,
+          noKneeHillMemory: true,
+          noNutrition: true,
+        },
+      },
+      {
+        prompt: "What should I be careful of on hill runs?",
+        expect: {
+          aiFirst: true,
+          direct: true,
+          shouldMentionKneeMemoryBriefly: true,
+          noNutrition: true,
+        },
+      },
+    ],
+  },
+  {
     name: "Plan/context",
     prompts: [
       "What plan am I currently on?",
@@ -310,6 +345,7 @@ function replyContainsInternalLabels(reply) {
 
 function directTopicTerms(prompt) {
   const text = normaliseText(prompt);
+  if (text.includes("morning")) return ["morning", "hard", "session"];
   if (text.includes("running form")) return ["form", "cadence", "stride", "arms", "posture"];
   if (text.includes("hill")) return ["hill", "climb", "stride", "cadence", "arms"];
   if (text.includes("get faster") || text.includes("speed safely")) {
@@ -463,16 +499,29 @@ function evaluate({ group, prompt, payload, expectOverride = null }) {
     notes.push("expected action card or nutrition draft");
   }
 
-  if (expect.shouldMentionMemory && !/\bmorning\b/i.test(reply)) {
+  if (expect.shouldMentionMemory && !/\bmornings?\b/i.test(reply)) {
     notes.push("expected reply to use relevant morning workout memory");
+  }
+
+  if (expect.shouldMentionMorning && !/\bmornings?\b/i.test(reply)) {
+    notes.push("expected reply to acknowledge/use morning preference");
+  }
+
+  if (expect.noKneeHillMemory && replyMemoryTopicMentions(reply) > 0) {
+    notes.push("knee/hill memory leaked into unrelated prompt");
+  }
+
+  if (expect.noActionCard && actionCount > 0) {
+    notes.push("did not expect action card for casual statement");
   }
 
   if (expect.shouldMentionKneeMemoryBriefly) {
     const memoryMentions = replyMemoryTopicMentions(reply);
+    const maxMemoryMentions = normaliseText(prompt).includes("hill") ? 8 : 3;
     if (memoryMentions === 0) {
       notes.push("expected reply to mention relevant knee/hill memory briefly");
     }
-    if (memoryMentions > 3) {
+    if (memoryMentions > maxMemoryMentions) {
       notes.push("saved knee/hill memory appears to dominate the reply");
     }
   }

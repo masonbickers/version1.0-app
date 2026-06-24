@@ -998,6 +998,8 @@ function isGeneralTrainingAdviceQuestion(text) {
     text.includes("how can") ||
     text.includes("how do") ||
     text.includes("what is the best way") ||
+    text.includes("what should i be careful") ||
+    text.includes("be careful") ||
     text.includes("tips") ||
     text.includes("advice") ||
     text.includes("structure") ||
@@ -2664,6 +2666,83 @@ function shouldIncludeNutritionContext(latestUserText) {
   return isNutritionIntentHint(latestUserIntentHint(latestUserText));
 }
 
+function latestMentionsInjuryMemoryTopic(latestUserText) {
+  const latest = normaliseText(latestUserText);
+  if (!latest) return false;
+  return (
+    latest.includes("knee") ||
+    latest.includes("hill") ||
+    latest.includes("hills") ||
+    latest.includes("injury") ||
+    latest.includes("injured") ||
+    latest.includes("pain") ||
+    latest.includes("sore") ||
+    latest.includes("soreness") ||
+    latest.includes("terrain") ||
+    latest.includes("downhill") ||
+    latest.includes("uphill") ||
+    latest.includes("running risk") ||
+    latest.includes("risk of injury") ||
+    latest.includes("injury risk") ||
+    latest.includes("without getting injured") ||
+    latest.includes("without injury") ||
+    latest.includes("speed safely") ||
+    latest.includes("build speed safely")
+  );
+}
+
+function latestMentionsMorningTimingTopic(latestUserText) {
+  const latest = normaliseText(latestUserText);
+  if (!latest) return false;
+  return (
+    latest.includes("schedule") ||
+    latest.includes("when should") ||
+    latest.includes("best time") ||
+    latest.includes("what time") ||
+    latest.includes("time of day") ||
+    latest.includes("morning") ||
+    latest.includes("evening") ||
+    latest.includes("routine") ||
+    latest.includes("hard session") ||
+    latest.includes("harder session") ||
+    latest.includes("quality session") ||
+    latest.includes("when to train")
+  );
+}
+
+function memoryMatchesLatestMessage(memoryText, latestUserText) {
+  const memory = normaliseText(memoryText);
+  if (!memory) return false;
+
+  const isInjuryMemory =
+    /\b(?:knee|hill|hills|injur|pain|sore|soreness|terrain|downhill|uphill)\b/.test(memory);
+  if (isInjuryMemory) return latestMentionsInjuryMemoryTopic(latestUserText);
+
+  const isMorningMemory =
+    /\b(?:morning|time of day|routine|schedule|prefer)\b/.test(memory);
+  if (isMorningMemory) return latestMentionsMorningTimingTopic(latestUserText);
+
+  return false;
+}
+
+function filterCoachMemoryForLatestMessage(memory, latestUserText) {
+  if (!Array.isArray(memory)) return [];
+  return memory.filter((item) => {
+    const text = cleanCoachText(item?.text || item?.category || "");
+    return memoryMatchesLatestMessage(text, latestUserText);
+  });
+}
+
+function isCasualMorningPreferenceStatement(text) {
+  const clean = normaliseText(text);
+  if (!clean) return false;
+  if (extractMemorySaveText(clean)) return false;
+  return (
+    /\b(?:i\s+)?(?:usually|often|generally|normally)?\s*(?:feel|train|perform|run|lift)\s+(?:better|best|good|stronger)\b/.test(clean) &&
+    clean.includes("morning")
+  );
+}
+
 function isReadinessRecoveryPrompt(text) {
   const clean = normaliseText(text);
   if (!clean) return false;
@@ -2715,6 +2794,15 @@ function contextForLatestMessage(context, planSummary = null, latestUserText = "
 
   if (!shouldIncludeNutritionContext(latestUserText)) {
     delete shaped.nutrition;
+  }
+
+  const coachMemory = shaped?.athleteProfile?.coachMemory;
+  if (Array.isArray(coachMemory)) {
+    const relevantMemory = filterCoachMemoryForLatestMessage(coachMemory, latestUserText);
+    shaped.athleteProfile = {
+      ...(shaped.athleteProfile || {}),
+      coachMemory: relevantMemory,
+    };
   }
 
   if (shouldUseBroadAdviceContext(latestUserText)) {
@@ -2948,6 +3036,15 @@ function contextBoundaryInstruction(latestUserText) {
     );
   }
 
+  if (isCasualMorningPreferenceStatement(latestUserText)) {
+    lines.push(
+      "- The latest message is a casual time-of-day preference, not a memory-save command.",
+      "- Acknowledge the morning preference and suggest using mornings for harder or higher-focus sessions where possible.",
+      "- Do not mention saved injury, knee, hill, pain, soreness, or terrain memory because the latest message is not about those topics.",
+      "- Do not return a memory_save action unless the user explicitly asks you to remember, save, note, or keep it in mind."
+    );
+  }
+
   if (intent === "general_training_advice") {
     lines.push(
       "- For broad training advice, lead with the training principle and practical drills/progression for the requested topic.",
@@ -3004,6 +3101,8 @@ function latestUserPriorityInstruction(latestUserText) {
     "- Do not continue a previous topic unless the latest user message clearly asks to continue it.",
     "- Answer the latest user intent. Do not reuse the format, topic, or recommendation from the previous assistant reply unless the latest message asks for a follow-up.",
     `- Latest user intent hint: ${intent}.`,
+    "- Saved memory relevance rule: knee/hill soreness memory may only influence prompts about knees, hills, injury, pain/soreness, running terrain, uphill/downhill work, or running injury risk.",
+    "- Saved memory relevance rule: morning workout preference may only influence prompts about scheduling, time of day, when to train, hard-session placement, or routine.",
   ];
 
   if (!foregroundToday) {
@@ -3026,6 +3125,16 @@ function latestUserPriorityInstruction(latestUserText) {
     lines.push(
       "- This is an explicit memory-save request. Do not answer with generic coaching advice.",
       "- Return a memory_save coachAction with autoApply true so the app saves it immediately."
+    );
+  }
+
+  if (isCasualMorningPreferenceStatement(latestUserText)) {
+    lines.push(
+      "- This is a casual preference statement, not an explicit memory-save command.",
+      "- Acknowledge that mornings seem to work better for the user.",
+      "- Suggest scheduling harder or higher-focus sessions in the morning where possible.",
+      "- Do not create or suggest an auto-applied memory_save action.",
+      "- Do not mention knee, hill, pain, soreness, injury, terrain, uphill, or downhill memory unless the latest message asks about those topics."
     );
   }
 
@@ -3522,10 +3631,13 @@ function keyWeeklySessionNames(context) {
   return keySessions;
 }
 
-function coachMemorySnippets(context, limit = 3) {
+function coachMemorySnippets(context, limit = 3, latestUserText = "") {
   const memory = context?.athleteProfile?.coachMemory;
   if (!Array.isArray(memory)) return [];
-  return memory
+  const relevantMemory = latestUserText
+    ? filterCoachMemoryForLatestMessage(memory, latestUserText)
+    : memory;
+  return relevantMemory
     .map((item) => cleanCoachText(item?.text || item?.category || ""))
     .filter(Boolean)
     .slice(0, limit);
@@ -3543,8 +3655,8 @@ function activePlanLabel(context) {
   );
 }
 
-function appendMemoryContextLine(lines, context) {
-  const snippets = coachMemorySnippets(context);
+function appendMemoryContextLine(lines, context, latestUserText = "") {
+  const snippets = coachMemorySnippets(context, 3, latestUserText);
   if (snippets.length) {
     const naturalLines = snippets.map((snippet) => naturalMemoryPersonalisationLine(snippet));
     lines.push("", ...naturalLines.filter(Boolean));
@@ -3577,35 +3689,16 @@ function naturalMemoryPersonalisationLine(snippet) {
 }
 
 function relevantCoachMemorySnippetForPrompt(context, latestUserText) {
-  const snippets = coachMemorySnippets(context, 5);
+  const snippets = coachMemorySnippets(context, 5, latestUserText);
   const latest = normaliseText(latestUserText);
   if (!snippets.length || !latest) return "";
 
-  const wantsTiming =
-    latest.includes("schedule") ||
-    latest.includes("when should") ||
-    latest.includes("best time") ||
-    latest.includes("what time");
-  if (wantsTiming) {
+  if (latestMentionsMorningTimingTopic(latestUserText)) {
     return snippets.find((snippet) => /\bmorning\b/i.test(snippet)) || "";
   }
 
-  const wantsSpeedSafety =
-    latest.includes("speed safely") ||
-    latest.includes("build speed") ||
-    latest.includes("get faster") ||
-    latest.includes("without getting injured") ||
-    latest.includes("without injury");
-  if (wantsSpeedSafety) {
+  if (latestMentionsInjuryMemoryTopic(latestUserText)) {
     return snippets.find((snippet) => /\b(?:knee|hill|hills|injur|pain|sore)\b/i.test(snippet)) || "";
-  }
-
-  if (latest.includes("hill")) {
-    return snippets.find((snippet) => /\b(?:knee|hill|hills|sore)\b/i.test(snippet)) || "";
-  }
-
-  if (latest.includes("knee")) {
-    return snippets.find((snippet) => /\bknee\b/i.test(snippet)) || "";
   }
 
   return "";
@@ -3686,7 +3779,7 @@ function latestMessageNeedsInjuryMemoryModifier(latestUserText, context) {
     latest.includes("without getting injured") ||
     latest.includes("without injury");
   if (!asksSpeedSafety || latestMessageAsksMemoryTopic(latestUserText)) return false;
-  return coachMemorySnippets(context, 5).some((snippet) =>
+  return coachMemorySnippets(context, 5, latestUserText).some((snippet) =>
     /\b(?:knee|hill|hills)\b/i.test(snippet)
   );
 }
@@ -3698,6 +3791,16 @@ function replyMemoryDominates(reply, latestUserText) {
   return replyMemoryTopicMentions(reply) > 3;
 }
 
+function replyUsesIrrelevantInjuryMemory(reply, latestUserText) {
+  if (latestMentionsInjuryMemoryTopic(latestUserText)) return false;
+  return replyMemoryTopicMentions(reply) > 0;
+}
+
+function replyMissesCasualMorningPreference(reply, latestUserText) {
+  if (!isCasualMorningPreferenceStatement(latestUserText)) return false;
+  return !/\bmornings?\b/i.test(reply);
+}
+
 function coachChatReplyPolicyViolation(reply, latestUserText, context = null) {
   const intent = latestUserIntentHint(latestUserText);
 
@@ -3707,6 +3810,14 @@ function coachChatReplyPolicyViolation(reply, latestUserText, context = null) {
 
   if (replyMentionsDisallowedNutrition(reply, latestUserText)) {
     return "non_nutrition_reply_mentions_nutrition";
+  }
+
+  if (replyUsesIrrelevantInjuryMemory(reply, latestUserText)) {
+    return "reply_uses_irrelevant_injury_memory";
+  }
+
+  if (replyMissesCasualMorningPreference(reply, latestUserText)) {
+    return "reply_misses_casual_morning_preference";
   }
 
   if (intent === "readiness_recovery") {
@@ -3752,11 +3863,22 @@ function buildLocalCoachFallbackReply(message, context) {
   const injuryReply = commonTrainingInjuryReply(text);
 
   if (injuryReply) {
-    return appendMemoryContextLine([injuryReply], context).join("\n");
+    return appendMemoryContextLine([injuryReply], context, text).join("\n");
   }
 
   if (isWeeklyFocusQuestion(text)) {
     return buildWeeklyFocusFallbackReply(context);
+  }
+
+  if (isCasualMorningPreferenceStatement(text)) {
+    return [
+      "That makes sense. If mornings consistently feel better, use that as your default for the sessions that need the most focus.",
+      "",
+      "- Put harder runs, strength work, or key sessions earlier in the day when possible",
+      "- Keep easier recovery work for later if your schedule needs it",
+      "- Watch whether sleep, warm-up time, and stress are part of why mornings feel better",
+      "- I will not save this as a coach memory unless you explicitly ask me to remember it",
+    ].join("\n");
   }
 
   if (intent === "fat_loss_performance") {
@@ -3771,7 +3893,8 @@ function buildLocalCoachFallbackReply(message, context) {
         "- Track weekly weight trend, measurements, recovery, and performance",
         "- If performance drops hard, bring calories or carbs back up slightly",
       ],
-      context
+      context,
+      text
     ).join("\n");
   }
 
@@ -3822,7 +3945,8 @@ function buildLocalCoachFallbackReply(message, context) {
         "- If mornings suit you best, place key sessions in the morning and keep later training easier",
         "- Avoid stacking hard sessions late in the day if it affects sleep or recovery",
       ],
-      context
+      context,
+      text
     ).join("\n");
   }
 
@@ -3861,7 +3985,8 @@ function buildLocalCoachFallbackReply(message, context) {
           "- Use drills like A-skips, high knees, and fast feet in warm-ups",
           "- Change one cue at a time so it becomes natural",
         ],
-        context
+        context,
+        text
       ).join("\n");
     }
 
@@ -3877,7 +4002,8 @@ function buildLocalCoachFallbackReply(message, context) {
           "- Jog or walk down easy so the quality stays high",
           "- Build gradually; do not turn every hilly run into a race",
         ],
-        context
+        context,
+        text
       ).join("\n");
     }
 
@@ -3892,7 +4018,8 @@ function buildLocalCoachFallbackReply(message, context) {
           "- Keep strength training consistent for durability",
           "- Recover well so the quality sessions are actually high quality",
         ],
-        context
+        context,
+        text
       ).join("\n");
     }
 
@@ -3906,7 +4033,8 @@ function buildLocalCoachFallbackReply(message, context) {
           "- Avoid turning every run into a hard run",
           "- Sleep, fuel, and recover enough to absorb the work",
         ],
-        context
+        context,
+        text
       ).join("\n");
     }
 
@@ -3920,7 +4048,8 @@ function buildLocalCoachFallbackReply(message, context) {
           "- Keep hard sets controlled and repeatable",
           "- Recover well between hard sessions",
         ],
-        context
+        context,
+        text
       ).join("\n");
     }
   }
@@ -3934,7 +4063,8 @@ function buildLocalCoachFallbackReply(message, context) {
         "Keep the next hard workout high quality rather than stacking fatigue.",
         "If missing sessions is becoming a pattern, reduce the week slightly instead of chasing the plan.",
       ],
-      context
+      context,
+      text
     ).join("\n");
   }
 
@@ -3950,7 +4080,8 @@ function buildLocalCoachFallbackReply(message, context) {
       "",
       "Skip accessories or extra volume today. Do not try to cram the full session into 30 minutes.",
       ],
-      context
+      context,
+      text
     ).join("\n");
   }
 
@@ -3967,7 +4098,8 @@ function buildLocalCoachFallbackReply(message, context) {
         "- Reduce intensity or volume before you sacrifice the next key session",
         `- If ${todayPhrase} is planned, modify it rather than treating the intervals as mandatory`,
       ],
-      context
+      context,
+      text
     ).join("\n");
   }
 
@@ -4002,7 +4134,8 @@ function buildLocalCoachFallbackReply(message, context) {
         : null,
       "If the user is asking for advice, give one conservative next step and one adjustment option.",
     ].filter(Boolean),
-    context
+    context,
+    text
   ).join("\n");
 }
 
