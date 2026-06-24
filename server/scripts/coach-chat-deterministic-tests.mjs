@@ -9,6 +9,7 @@ import {
   __coachChatResponseDiagnosticsForTest,
   __coachChatLiveContextFactsForTest,
   __coachChatForegroundsTodayForTest,
+  __coachChatContextForLatestMessageForTest,
 } from "../routes/coach-chat.js";
 
 const completedPushContext = {
@@ -476,6 +477,7 @@ for (const prompt of broadAiLedPrompts) {
 const aiFirstCategoryPrompts = [
   { prompt: "How can I improve my 5K time?", intent: "general_training_advice" },
   { prompt: "How do I improve my running form?", intent: "general_training_advice" },
+  { prompt: "How should I get better at hill running?", intent: "general_training_advice" },
   { prompt: "How should I structure strength training?", intent: "general_training_advice" },
   { prompt: "What should I eat after training?", intent: "post_training_nutrition" },
   { prompt: "I want to lose fat but keep performance", intent: "fat_loss_performance" },
@@ -528,6 +530,74 @@ for (const testCase of aiFirstCategoryPrompts) {
     );
   }
 }
+
+const broadAdviceContext = {
+  ...activePlanWithMemoryContext,
+  nutrition: {
+    targets: { calories: 2800, proteinG: 170 },
+    today: { calories: 1600, proteinG: 95, carbsG: 180, fatG: 45 },
+  },
+};
+
+const broadRunningPriority = __coachChatLatestPriorityForTest([
+  { role: "user", content: "How should I get better at hill running?" },
+]);
+assert.equal(
+  broadRunningPriority.intent,
+  "general_training_advice",
+  "hill-running advice should be treated as broad general training advice"
+);
+assert.ok(
+  broadRunningPriority.instruction.includes("Do not open with today's workout/session"),
+  `broad running advice should explicitly prevent opening with today:\n${broadRunningPriority.instruction}`
+);
+assert.ok(
+  broadRunningPriority.instruction.includes("Do not introduce food, fuelling"),
+  `broad running advice should prevent nutrition leakage:\n${broadRunningPriority.instruction}`
+);
+
+const broadRunningContext = __coachChatContextForLatestMessageForTest(
+  broadAdviceContext,
+  "How should I get better at hill running?"
+);
+assert.equal(
+  Boolean(broadRunningContext.training?.todaySchedule),
+  false,
+  "broad running advice should remove todaySchedule from high-priority model context"
+);
+assert.equal(
+  Boolean(broadRunningContext.training?.todaySession),
+  false,
+  "broad running advice should remove todaySession from high-priority model context"
+);
+assert.equal(
+  Boolean(broadRunningContext.nutrition),
+  false,
+  "broad non-nutrition advice should remove nutrition from high-priority model context"
+);
+assert.ok(
+  broadRunningContext.athleteProfile?.coachMemory?.some((memory) =>
+    String(memory?.text || "").toLowerCase().includes("knee gets sore after hills")
+  ),
+  "broad advice should keep saved memory available for relevant personalisation"
+);
+assert.ok(
+  Array.isArray(broadRunningContext.training?.currentWeekSchedule),
+  "broad advice should keep active/week plan context as background"
+);
+
+const nutritionContext = __coachChatContextForLatestMessageForTest(
+  broadAdviceContext,
+  "What should I eat after training?"
+);
+assert.ok(
+  nutritionContext.nutrition,
+  "nutrition prompts should keep nutrition context available"
+);
+assert.ok(
+  nutritionContext.training?.todaySchedule,
+  "nutrition prompts can keep today context for personalisation"
+);
 
 const liveFactsBroad = __coachChatLiveContextFactsForTest(
   activePlanContext,
@@ -726,7 +796,7 @@ for (const prompt of generalTrainingAdvicePrompts) {
     `${prompt}: instruction should keep plan context secondary:\n${priority.instruction}`
   );
   assert.ok(
-    priority.instruction.includes("Do not simply describe today's session"),
+    priority.instruction.includes("Do not describe today's session unless"),
     `${prompt}: instruction should prevent today's session summary:\n${priority.instruction}`
   );
 

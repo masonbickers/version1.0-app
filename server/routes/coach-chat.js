@@ -1002,6 +1002,11 @@ function isGeneralTrainingAdviceQuestion(text) {
     text.includes("structure") ||
     text.includes("program");
   const trainingTopic =
+    text.includes("running") ||
+    text.includes("run training") ||
+    text.includes("runner") ||
+    text.includes("hill") ||
+    text.includes("hills") ||
     text.includes("running form") ||
     text.includes("run form") ||
     text.includes("running technique") ||
@@ -1804,7 +1809,7 @@ function buildLiveContextFacts(context, latestUserText = "") {
     lines.push(`Today's sessions: ${rows.map(formatTodayRow).join(" | ")}`);
   } else if (todaySchedule.length) {
     lines.push(
-      "Today/session context exists in USER_CONTEXT_JSON but is background only for this latest question; do not open with today's session unless directly relevant."
+      "Today/session context exists in USER_CONTEXT_JSON but is background only for this latest question; do not open with today's session, do not summarise it, and mention it only if directly relevant after answering the user's topic."
     );
   } else if (clock?.todayLabel && foregroundToday) {
     lines.push("Today's sessions: none scheduled in the loaded plan.");
@@ -2394,6 +2399,14 @@ export function __coachChatForegroundsTodayForTest(message) {
   return shouldForegroundTodayContext(message);
 }
 
+export function __coachChatContextForLatestMessageForTest(
+  context,
+  latestUserText = "",
+  compact = false
+) {
+  return contextForLatestMessage(context, null, latestUserText, compact);
+}
+
 function safeStringify(value, maxChars = 16000) {
   try {
     const json = JSON.stringify(value, null, 2);
@@ -2529,6 +2542,43 @@ function compactCoachContext(context, planSummary = null) {
         }
       : null,
   };
+}
+
+function clonePlainObject(value) {
+  if (!value || typeof value !== "object") return value;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+function isNutritionIntentHint(intent) {
+  return [
+    "post_training_nutrition",
+    "fat_loss_performance",
+    "protein_target",
+    "pre_run_fuelling",
+    "general_nutrition",
+  ].includes(intent);
+}
+
+function contextForLatestMessage(context, planSummary = null, latestUserText = "", compact = false) {
+  const intent = latestUserIntentHint(latestUserText);
+  const base = compact ? compactCoachContext(context, planSummary) : clonePlainObject(context || {});
+  const shaped = clonePlainObject(base || {});
+
+  if (intent === "general_training_advice") {
+    if (shaped?.training && !shouldForegroundTodayContext(latestUserText)) {
+      delete shaped.training.todaySession;
+      delete shaped.training.todaySchedule;
+    }
+    if (!isNutritionIntentHint(intent)) {
+      delete shaped.nutrition;
+    }
+  }
+
+  return shaped;
 }
 
 function compactPlanForCoach(plan, planSummary = null) {
@@ -2692,13 +2742,7 @@ function buildRecentConversationContext(trimmedMessages, latestUserText, limit =
 function latestUserPriorityInstruction(latestUserText) {
   const intent = latestUserIntentHint(latestUserText);
   const foregroundToday = shouldForegroundTodayContext(latestUserText);
-  const isNutritionIntent = [
-    "post_training_nutrition",
-    "fat_loss_performance",
-    "protein_target",
-    "pre_run_fuelling",
-    "general_nutrition",
-  ].includes(intent);
+  const isNutritionIntent = isNutritionIntentHint(intent);
   const lines = [
     "LATEST_USER_MESSAGE_PRIORITY:",
     "- Answer the latest user message directly.",
@@ -2789,11 +2833,16 @@ function latestUserPriorityInstruction(latestUserText) {
   if (intent === "general_training_advice") {
     lines.push(
       "- This is a general coaching question. Answer the coaching question directly.",
+      "- Context priority for this answer: 1) latest user question, 2) relevant saved memory, 3) relevant active-plan context, 4) today's session only if the latest message asks about today or the current workout.",
+      "- Do not open with today's workout/session.",
       "- Use the active plan only as background context, not as the main answer.",
-      "- Do not simply describe today's session.",
+      "- Do not describe today's session unless the latest message explicitly asks about today's workout or the current session.",
+      "- Do not introduce food, fuelling, hydration, calorie, macro, or diet advice unless the latest user message explicitly asks about food, fuelling, energy availability, recovery nutrition, body composition, or diet.",
+      "- Use saved coach memory only when it is relevant to the specific training topic; do not change the topic because of memory.",
       "- If the user asks about improving 5K or running faster, cover speed/interval work, tempo or threshold work, easy aerobic volume, consistency, strength training, recovery, and pacing.",
+      "- If the user asks about hill running or a running skill, answer that skill directly with practical technique and progression advice.",
       "- If the user asks about endurance, cover easy aerobic volume, gradual progression, long easy work, recovery, and consistency.",
-      "- If the user asks about strength, cover progressive overload, good technique, key compound lifts, enough protein, and recovery."
+      "- If the user asks about strength, cover progressive overload, good technique, key compound lifts, sensible load progression, and recovery."
     );
   }
 
@@ -2823,12 +2872,17 @@ function buildCoachChatMessages({
   trimmedMessages,
   compact = false,
 }) {
-  const contextForModel = compact ? compactCoachContext(mergedContext, planSummary) : mergedContext;
+  const latestUserText = latestUserMessage(trimmedMessages);
+  const contextForModel = contextForLatestMessage(
+    mergedContext,
+    planSummary,
+    latestUserText,
+    compact
+  );
   const planForModel = compact ? compactPlanForCoach(plan, planSummary) : plan;
   const contextLimit = compact ? 5500 : 14000;
   const planLimit = compact ? 4500 : 18000;
   const messageLimit = compact ? 8 : 20;
-  const latestUserText = latestUserMessage(trimmedMessages);
   const recentContext = buildRecentConversationContext(
     trimmedMessages,
     latestUserText,
@@ -2909,9 +2963,14 @@ async function createCoachChatResponsesFetchFallback({
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 35000);
-  const compactContext = compactCoachContext(mergedContext, planSummary);
-  const compactPlan = compactPlanForCoach(plan, planSummary);
   const latestUserText = latestUserMessage(trimmedMessages);
+  const compactContext = contextForLatestMessage(
+    mergedContext,
+    planSummary,
+    latestUserText,
+    true
+  );
+  const compactPlan = compactPlanForCoach(plan, planSummary);
   const payload = {
     context: compactContext,
     liveContextFacts,
@@ -3315,7 +3374,7 @@ function buildLocalCoachFallbackReply(message, context) {
           "",
           "- Use good technique on key compound lifts",
           "- Add load, reps, or sets gradually",
-          "- Keep enough protein in your day",
+          "- Keep hard sets controlled and repeatable",
           "- Recover well between hard sessions",
         ],
         context
