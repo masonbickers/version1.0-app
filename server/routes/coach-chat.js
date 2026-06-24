@@ -2411,6 +2411,10 @@ export function __coachChatResponseDiagnosticsForTest({
   });
 }
 
+export function __coachChatReplyPolicyViolationForTest(reply, latestUserText) {
+  return coachChatReplyPolicyViolation(reply, latestUserText);
+}
+
 export function __coachChatLiveContextFactsForTest(context, latestUserText = "") {
   return buildLiveContextFacts(context, latestUserText);
 }
@@ -3555,6 +3559,66 @@ function appendBriefMemoryModifier(lines, context) {
   return lines;
 }
 
+function replyFirstContentLine(reply) {
+  return String(reply || "")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .find(Boolean) || "";
+}
+
+function replyMentionsDisallowedNutrition(reply, latestUserText) {
+  if (shouldIncludeNutritionContext(latestUserText)) return false;
+  const text = normaliseText(reply);
+  return /\b(nutrition|protein|carb|carbs|calorie|calories|meal|food|fuel|fuelling|fueling|hydrate|hydration|fluids)\b/.test(text);
+}
+
+function replyStartsWithTodayContext(reply) {
+  const firstLine = normaliseText(replyFirstContentLine(reply));
+  return (
+    firstLine.includes("today's") ||
+    firstLine.includes("todays") ||
+    firstLine.includes("today is") ||
+    firstLine.includes("today you have") ||
+    firstLine.includes("your session today") ||
+    firstLine.includes("speed: 5 x 1200m")
+  );
+}
+
+function replyHasReadinessDowngradeAdvice(reply) {
+  const text = normaliseText(reply);
+  const terms = ["warm-up", "warm up", "reassess", "easy", "downgrade", "reduce", "recovery", "rest", "mobility"];
+  return terms.filter((term) => text.includes(term)).length >= 2;
+}
+
+function replyMemoryDominates(reply, latestUserText) {
+  const intent = latestUserIntentHint(latestUserText);
+  if (intent !== "general_training_advice") return false;
+  const latest = normaliseText(latestUserText);
+  if (latest.includes("knee") || latest.includes("hill")) return false;
+  const memoryTopicMentions = (normaliseText(reply).match(/\b(?:knee|hill|hills)\b/g) || []).length;
+  return memoryTopicMentions > 3;
+}
+
+function coachChatReplyPolicyViolation(reply, latestUserText) {
+  const intent = latestUserIntentHint(latestUserText);
+
+  if (replyMentionsDisallowedNutrition(reply, latestUserText)) {
+    return "non_nutrition_reply_mentions_nutrition";
+  }
+
+  if (intent === "readiness_recovery") {
+    if (replyStartsWithTodayContext(reply)) return "readiness_reply_starts_with_today_context";
+    if (!replyHasReadinessDowngradeAdvice(reply)) return "readiness_reply_missing_downgrade_advice";
+  }
+
+  if (intent === "general_training_advice" && !shouldForegroundTodayContext(latestUserText)) {
+    if (replyStartsWithTodayContext(reply)) return "broad_training_reply_starts_with_today_context";
+    if (replyMemoryDominates(reply, latestUserText)) return "broad_training_reply_memory_dominates";
+  }
+
+  return null;
+}
+
 function buildWeeklyFocusFallbackReply(context) {
   const keySessions = keyWeeklySessionNames(context);
   const keyLine = keySessions.length
@@ -4287,14 +4351,57 @@ Allowed coachActions types:
         const coachActions = Array.isArray(parsed?.coachActions)
           ? parsed.coachActions.filter((action) => action && typeof action === "object")
           : [];
+        const safeUpdatedPlan =
+          updatedPlan && typeof updatedPlan === "object" ? updatedPlan : null;
+        const safeNutritionDraft =
+          nutritionDraft && typeof nutritionDraft === "object" ? nutritionDraft : null;
+        const policyViolation =
+          !safeUpdatedPlan && !safeNutritionDraft && coachActions.length === 0
+            ? coachChatReplyPolicyViolation(reply, latestUserText)
+            : null;
+
+        if (policyViolation) {
+          const fallbackReply = buildLocalCoachFallbackReply(latestUserText, mergedContext);
+          const fallbackRaw = JSON.stringify({
+            reply: fallbackReply,
+            updatedPlan: null,
+            nutritionDraft: null,
+            coachActions: [],
+            source: "ai_policy_fallback",
+            originalResponseSource: responseSource,
+            policyViolation,
+            originalReplyPreview: reply.slice(0, 500),
+          });
+
+          console.warn("[coach-chat] AI reply replaced by policy fallback", {
+            responseSource,
+            policyViolation,
+            latestUserText: latestUserText.slice(0, 240),
+            originalReplyPreview: reply.slice(0, 240),
+          });
+
+          return sendCoachResponse(
+            res,
+            {
+              reply: fallbackReply,
+              updatedPlan: null,
+              nutritionDraft: null,
+              coachActions: [],
+              raw: fallbackRaw,
+            },
+            {
+              ...responseDiagnosticsBase,
+              responseSource: "ai_policy_fallback",
+            }
+          );
+        }
 
         return sendCoachResponse(
           res,
           {
             reply,
-            updatedPlan: updatedPlan && typeof updatedPlan === "object" ? updatedPlan : null,
-            nutritionDraft:
-              nutritionDraft && typeof nutritionDraft === "object" ? nutritionDraft : null,
+            updatedPlan: safeUpdatedPlan,
+            nutritionDraft: safeNutritionDraft,
             coachActions,
             raw,
           },

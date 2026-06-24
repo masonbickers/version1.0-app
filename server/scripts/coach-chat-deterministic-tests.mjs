@@ -6,6 +6,7 @@ import {
   __coachChatRouteFallbackForTest,
   __coachChatNutritionDraftForTest,
   __coachChatMemorySaveForTest,
+  __coachChatReplyPolicyViolationForTest,
   __coachChatResponseDiagnosticsForTest,
   __coachChatLiveContextFactsForTest,
   __coachChatForegroundsTodayForTest,
@@ -1461,6 +1462,33 @@ assert.equal(
 assert.ok(
   /readiness|warm-up|downgrade|easy running|recovery|Reduce intensity/i.test(heavyLegsFallback),
   `heavy-legs fallback should give downgrade/recovery advice:\n${heavyLegsFallback}`
+);
+
+assert.equal(
+  __coachChatReplyPolicyViolationForTest(
+    "To improve your 5K, do intervals, tempo runs, and make sure your nutrition and fuel are strong.",
+    "How can I improve my 5K time?"
+  ),
+  "non_nutrition_reply_mentions_nutrition",
+  "policy guard should catch nutrition leaks in non-nutrition broad training answers"
+);
+
+assert.equal(
+  __coachChatReplyPolicyViolationForTest(
+    "Today's session is Speed: 5 x 1200m, so start the intervals as planned.",
+    "What should I do if my legs feel heavy?"
+  ),
+  "readiness_reply_starts_with_today_context",
+  "policy guard should catch readiness answers that open with today's session"
+);
+
+assert.equal(
+  __coachChatReplyPolicyViolationForTest(
+    "If your legs feel heavy, warm up easily, reassess, and downgrade to recovery if they stay flat.",
+    "What should I do if my legs feel heavy?"
+  ),
+  null,
+  "policy guard should allow readiness answers that start with the user's state and give downgrade advice"
 );
 
 const scheduleMovePrompts = [
