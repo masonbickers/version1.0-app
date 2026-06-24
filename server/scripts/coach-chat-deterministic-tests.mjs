@@ -1491,6 +1491,26 @@ assert.equal(
   "policy guard should allow readiness answers that start with the user's state and give downgrade advice"
 );
 
+assert.equal(
+  __coachChatReplyPolicyViolationForTest(
+    "Build speed safely with gradual progression, easy runs, strength training, and recovery weeks.",
+    "How do I build speed safely?",
+    activePlanWithMemoryContext
+  ),
+  "broad_training_reply_missing_relevant_memory_modifier",
+  "policy guard should require brief relevant injury memory for speed-safety prompts"
+);
+
+assert.equal(
+  __coachChatReplyPolicyViolationForTest(
+    "Build speed safely with gradual progression, easy runs, strength training, and recovery weeks. Since your knee gets sore after hills, be careful with hill/downhill load.",
+    "How do I build speed safely?",
+    activePlanWithMemoryContext
+  ),
+  null,
+  "policy guard should allow brief relevant injury memory without letting it dominate"
+);
+
 const scheduleMovePrompts = [
   "Can I move today's session to tomorrow?",
   "Can I do today’s workout tomorrow instead?",

@@ -2411,8 +2411,8 @@ export function __coachChatResponseDiagnosticsForTest({
   });
 }
 
-export function __coachChatReplyPolicyViolationForTest(reply, latestUserText) {
-  return coachChatReplyPolicyViolation(reply, latestUserText);
+export function __coachChatReplyPolicyViolationForTest(reply, latestUserText, context = null) {
+  return coachChatReplyPolicyViolation(reply, latestUserText, context);
 }
 
 export function __coachChatLiveContextFactsForTest(context, latestUserText = "") {
@@ -3590,16 +3590,37 @@ function replyHasReadinessDowngradeAdvice(reply) {
   return terms.filter((term) => text.includes(term)).length >= 2;
 }
 
+function replyMemoryTopicMentions(reply) {
+  return (normaliseText(reply).match(/\b(?:knee|hill|hills)\b/g) || []).length;
+}
+
+function latestMessageAsksMemoryTopic(latestUserText) {
+  const latest = normaliseText(latestUserText);
+  return latest.includes("knee") || latest.includes("hill");
+}
+
+function latestMessageNeedsInjuryMemoryModifier(latestUserText, context) {
+  const latest = normaliseText(latestUserText);
+  const asksSpeedSafety =
+    latest.includes("speed safely") ||
+    latest.includes("build speed") ||
+    latest.includes("get faster") ||
+    latest.includes("without getting injured") ||
+    latest.includes("without injury");
+  if (!asksSpeedSafety || latestMessageAsksMemoryTopic(latestUserText)) return false;
+  return coachMemorySnippets(context, 5).some((snippet) =>
+    /\b(?:knee|hill|hills)\b/i.test(snippet)
+  );
+}
+
 function replyMemoryDominates(reply, latestUserText) {
   const intent = latestUserIntentHint(latestUserText);
   if (intent !== "general_training_advice") return false;
-  const latest = normaliseText(latestUserText);
-  if (latest.includes("knee") || latest.includes("hill")) return false;
-  const memoryTopicMentions = (normaliseText(reply).match(/\b(?:knee|hill|hills)\b/g) || []).length;
-  return memoryTopicMentions > 3;
+  if (latestMessageAsksMemoryTopic(latestUserText)) return false;
+  return replyMemoryTopicMentions(reply) > 3;
 }
 
-function coachChatReplyPolicyViolation(reply, latestUserText) {
+function coachChatReplyPolicyViolation(reply, latestUserText, context = null) {
   const intent = latestUserIntentHint(latestUserText);
 
   if (replyMentionsDisallowedNutrition(reply, latestUserText)) {
@@ -3614,6 +3635,12 @@ function coachChatReplyPolicyViolation(reply, latestUserText) {
   if (intent === "general_training_advice" && !shouldForegroundTodayContext(latestUserText)) {
     if (replyStartsWithTodayContext(reply)) return "broad_training_reply_starts_with_today_context";
     if (replyMemoryDominates(reply, latestUserText)) return "broad_training_reply_memory_dominates";
+    if (
+      latestMessageNeedsInjuryMemoryModifier(latestUserText, context) &&
+      replyMemoryTopicMentions(reply) === 0
+    ) {
+      return "broad_training_reply_missing_relevant_memory_modifier";
+    }
   }
 
   return null;
@@ -4357,7 +4384,7 @@ Allowed coachActions types:
           nutritionDraft && typeof nutritionDraft === "object" ? nutritionDraft : null;
         const policyViolation =
           !safeUpdatedPlan && !safeNutritionDraft && coachActions.length === 0
-            ? coachChatReplyPolicyViolation(reply, latestUserText)
+            ? coachChatReplyPolicyViolation(reply, latestUserText, mergedContext)
             : null;
 
         if (policyViolation) {
