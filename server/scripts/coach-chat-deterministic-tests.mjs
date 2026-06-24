@@ -751,8 +751,13 @@ const fallback5k = __coachChatLocalFallbackForTest(
 );
 assert.ok(fallback5k.includes("To improve your 5K"), `5K fallback should answer directly:\n${fallback5k}`);
 assert.ok(
-  fallback5k.includes("Relevant saved note: Knee gets sore after hills."),
-  `5K fallback should use saved memory when relevant context is present:\n${fallback5k}`
+  fallback5k.includes("Since your knee can get sore after hills"),
+  `5K fallback should use saved memory naturally when relevant context is present:\n${fallback5k}`
+);
+assert.equal(
+  /Brief modifier|saved memory|saved note|policy|modifier|do not let it override|main training goal/i.test(fallback5k),
+  false,
+  `5K fallback should not expose internal memory labels:\n${fallback5k}`
 );
 assert.equal(
   fallback5k.includes("Use your current plan as the baseline"),
@@ -974,8 +979,8 @@ assert.ok(
   `hill-running fallback should answer directly:\n${fallbackHillRunning}`
 );
 assert.ok(
-  fallbackHillRunning.includes("Relevant saved note: Knee gets sore after hills."),
-  `hill-running fallback should include relevant saved memory:\n${fallbackHillRunning}`
+  fallbackHillRunning.includes("Since your knee can get sore after hills"),
+  `hill-running fallback should include relevant saved memory naturally:\n${fallbackHillRunning}`
 );
 assert.equal(
   fallbackHillRunning.includes("nutrition"),
@@ -1303,8 +1308,8 @@ assert.ok(
   `schedule fallback should answer scheduling directly:\n${scheduleFallback}`
 );
 assert.ok(
-  scheduleFallback.includes("Relevant saved note: Knee gets sore after hills."),
-  `schedule fallback should keep relevant saved memory available:\n${scheduleFallback}`
+  !/Brief modifier|saved memory|saved note|policy|modifier|do not let it override|main training goal/i.test(scheduleFallback),
+  `schedule fallback should not expose internal memory labels:\n${scheduleFallback}`
 );
 assert.equal(
   /protein|calorie|meal|nutrition/i.test(scheduleFallback),
@@ -1413,21 +1418,49 @@ assert.ok(
   `speed-safely fallback should answer broad performance first:\n${speedSafelyFallback}`
 );
 assert.ok(
-  /Brief modifier from saved memory: Knee gets sore after hills/i.test(speedSafelyFallback),
-  `speed-safely fallback should mention relevant memory briefly:\n${speedSafelyFallback}`
+  /Since your knee can get sore after hills/i.test(speedSafelyFallback),
+  `speed-safely fallback should mention relevant memory naturally:\n${speedSafelyFallback}`
+);
+assert.equal(
+  /Brief modifier|saved memory|saved note|policy|modifier|do not let it override|main training goal|context/i.test(speedSafelyFallback),
+  false,
+  `speed-safely fallback should not expose internal labels:\n${speedSafelyFallback}`
 );
 assert.ok(
   /easy runs|quality sessions|strength training|deloads|Back off/i.test(speedSafelyFallback),
   `speed-safely fallback should include broad injury-prevention and speed principles:\n${speedSafelyFallback}`
 );
 assert.ok(
-  (speedSafelyFallback.match(/\bknee\b|\bhill(?:s)?\b/gi) || []).length <= 2,
+  (speedSafelyFallback.match(/\bknee\b|\bhill(?:s)?\b|downhill\b/gi) || []).length <= 4,
   `speed-safely fallback should not be dominated by knee/hill memory:\n${speedSafelyFallback}`
 );
 assert.equal(
   /protein|calorie|meal|nutrition/i.test(speedSafelyFallback),
   false,
   `speed-safely fallback should not introduce nutrition:\n${speedSafelyFallback}`
+);
+
+const morningOnlyMemoryContext = {
+  ...activePlanContext,
+  athleteProfile: {
+    coachMemory: [
+      {
+        id: "memory-morning",
+        text: "I prefer morning workouts",
+        category: "preference",
+        source: "coach_chat",
+      },
+    ],
+  },
+};
+const speedSafelyMorningOnlyFallback = __coachChatLocalFallbackForTest(
+  "How can I get faster without getting injured?",
+  morningOnlyMemoryContext
+);
+assert.equal(
+  /morning/i.test(speedSafelyMorningOnlyFallback),
+  false,
+  `speed-safely fallback should omit irrelevant morning preference:\n${speedSafelyMorningOnlyFallback}`
 );
 
 const heavyLegsPriority = __coachChatLatestPriorityForTest([
@@ -1471,6 +1504,25 @@ assert.equal(
   ),
   "non_nutrition_reply_mentions_nutrition",
   "policy guard should catch nutrition leaks in non-nutrition broad training answers"
+);
+
+assert.equal(
+  __coachChatReplyPolicyViolationForTest(
+    "Brief modifier from saved memory: I prefer morning workouts. Keep this in mind, but do not let it override the main training goal.",
+    "How can I get faster without getting injured?"
+  ),
+  "reply_contains_internal_policy_language",
+  "policy guard should catch internal memory/context wording"
+);
+
+assert.equal(
+  __coachChatReplyPolicyViolationForTest(
+    "Since your knee can get sore after hills, be careful with hill and downhill load as you build up.",
+    "How can I get faster without getting injured?",
+    activePlanWithMemoryContext
+  ),
+  null,
+  "policy guard should allow natural relevant memory wording"
 );
 
 assert.equal(

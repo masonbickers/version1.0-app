@@ -292,6 +292,22 @@ function replyHasReadinessDowngrade(reply) {
   return readinessTerms.filter((term) => text.includes(term)).length >= 2;
 }
 
+function replyContainsInternalLabels(reply) {
+  const text = normaliseText(reply);
+  return (
+    text.includes("brief modifier") ||
+    text.includes("saved memory") ||
+    text.includes("saved note") ||
+    text.includes("policy") ||
+    text.includes("modifier") ||
+    text.includes("do not let it override") ||
+    text.includes("main training goal") ||
+    text.includes("user_context_json") ||
+    text.includes("current_plan_json") ||
+    /\bcontext\b/.test(text)
+  );
+}
+
 function directTopicTerms(prompt) {
   const text = normaliseText(prompt);
   if (text.includes("running form")) return ["form", "cadence", "stride", "arms", "posture"];
@@ -418,6 +434,10 @@ function evaluate({ group, prompt, payload, expectOverride = null }) {
     (payload.nutritionDraft ? 1 : 0);
   const notes = [];
   const expect = expectOverride || group.expect || {};
+
+  if (replyContainsInternalLabels(reply)) {
+    notes.push("reply contains internal policy/context/memory label");
+  }
 
   if (expect.aiFirst && path === "deterministic_or_action") {
     notes.push("expected AI/fallback route, got deterministic/action");

@@ -3546,15 +3546,76 @@ function activePlanLabel(context) {
 function appendMemoryContextLine(lines, context) {
   const snippets = coachMemorySnippets(context);
   if (snippets.length) {
-    lines.push("", `Relevant saved note: ${snippets.join(" | ")}.`);
+    const naturalLines = snippets.map((snippet) => naturalMemoryPersonalisationLine(snippet));
+    lines.push("", ...naturalLines.filter(Boolean));
   }
   return lines;
 }
 
-function appendBriefMemoryModifier(lines, context) {
-  const snippets = coachMemorySnippets(context, 1);
-  if (snippets.length) {
-    lines.push("", `Brief modifier from saved memory: ${snippets[0]}. Keep this in mind, but do not let it override the main training goal.`);
+function naturalMemoryPersonalisationLine(snippet) {
+  const text = cleanCoachText(snippet);
+  const clean = normaliseText(text);
+  if (!text) return "";
+
+  if (clean.includes("morning")) {
+    return "Since you prefer morning workouts, place the sessions that need the most focus earlier in the day when possible.";
+  }
+
+  if (clean.includes("knee") && clean.includes("hill")) {
+    return "Since your knee can get sore after hills, be careful with hill and downhill load as you build up.";
+  }
+
+  if (clean.includes("knee")) {
+    return "Since your knee can be a limiter, build gradually and back off if pain changes your stride or lingers.";
+  }
+
+  if (clean.includes("treadmill")) {
+    return "Since treadmill runs are not your favourite, use outdoor or varied routes when that still fits the goal.";
+  }
+
+  return `Keep your preference in mind: ${text}.`;
+}
+
+function relevantCoachMemorySnippetForPrompt(context, latestUserText) {
+  const snippets = coachMemorySnippets(context, 5);
+  const latest = normaliseText(latestUserText);
+  if (!snippets.length || !latest) return "";
+
+  const wantsTiming =
+    latest.includes("schedule") ||
+    latest.includes("when should") ||
+    latest.includes("best time") ||
+    latest.includes("what time");
+  if (wantsTiming) {
+    return snippets.find((snippet) => /\bmorning\b/i.test(snippet)) || "";
+  }
+
+  const wantsSpeedSafety =
+    latest.includes("speed safely") ||
+    latest.includes("build speed") ||
+    latest.includes("get faster") ||
+    latest.includes("without getting injured") ||
+    latest.includes("without injury");
+  if (wantsSpeedSafety) {
+    return snippets.find((snippet) => /\b(?:knee|hill|hills|injur|pain|sore)\b/i.test(snippet)) || "";
+  }
+
+  if (latest.includes("hill")) {
+    return snippets.find((snippet) => /\b(?:knee|hill|hills|sore)\b/i.test(snippet)) || "";
+  }
+
+  if (latest.includes("knee")) {
+    return snippets.find((snippet) => /\bknee\b/i.test(snippet)) || "";
+  }
+
+  return "";
+}
+
+function appendBriefMemoryModifier(lines, context, latestUserText = "") {
+  const snippet = relevantCoachMemorySnippetForPrompt(context, latestUserText);
+  if (snippet) {
+    const naturalLine = naturalMemoryPersonalisationLine(snippet);
+    if (naturalLine) lines.push("", naturalLine);
   }
   return lines;
 }
@@ -3570,6 +3631,23 @@ function replyMentionsDisallowedNutrition(reply, latestUserText) {
   if (shouldIncludeNutritionContext(latestUserText)) return false;
   const text = normaliseText(reply);
   return /\b(nutrition|protein|carb|carbs|calorie|calories|meal|food|fuel|fuelling|fueling|hydrate|hydration|fluids)\b/.test(text);
+}
+
+function replyContainsInternalPolicyLanguage(reply) {
+  const text = normaliseText(reply);
+  return (
+    text.includes("brief modifier") ||
+    text.includes("saved memory") ||
+    text.includes("saved note") ||
+    text.includes("policy") ||
+    text.includes("context") ||
+    text.includes("modifier") ||
+    text.includes("do not let it override") ||
+    text.includes("main training goal") ||
+    text.includes("internal instruction") ||
+    text.includes("user_context_json") ||
+    text.includes("current_plan_json")
+  );
 }
 
 function replyStartsWithTodayContext(reply) {
@@ -3622,6 +3700,10 @@ function replyMemoryDominates(reply, latestUserText) {
 
 function coachChatReplyPolicyViolation(reply, latestUserText, context = null) {
   const intent = latestUserIntentHint(latestUserText);
+
+  if (replyContainsInternalPolicyLanguage(reply)) {
+    return "reply_contains_internal_policy_language";
+  }
 
   if (replyMentionsDisallowedNutrition(reply, latestUserText)) {
     return "non_nutrition_reply_mentions_nutrition";
@@ -3762,7 +3844,8 @@ function buildLocalCoachFallbackReply(message, context) {
           "- Use recovery weeks or deloads before niggles become injuries",
           "- Back off if pain changes your stride, worsens during the run, or lingers into the next day",
         ],
-        context
+        context,
+        text
       ).join("\n");
     }
 
@@ -3912,10 +3995,10 @@ function buildLocalCoachFallbackReply(message, context) {
       "Answer the latest question directly and keep the next step practical.",
       "",
       planName
-        ? `Use ${planName} as context, but do not let it override what the user just asked.`
-        : "Use the available training context, but do not invent missing plan details.",
+        ? `Use ${planName} as background, but answer what the user just asked.`
+        : "Use the available training details, but do not invent missing plan details.",
       foregroundToday && sessionName
-        ? `For today, ${sessionName} is the key loaded session context.`
+        ? `For today, ${sessionName} is the key session to consider.`
         : null,
       "If the user is asking for advice, give one conservative next step and one adjustment option.",
     ].filter(Boolean),
