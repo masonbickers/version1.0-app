@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import { summariseHealthDoc } from '../src/lib/garmin/healthMetrics.mjs';
+const daily = summariseHealthDoc({kind:'dailies',data:{activeKilocalories:741,bmrKilocalories:1900,averageStressLevel:34,moderateIntensityDurationInSeconds:1800,vigorousIntensityDurationInSeconds:600,bodyBatteryChargedValue:46,bodyBatteryDrainedValue:35}});
+assert.equal(daily.totalCalories,2641);
+assert.equal(daily.bodyBattery,null,'Charge is not current Body Battery');
+assert.equal(daily.charged,46);
+assert.equal(daily.intensityMinutes,50,'Vigorous minutes count twice');
+assert.equal(daily.stress,34);
+assert.equal(summariseHealthDoc({kind:'dailies',data:{activeKilocalories:0}}).totalCalories,null);
+assert.equal(summariseHealthDoc({kind:'dailies',data:{activeKilocalories:0,bmrKilocalories:1900}}).totalCalories,1900);
+assert.equal(summariseHealthDoc({kind:'hrv',data:{lastNightAvg:48}}).hrv,48);
+assert.equal(summariseHealthDoc({kind:'stressDetails',data:{averageStressLevel:-1,timeOffsetBodyBatteryValues:{'0':50,'900':-1,'600':42}}}).bodyBattery,42);
+assert.equal(summariseHealthDoc({kind:'dailies',data:{averageStressLevel:-1}}).stress,null);
+assert.equal(summariseHealthDoc({kind:'sleeps',data:{sleepingSeconds:24540,overallSleepScore:{value:81},deepSleepDurationInSeconds:5160,lightSleepDurationInSeconds:13980,remSleepInSeconds:5400}}).sleepScore,81);
+assert.equal(summariseHealthDoc({kind:'backfill_hrv_request',data:{lastNightAvg:55}}).hasUsefulData,false);
+console.log('Garmin metrics: calorie totals, missing values, stress, HRV, sleep and battery passed');
