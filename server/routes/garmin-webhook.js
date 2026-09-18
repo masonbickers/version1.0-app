@@ -450,15 +450,14 @@ async function handleActivitiesWebhook(req, res) {
 /* -------------------------------------------------------------------------- */
 
 router.post("/dailies", async (req, res) => {
-  res.status(200).json({ ok: true });
-
   try {
     const payload = normaliseIncomingBody(req.body);
     const test = isTestPayload(payload);
 
     const rawRef = await admin.firestore().collection("garmin_webhooks").add({
       receivedAt: getServerTimestamp(),
-      payload: stripUndefinedDeep(payload),
+      // Store summaries individually; history envelopes can exceed Firestore's 1 MiB limit.
+      payload: { summaryCount: extractDailiesArray(payload).length },
       headers: pickUsefulHeaders(req),
       test
     });
@@ -475,13 +474,15 @@ router.post("/dailies", async (req, res) => {
       results: outcome.results
     });
 
+    res.status(200).json({ ok: true });
   } catch (e) {
     console.error("Webhook Processing Error:", e);
+    res.status(503).json({ ok: false, error: "health_delivery_failed" });
     await admin.firestore().collection("garmin_errors").add({
       error: e.message,
       at: getServerTimestamp(),
       context: "webhook_dailies"
-    });
+    }).catch((logError) => console.error("Webhook error logging failed:", logError));
   }
 });
 
