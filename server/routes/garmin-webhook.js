@@ -1,3 +1,4 @@
+import { createSleepWebhookHandler } from "../lib/garmin/sleepWebhook.js";
 import express from "express";
 import admin from "../admin.js";
 // Fixed path: removing the /garmin/ subfolder to match your explorer
@@ -448,6 +449,17 @@ async function handleActivitiesWebhook(req, res) {
 /* -------------------------------------------------------------------------- */
 /* Webhook Endpoint                                                           */
 /* -------------------------------------------------------------------------- */
+
+router.post("/sleeps", createSleepWebhookHandler({
+  findUser: async (garminUserId) => {
+    const users = await admin.firestore().collection("users")
+      .where("integrations.garmin.garminUserId", "==", garminUserId).limit(1).get();
+    return users.empty ? null : users.docs[0].id;
+  },
+  save: (uid, id, data) => admin.firestore().collection("users").doc(uid)
+    .collection("garmin_health").doc(id).set(data),
+  timestamp: getServerTimestamp,
+}));
 
 router.post("/dailies", async (req, res) => {
   try {
