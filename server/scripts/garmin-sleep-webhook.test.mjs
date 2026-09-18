@@ -20,8 +20,12 @@ assert.equal((await deliver({ sleeps: [sleep, { ...sleep, userId: 'b', durationI
 assert.equal(stored.size, 2, 'Mixed users must stay in their own accounts');
 const record = stored.get('alice/garmin_sleeps_2026-09-18');
 assert.equal(record.kind, 'sleeps');
-assert.equal(selectGarminSleep([record], '2026-09-18').hours, 7.5);
+assert.equal(selectGarminSleep([record], '2026-09-18').hours, 8);
 assert.equal(selectGarminSleep([record], '2026-09-17'), null);
+await deliver({ sleeps: [{ ...sleep, durationInSeconds: 24540, awakeDurationInSeconds: 1380,
+  deepSleepDurationInSeconds: 5160, lightSleepDurationInSeconds: 13980, remSleepInSeconds: 5400 }] });
+assert.equal(stored.get('alice/garmin_sleeps_2026-09-18').data.sleepingSeconds, 24540,
+  'Garmin total sleep already excludes awake time; do not subtract it twice');
 await deliver({ sleeps: [{ ...sleep, durationInSeconds: 28000 }] });
 assert.equal(stored.size, 2, 'Replays update the same night');
 assert.equal((await deliver({ sleeps: [{ ...sleep, userId: 'unknown' }] })).status, 503);

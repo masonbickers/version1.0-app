@@ -10,12 +10,12 @@ export function createSleepWebhookHandler({ findUser, save, timestamp, logError 
     for (const item of items) {
       const date = item?.calendarDate;
       const duration = item?.durationInSeconds;
-      const awake = item?.awakeDurationInSeconds ?? 0;
-      const seconds = duration - awake;
+      // Garmin sleep duration is time asleep; awake time is a separate total.
+      const seconds = duration;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') ||
           !Number.isFinite(Date.parse(`${date}T00:00:00Z`)) ||
           new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date ||
-          typeof duration !== 'number' || typeof awake !== 'number' || awake < 0 ||
+          typeof duration !== 'number' ||
           !Number.isFinite(seconds) || seconds <= 0 || duration > 86400 ||
           typeof item.userId !== 'string' || !item.userId) {
         return res.status(400).json({ error: 'invalid_sleep_summary' });
