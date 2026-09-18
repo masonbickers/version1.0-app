@@ -1,3 +1,4 @@
+import { createHealthWebhookHandler } from "../lib/garmin/healthWebhook.js";
 import { createSleepWebhookHandler } from "../lib/garmin/sleepWebhook.js";
 import express from "express";
 import admin from "../admin.js";
@@ -460,6 +461,19 @@ router.post("/sleeps", createSleepWebhookHandler({
     .collection("garmin_health").doc(id).set(data),
   timestamp: getServerTimestamp,
 }));
+
+for (const kind of ["hrv", "stressDetails"]) {
+router.post(`/${kind}`, createHealthWebhookHandler(kind, {
+  findUser: async (garminUserId) => {
+    const users = await admin.firestore().collection("users")
+      .where("integrations.garmin.garminUserId", "==", garminUserId).limit(1).get();
+    return users.empty ? null : users.docs[0].id;
+  },
+  save: (uid, id, data) => admin.firestore().collection("users").doc(uid)
+    .collection("garmin_health").doc(id).set(data),
+  timestamp: getServerTimestamp,
+}));
+}
 
 router.post("/dailies", async (req, res) => {
   try {
